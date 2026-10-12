@@ -2,10 +2,10 @@
   "name": "@ectype/example-smoke",
   "version": "0.0.0",
   "private": true,
-  "description": "Smoke test: the built packages load from both an ESM and a CommonJS consumer.",
+  "description": "Smoke test: the built ESM-only packages load from an ES module and, through require(), from a CommonJS script.",
   "license": "MIT",
   "scripts": {
-    "smoke": "node esm.mjs && node cjs.cjs"
+    "smoke": "node esm.mjs && node require-esm.cjs"
   },
   "dependencies": {
     "@ectype/postgres": "workspace:*",

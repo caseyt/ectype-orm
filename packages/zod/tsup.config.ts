@@ -3,7 +3,9 @@ import { defineConfig } from "tsup";
 // Build config is identical across packages on purpose; keep them in sync.
 export default defineConfig({
   entry: ["src/index.ts"],
-  format: ["esm", "cjs"],
+  // ESM only (decision D14): no CommonJS build. A CommonJS project loads the package with
+  // `require()` of an ES module, which Node supports from 22.12.
+  format: ["esm"],
   target: "node22",
   platform: "node",
   tsconfig: "tsconfig.build.json",

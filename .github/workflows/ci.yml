@@ -90,7 +90,7 @@ jobs:
       - run: node scripts/check-bench-dist-guard.mjs
       - run: pnpm build
       - run: pnpm lint:packages
-      # ESM and CommonJS consumers of the built packages (examples/smoke).
+      # An ESM consumer, and a CommonJS consumer that require()s the ES modules (examples/smoke).
       - run: pnpm smoke
       # Keeps the benchmark harness working. Numbers from shared runners are not meaningful;
       # regression gating is step 19.

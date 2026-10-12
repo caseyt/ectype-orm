@@ -17,18 +17,18 @@ No library code is written in this step beyond placeholder exports.
    plan README §9, branch protection notes in `CONTRIBUTING.md` (CI green + one approval
    before merge), `.gitignore`, `.editorconfig`, `.nvmrc` (22),
    `pnpm-workspace.yaml` covering `packages/*`, `benchmarks`, `examples/*`, `docs/site`.
-   Root `package.json` with `"packageManager"` pinned and `engines.node >= 22`.
+   Root `package.json` with `"packageManager"` pinned and `engines.node >= 22.12`.
 2. **TypeScript.** `tsconfig.base.json`: `strict`, `noUncheckedIndexedAccess`,
    `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`,
    `isolatedModules`, `isolatedDeclarations` if it does not fight the schema API (try it;
    record the outcome), `target: ES2022`, `module: NodeNext`. Project references between packages.
 3. **Packages.** Create `core`, `postgres`, `zod`, `cli` (and empty `sqlite`, `mysql`
    marked `private` until step 17) with `package.json`, `tsconfig.json`, `src/index.ts`.
-   `exports` map with `import`/`require`/`types` conditions; `sideEffects: false`;
+   `exports` map with `types`/`default` conditions (ESM only, decision D14); `sideEffects: false`;
    `files: ["dist"]`. Core's only runtime dependency is `kysely` (pin the current stable
    minor; record the version in the status note).
-4. **Build.** `tsup` (or `tsdown`) producing ESM + CJS + `.d.ts` with source maps. Verify
-   output with `publint` and `@arethetypeswrong/cli` in CI.
+4. **Build.** `tsup` (or `tsdown`) producing ESM + `.d.ts` with source maps (ESM only,
+   decision D14). Verify output with `publint` and `@arethetypeswrong/cli` in CI.
 5. **Lint and format.** Biome with rules: no default exports, no `any` (error), no
    non-null assertion outside tests, import sorting, no `console` in `packages/`.
 6. **Tests.** Vitest workspace with three projects per package:
@@ -75,7 +75,7 @@ No library code is written in this step beyond placeholder exports.
 - [ ] Fresh clone: `pnpm i && pnpm db:up && pnpm check && pnpm test:integration` passes.
 - [ ] A deliberately failing type test, unit test, lint error and coverage drop each fail CI
       (demonstrate once, then remove).
-- [ ] `import { VERSION } from "ectype"` works from an ESM and a CJS consumer script in `examples/smoke/`.
+- [ ] `import { VERSION } from "ectype"` works from an ESM consumer script in `examples/smoke/`, and from a CommonJS script that loads the ES module with `require()`.
 - [ ] `docs/plan/spikes/schema-typing.ts` is type-checked in CI (it is the regression test for D1).
 - [ ] Two integration test files run in parallel without interfering.
 - [ ] `pnpm bench` runs the example benchmark and writes a results file.

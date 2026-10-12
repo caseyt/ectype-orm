@@ -156,7 +156,7 @@ describe("isEctypeError", () => {
   });
 
   test("recognises an error from another copy of the package, where instanceof fails", () => {
-    // What a second copy of this module (say the CommonJS build) would create: a different
+    // What a second installed copy of this module would create: a different
     // class, the same process-wide brand.
     const foreign = Object.assign(new Error("from another copy"), {
       code: "query",

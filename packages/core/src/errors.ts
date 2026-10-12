@@ -87,7 +87,7 @@ export abstract class EctypeError extends Error {
 /**
  * Whether `value` is an error thrown by Ectype, optionally with a given code. Unlike
  * `instanceof`, it also recognises errors created by another copy of the package (for
- * example the CommonJS build next to the ESM build).
+ * example two versions installed side by side in one dependency tree).
  *
  * @example
  * ```ts

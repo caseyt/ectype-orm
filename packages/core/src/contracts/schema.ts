@@ -19,8 +19,7 @@ import type { AnyEctoType } from "./type.js";
 /**
  * The key under which a schema class holds its {@link SchemaMeta}: `User[META]`.
  *
- * Created with `Symbol.for`, so the ESM and the CommonJS build of the package (and two
- * installed copies of it) agree on the key.
+ * Created with `Symbol.for`, so two installed copies of the package agree on the key.
  *
  * @example
  * ```ts
