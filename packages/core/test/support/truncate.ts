@@ -38,7 +38,13 @@ export async function truncateAll(db: TestDatabase, options: TruncateOptions = {
   const tables = rows.map((row) => row.name).filter((name) => !except.has(name));
   if (tables.length > 0) {
     const statements = tables.map((name) => `TRUNCATE TABLE ${quoteMysql(name)};`).join(" ");
-    await db.exec(`SET FOREIGN_KEY_CHECKS = 0; ${statements} SET FOREIGN_KEY_CHECKS = 1;`);
+    await db.exec("SET FOREIGN_KEY_CHECKS = 0");
+    try {
+      await db.exec(statements);
+    } finally {
+      // Restored even when a TRUNCATE fails, so one failure cannot change later tests.
+      await db.exec("SET FOREIGN_KEY_CHECKS = 1");
+    }
   }
   return tables;
 }
