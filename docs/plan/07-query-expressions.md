@@ -84,9 +84,11 @@ to those safe kinds), `param(name, type)`, `fragment`.
    that differ only in bound values have equal shapes. `list` params contribute their
    length only on dialects that expand (decided by the compiler; expose both hashes or a
    length-agnostic one plus a `listLengths` vector — choose and document).
-7. **Param collection.** Each `Expr` knows its params in emission order so that builders
-   can concatenate param arrays without re-walking the tree (see step 10 for the
-   contract). Provide `collectParams(node, out)` for the general case and test that both agree.
+7. **Param collection.** Each `Expr` knows its params in **canonical order** (depth-first,
+   node properties in interface declaration order; see `contracts/query.ts`) so that
+   builders can splice param arrays without re-walking the tree. Provide
+   `collectParams(node, out)`, which defines that order for every node kind including a
+   whole `QueryAst`, and test that both agree.
 8. **Node set.** Define and export (internally) every node kind needed by steps 08–10:
    column, param, namedParam, list, literal, unary, binary, nary (and/or), fn, aggregate
    (with distinct/filter/over), fragment, cast, case, jsonPath, subquery, exists, tuple,

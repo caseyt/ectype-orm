@@ -79,9 +79,14 @@ cache statistics (`hits`, `misses`, `collisions`, `size`) for telemetry.
 ## Behaviour details
 
 - **Determinism.** Same AST → byte-identical SQL. No timestamps, counters or random names.
-- **Param ordering contract with steps 07–09:** `ast.params` is in clause-append order;
-  slots refer to indexes in it. Verify with a property test: compile via the cache with
-  values A, execute-bind with values B, and compare against a cold compile with B.
+- **Param ordering contract with steps 07–09:** `ast.params` is in **canonical order** (a
+  depth-first walk of the AST in interface declaration order, as defined in
+  `contracts/query.ts`; it equals `collectParams(ast)`), not in the order clauses were
+  appended. Slots refer to indexes in it: the lowering visits the AST in canonical order
+  and counts the parameter nodes it meets. Verify with a property test: compile via the
+  cache with the AST of values A, bind with `params` of another AST of the same shape
+  holding values B, and compare against a cold compile of B. `shape` is canonical too, so
+  two structurally identical queries share one plan however they were built.
 - **Null/boolean literals** from `lit()` are inlined; everything else is bound.
 - **`limit`/`offset`** are bound parameters where the dialect allows.
 - **Prefix:** query-level `prefix`, per-source prefix, and the repo default are resolved
