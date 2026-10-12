@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+
+    "paths": {
+      "ectype": ["./packages/core/src/index.ts"],
+      "@ectype/postgres": ["./packages/postgres/src/index.ts"],
+      "@ectype/sqlite": ["./packages/sqlite/src/index.ts"],
+      "@ectype/mysql": ["./packages/mysql/src/index.ts"],
+      "@ectype/zod": ["./packages/zod/src/index.ts"],
+      "@ectype/cli": ["./packages/cli/src/index.ts"],
+      "@ectype/test-support": ["./packages/core/test/support/index.ts"]
+    }
+  }
+}

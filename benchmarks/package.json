@@ -1,0 +1,16 @@
+{
+  "name": "@ectype/benchmarks",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Micro and comparative benchmarks for Ectype.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "bench": "tsx --tsconfig tsconfig.run.json src/run.ts",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "ectype": "workspace:*",
+    "mitata": "1.0.34"
+  }
+}

@@ -53,7 +53,7 @@ before `1.0`), and make publishing a one-command, repeatable act.
   rejections, stable memory.
 - Fault injection through a fake adapter: failure at every await point of insert/update/
   delete/transaction/Multi/nested/preload leaves no checked-out connection and surfaces the original error.
-- Runtime matrix: Node 20 and 22 (required), 24 and Bun (best effort, results recorded);
+- Runtime matrix: Node 22 and 24 (required), Bun (best effort, results recorded);
   ESM and CJS consumers; bundled with esbuild and with a framework build (Next.js) in `examples/`.
 - Mutation testing (Stryker) on `changeset/`, `query/`, `compiler/`: mutation score ≥ 80%;
   surviving mutants triaged (killed with new tests or justified).

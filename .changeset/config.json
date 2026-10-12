@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@4.0.1/schema.json",
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "fixed": [["ectype", "@ectype/postgres", "@ectype/sqlite", "@ectype/mysql", "@ectype/zod", "@ectype/cli"]],
+  "linked": [],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": ["@ectype/benchmarks", "@ectype/docs-site", "@ectype/example-smoke"],
+  "privatePackages": {
+    "version": true,
+    "tag": false
+  }
+}

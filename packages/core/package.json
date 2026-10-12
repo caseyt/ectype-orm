@@ -1,0 +1,61 @@
+{
+  "name": "ectype",
+  "version": "0.0.0",
+  "description": "A TypeScript ORM modelled on Elixir's Ecto: schemas, changesets, queries and a Repo.",
+  "license": "MIT",
+  "author": "Casey Tickes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caseyt/ectype-orm.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/caseyt/ectype-orm#readme",
+  "bugs": "https://github.com/caseyt/ectype-orm/issues",
+  "keywords": [
+    "orm",
+    "ecto",
+    "typescript",
+    "sql",
+    "changeset",
+    "query-builder"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup",
+    "lint:package": "publint --strict && attw --pack ."
+  },
+  "dependencies": {
+    "kysely": "~0.29.6"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "mysql2": "3.24.5",
+    "pg": "8.23.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -15,9 +15,9 @@ No library code is written in this step beyond placeholder exports.
 1. **Git and workspace.** The repository already exists (`main`, remote `origin` =
    `https://github.com/caseyt/ectype-orm.git`). Add a PR template mirroring the PR body in
    plan README §9, branch protection notes in `CONTRIBUTING.md` (CI green + one approval
-   before merge), `.gitignore`, `.editorconfig`, `.nvmrc` (20),
+   before merge), `.gitignore`, `.editorconfig`, `.nvmrc` (22),
    `pnpm-workspace.yaml` covering `packages/*`, `benchmarks`, `examples/*`, `docs/site`.
-   Root `package.json` with `"packageManager"` pinned and `engines.node >= 20`.
+   Root `package.json` with `"packageManager"` pinned and `engines.node >= 22`.
 2. **TypeScript.** `tsconfig.base.json`: `strict`, `noUncheckedIndexedAccess`,
    `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`,
    `isolatedModules`, `isolatedDeclarations` if it does not fight the schema API (try it;
@@ -58,7 +58,7 @@ No library code is written in this step beyond placeholder exports.
     writes `benchmarks/results/<git-sha>.json`. Regression gating comes in step 19.
 11. **Docs skeleton.** VitePress site at `docs/site` with nav stubs for Guide, API,
     Ecto cheat sheet; `pnpm docs:dev` / `docs:build`.
-12. **CI** (GitHub Actions): jobs `lint`, `typecheck`, `unit+types` (Node 20 and 22),
+12. **CI** (GitHub Actions): jobs `lint`, `typecheck`, `unit+types` (Node 22 and 24),
     `integration` (Postgres service), `build+publint+attw`, `docs:build`. Cache pnpm store.
 13. **Root scripts.** `pnpm check` = lint + typecheck + unit + type tests + build.
     `pnpm test:integration`, `pnpm bench`, `pnpm docs:dev`.

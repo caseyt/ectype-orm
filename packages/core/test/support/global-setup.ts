@@ -1,0 +1,52 @@
+// Vitest globalSetup for every `<package>:integration` project (see vitest.config.ts).
+//
+// Before the run: gives the run an id (inherited by all workers, embedded in every test
+// database name) and drops stale databases leaked by earlier runs that were killed.
+// After the run: drops whatever this run still owns, for example after a crashed worker.
+//
+// Safe when two runs share one server: see sweepTestDatabases.
+import { randomBytes } from "node:crypto";
+import { RUN_ID_ENV } from "./db.js";
+import { type Dialect, tier2Enabled } from "./env.js";
+import { sweepTestDatabases } from "./sweep.js";
+
+/** A database older than this cannot belong to a live run. Override with ECTYPE_TEST_STALE_MINUTES. */
+const DEFAULT_STALE_MINUTES = 30;
+
+// Several projects share this file in one process; set up on the first, tear down on the last.
+const state = globalThis as typeof globalThis & { __ectypeIntegrationProjects?: number };
+
+function dialects(): Dialect[] {
+  return tier2Enabled() ? ["postgres", "mysql"] : ["postgres"];
+}
+
+function staleMs(): number {
+  const raw = process.env.ECTYPE_TEST_STALE_MINUTES;
+  const minutes = raw === undefined || raw === "" ? DEFAULT_STALE_MINUTES : Number(raw);
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    throw new Error(`ECTYPE_TEST_STALE_MINUTES must be a non-negative number, got ${JSON.stringify(raw)}`);
+  }
+  return minutes * 60_000;
+}
+
+export async function setup(): Promise<void> {
+  state.__ectypeIntegrationProjects = (state.__ectypeIntegrationProjects ?? 0) + 1;
+  if (state.__ectypeIntegrationProjects > 1) return;
+
+  // A nested run (parallel.itest.ts) keeps the id of the run that started it.
+  process.env[RUN_ID_ENV] ??= `r${randomBytes(4).toString("hex")}`;
+  for (const dialect of dialects()) {
+    await sweepTestDatabases(dialect, { olderThanMs: staleMs() });
+  }
+}
+
+export async function teardown(): Promise<void> {
+  state.__ectypeIntegrationProjects = (state.__ectypeIntegrationProjects ?? 1) - 1;
+  if (state.__ectypeIntegrationProjects > 0) return;
+
+  const runId = process.env[RUN_ID_ENV];
+  if (runId === undefined) return;
+  for (const dialect of dialects()) {
+    await sweepTestDatabases(dialect, { runId });
+  }
+}

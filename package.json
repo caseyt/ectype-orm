@@ -1,0 +1,53 @@
+{
+  "name": "ectype-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ectype: a TypeScript ORM modelled on Elixir's Ecto (workspace root).",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=12"
+  },
+  "scripts": {
+    "check": "pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:types && pnpm build",
+    "lint": "biome ci --error-on-warnings . && node scripts/check-workspace-policy.mjs",
+    "format": "biome check --write .",
+    "typecheck": "tsc -b && pnpm typecheck:spikes",
+    "typecheck:spikes": "tsc -p tsconfig.spikes.json && node scripts/check-rejected-spike.mjs",
+    "test": "pnpm test:unit && pnpm test:types",
+    "test:unit": "vitest run --project '*:unit' --coverage && pnpm --filter @ectype/benchmarks run test && node --test \"scripts/*.test.mjs\"",
+    "test:types": "vitest run --project '*:types'",
+    "test:integration": "vitest run --project '*:integration'",
+    "test:watch": "vitest --project '*:unit'",
+    "build": "pnpm -r --filter './packages/*' run build",
+    "lint:packages": "pnpm -r --filter './packages/*' run lint:package",
+    "smoke": "pnpm --filter @ectype/example-smoke run smoke",
+    "bench": "pnpm build && pnpm --filter @ectype/benchmarks run bench",
+    "docs:dev": "pnpm --filter @ectype/docs-site run dev",
+    "docs:build": "pnpm --filter @ectype/docs-site run build",
+    "docs:preview": "pnpm --filter @ectype/docs-site run preview",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:up:tier2": "docker compose --profile tier2 up -d --wait",
+    "db:down": "docker compose --profile tier2 down --volumes --remove-orphans",
+    "db:reset": "pnpm db:down && pnpm db:up",
+    "clean": "node scripts/clean.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version && node scripts/sync-version.mjs"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@biomejs/biome": "2.5.15",
+    "@changesets/cli": "3.0.3",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.0.3",
+    "fast-check": "4.10.2",
+    "publint": "0.3.25",
+    "tsup": "8.5.1",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  }
+}

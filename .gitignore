@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.tsbuild/
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+.vitest/
+.stryker-tmp/
+reports/
+# Vitest typecheck scratch files
+tsconfig.vitest-temp.json
+
+# Tool caches and scratch (temp/ is api-extractor's)
+.cache/
+.turbo/
+.eslintcache
+.temp/
+temp/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.npmrc.local
+.claude/settings.local.json
+.claude/worktrees/
+
+# Editors and operating systems. No .vscode files are committed; if that changes, add
+# negations for exactly those files (for example !.vscode/extensions.json).
+.idea/
+.vscode/*
+*.swp
+.DS_Store
+Thumbs.db
+
+# Package managers (*.tgz is `pnpm pack` output)
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+*.log
+*.tgz
+
+# Profiling output (step 19)
+*.cpuprofile
+*.heapprofile
+*.heapsnapshot
+isolate-*.log
+
+# Local databases (step 17)
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# VitePress
+docs/site/.vitepress/cache/
+docs/site/.vitepress/dist/
+
+# Benchmark results are written per run; step 19 decides which are committed.
+benchmarks/results/*.json
+
+# Scratch
+.spike/
+tmp/
+.scratch/

@@ -1,0 +1,76 @@
+/**
+ * Connection settings for the test databases.
+ *
+ * Every value can be overridden through the environment; the defaults match
+ * `docker-compose.yml` at the repository root, so `pnpm db:up` needs no configuration.
+ */
+
+/** The SQL dialects that have a test database. SQLite joins in step 17. */
+export type Dialect = "postgres" | "mysql";
+
+/** How to reach one database server. `database` is the maintenance database, not a per-test one. */
+export interface ConnectionSettings {
+  readonly host: string;
+  readonly port: number;
+  readonly user: string;
+  readonly password: string;
+  readonly database: string;
+}
+
+type Env = Readonly<Record<string, string | undefined>>;
+
+function readString(env: Env, key: string, fallback: string): string {
+  const value = env[key];
+  return value === undefined || value === "" ? fallback : value;
+}
+
+function readPort(env: Env, key: string, fallback: number): number {
+  const value = env[key];
+  if (value === undefined || value === "") return fallback;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${key} must be a TCP port number, got ${JSON.stringify(value)}`);
+  }
+  return port;
+}
+
+/**
+ * Reads the connection settings for `dialect` from `env` (default `process.env`).
+ *
+ * | Dialect  | Variables                                                                          |
+ * |----------|------------------------------------------------------------------------------------|
+ * | postgres | `ECTYPE_PG_HOST`, `ECTYPE_PG_PORT`, `ECTYPE_PG_USER`, `ECTYPE_PG_PASSWORD`, `ECTYPE_PG_DATABASE` |
+ * | mysql    | `ECTYPE_MYSQL_HOST`, `ECTYPE_MYSQL_PORT`, `ECTYPE_MYSQL_USER`, `ECTYPE_MYSQL_PASSWORD`, `ECTYPE_MYSQL_DATABASE` |
+ */
+export function connectionSettings(dialect: Dialect, env: Env = process.env): ConnectionSettings {
+  switch (dialect) {
+    case "postgres":
+      return {
+        host: readString(env, "ECTYPE_PG_HOST", "127.0.0.1"),
+        port: readPort(env, "ECTYPE_PG_PORT", 54_329),
+        user: readString(env, "ECTYPE_PG_USER", "ectype"),
+        password: readString(env, "ECTYPE_PG_PASSWORD", "ectype"),
+        database: readString(env, "ECTYPE_PG_DATABASE", "ectype_dev"),
+      };
+    case "mysql":
+      return {
+        host: readString(env, "ECTYPE_MYSQL_HOST", "127.0.0.1"),
+        port: readPort(env, "ECTYPE_MYSQL_PORT", 33_069),
+        user: readString(env, "ECTYPE_MYSQL_USER", "root"),
+        password: readString(env, "ECTYPE_MYSQL_PASSWORD", "ectype"),
+        database: readString(env, "ECTYPE_MYSQL_DATABASE", "ectype_dev"),
+      };
+  }
+}
+
+/** Formats settings as a connection URL (`postgres://…` or `mysql://…`), with credentials escaped. */
+export function connectionUrl(dialect: Dialect, settings: ConnectionSettings): string {
+  const { host, port, user, password, database } = settings;
+  const auth = `${encodeURIComponent(user)}:${encodeURIComponent(password)}`;
+  return `${dialect}://${auth}@${host}:${port}/${encodeURIComponent(database)}`;
+}
+
+/** True when the tier 2 databases (MySQL) are expected to be running: `ECTYPE_TEST_TIER2=1`. */
+export function tier2Enabled(env: Env = process.env): boolean {
+  return env.ECTYPE_TEST_TIER2 === "1" || env.ECTYPE_TEST_TIER2 === "true";
+}
