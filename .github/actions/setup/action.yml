@@ -2,15 +2,23 @@ name: Setup
 description: Install pnpm (version from package.json "packageManager"), Node.js and workspace dependencies.
 inputs:
   node-version:
-    description: Node.js version to install.
+    description: Node.js major version to install.
     default: "22"
 runs:
   using: composite
   steps:
-    - uses: pnpm/setup@v3
+    - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
       with:
         runtime: node@${{ inputs.node-version }}
         cache: true
         install: false
     - run: pnpm install --frozen-lockfile
       shell: bash
+    # Fails the job unless both `node` and the Node that pnpm scripts run on are the requested major.
+    - name: Check Node.js version
+      run: |
+        node scripts/check-node-version.mjs "$NODE_MAJOR" "node on PATH"
+        pnpm exec node scripts/check-node-version.mjs "$NODE_MAJOR" "node under pnpm"
+      shell: bash
+      env:
+        NODE_MAJOR: ${{ inputs.node-version }}
