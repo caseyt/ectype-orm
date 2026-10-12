@@ -12,23 +12,35 @@ import type {
   Connection,
   Dialect,
   Executor,
+  InsertCell,
   InsertPlanOptions,
+  InsertSource,
   IsolationLevel,
   OnConflict,
   OutputPlan,
+  OutputPreload,
   ParamSlot,
   QueryEvent,
-  QueryOperation,
   RawResult,
   RowDecoder,
 } from "./adapter.js";
-import type { QueryAst } from "./query.js";
-import type { FieldMeta, SchemaMeta } from "./schema.js";
+import type { ExprNode, FragmentNode, ParamNode, QueryAst, QueryOperation, SelectNode } from "./query.js";
+import type { FieldMeta, RowMeta, SchemaMeta } from "./schema.js";
+import { ROW } from "./schema.js";
 import type { AnyEctoType, Codec } from "./type.js";
 
 declare const ast: QueryAst;
 declare const meta: SchemaMeta;
 declare const field: FieldMeta;
+declare const fragment: FragmentNode;
+declare const stringType: AnyEctoType;
+
+const insertOne: InsertPlanOptions = {
+  source: { kind: "values", rows: 1 },
+  returning: [field],
+  onConflict: "raise",
+  conflictTarget: undefined,
+};
 
 const capabilities: Capabilities = {
   returning: true,
@@ -53,8 +65,14 @@ const capabilities: Capabilities = {
   maxParams: 65_535,
 };
 
-const plan: CompiledQuery = { sql: "select 1", slots: [], output: undefined, decoder: undefined };
-const result: RawResult = { rows: [], rowCount: 0 };
+const plan: CompiledQuery = {
+  sql: "select 1",
+  slots: [],
+  output: undefined,
+  prefix: undefined,
+  decoder: undefined,
+};
+const result: RawResult = { rows: [], rowCount: 0, insertId: undefined };
 
 async function* noRows(): AsyncIterable<Record<string, unknown>> {}
 
@@ -68,6 +86,7 @@ const connection: Connection = {
   rollbackTo: async () => {},
   releaseSavepoint: async () => {},
   release: async () => {},
+  destroy: async () => {},
 };
 
 /** An adapter written against the contract only. */
@@ -75,6 +94,7 @@ const fake: Adapter = {
   dialect: "postgres",
   capabilities,
   compile: () => plan,
+  compileFragment: () => plan,
   compileInsert: () => plan,
   compileUpdate: () => plan,
   compileDelete: () => plan,
@@ -88,23 +108,26 @@ const fake: Adapter = {
 };
 
 describe("Adapter", () => {
-  test("compile methods are synchronous and return a CompiledQuery", () => {
-    expectTypeOf(fake.compile(ast, "all")).toEqualTypeOf<CompiledQuery>();
-    expectTypeOf(fake.compileUpdate(meta, [field], [field], [])).toEqualTypeOf<CompiledQuery>();
-    expectTypeOf(fake.compileDelete(meta, [field], [])).toEqualTypeOf<CompiledQuery>();
-    expectTypeOf(
-      fake.compileInsert(meta, [field], {
-        rows: 1,
-        returning: [field],
-        onConflict: "raise",
-        conflictTarget: undefined,
-      }),
-    ).toEqualTypeOf<CompiledQuery>();
+  test("compile methods are synchronous, take the effective prefix and return a CompiledQuery", () => {
+    expectTypeOf(fake.compile(ast, "all", undefined)).toEqualTypeOf<CompiledQuery>();
+    expectTypeOf(fake.compile(ast, "updateAll", "tenant_1")).toEqualTypeOf<CompiledQuery>();
+    expectTypeOf(fake.compileUpdate(meta, [field], [field], [], "tenant_1")).toEqualTypeOf<CompiledQuery>();
+    expectTypeOf(fake.compileDelete(meta, [field], [], undefined)).toEqualTypeOf<CompiledQuery>();
+    expectTypeOf(fake.compileInsert(meta, [field], insertOne, undefined)).toEqualTypeOf<CompiledQuery>();
+    expectTypeOf(fake.compileFragment(fragment)).toEqualTypeOf<CompiledQuery>();
     expectTypeOf<QueryOperation>().toEqualTypeOf<"all" | "updateAll" | "deleteAll">();
     // @ts-expect-error not a query operation
-    fake.compile(ast, "insert");
+    fake.compile(ast, "insert", undefined);
+    // @ts-expect-error the prefix must be stated, even as undefined
+    fake.compile(ast, "all");
+    // @ts-expect-error the prefix must be stated for row-level writes too
+    fake.compileUpdate(meta, [field], [field], []);
+    // @ts-expect-error the prefix must be stated for deletes too
+    fake.compileDelete(meta, [field], []);
     // @ts-expect-error the options are required
-    fake.compileInsert(meta, [field]);
+    fake.compileInsert(meta, [field], undefined, undefined);
+    // @ts-expect-error a fragment, not a string: raw SQL text cannot be compiled
+    fake.compileFragment("select 1");
   });
 
   test("execute and stream return rows as plain records, never any", () => {
@@ -140,6 +163,8 @@ describe("Adapter", () => {
     connection.begin({ isolation: "snapshot" });
     // @ts-expect-error a savepoint needs a name
     connection.savepoint();
+    // Step 16: a connection whose ROLLBACK failed is destroyed, not returned to the pool.
+    expectTypeOf(connection.destroy()).resolves.toBeVoid();
   });
 
   test("typeOverrides answers with a codec or undefined", () => {
@@ -152,6 +177,7 @@ describe("Adapter", () => {
       expectTypeOf(event).toEqualTypeOf<QueryEvent>();
       expectTypeOf(event.durationMs).toEqualTypeOf<number>();
       expectTypeOf(event.params).toEqualTypeOf<readonly unknown[] | undefined>();
+      expectTypeOf(event.context).toBeUnknown();
     });
     fake.on("poolExhausted", (event) => expectTypeOf(event).toEqualTypeOf<AdapterEvents["poolExhausted"]>());
     expectTypeOf(fake.on("connect", () => {})).toEqualTypeOf<() => void>();
@@ -189,6 +215,7 @@ describe("ParamSlot", () => {
       slot.index;
     }
     expectTypeOf(slot.dump).toEqualTypeOf<((value: unknown) => unknown) | undefined>();
+    expectTypeOf(slot.redact).toEqualTypeOf<boolean>();
   });
 
   test("is enough to write bindParams", () => {
@@ -224,19 +251,24 @@ describe("ParamSlot", () => {
 
   test("rejects incomplete and unknown slots", () => {
     // @ts-expect-error dump must be given, even as undefined
-    const a: ParamSlot = { kind: "inline", index: 0 };
+    const a: ParamSlot = { kind: "inline", index: 0, redact: false };
     // @ts-expect-error an element slot needs its element
-    const b: ParamSlot = { kind: "element", index: 0, dump: undefined };
+    const b: ParamSlot = { kind: "element", index: 0, dump: undefined, redact: false };
     // @ts-expect-error no such kind
-    const c: ParamSlot = { kind: "positional", index: 0, dump: undefined };
-    void [a, b, c];
+    const c: ParamSlot = { kind: "positional", index: 0, dump: undefined, redact: false };
+    // @ts-expect-error whether the value is redacted must be stated
+    const d: ParamSlot = { kind: "named", name: "x", dump: undefined };
+    void [a, b, c, d];
   });
 });
 
 describe("CompiledQuery and OutputPlan", () => {
   test("only the decoder can be assigned after creation", () => {
-    const decoder: RowDecoder = (row) => row.c0;
+    const decoder: RowDecoder = (row, constants) => [row.c0, constants[0]];
     plan.decoder = decoder;
+    expectTypeOf(decoder).parameter(1).toEqualTypeOf<readonly unknown[]>();
+    // @ts-expect-error the prefix a plan resolved to is fixed
+    plan.prefix = "other";
     // @ts-expect-error the sql is fixed
     plan.sql = "select 2";
     // @ts-expect-error the slots are fixed
@@ -250,7 +282,7 @@ describe("CompiledQuery and OutputPlan", () => {
       keys: ["id", "author", "pair"],
       values: [
         { kind: "value", alias: "c0", type: undefined },
-        { kind: "row", meta, aliases: ["c1", "c2"] },
+        { kind: "row", meta, aliases: ["c1", "c2"], preloads: [] },
         { kind: "tuple", items: [{ kind: "value", alias: "c3", type: undefined }] },
       ],
     };
@@ -271,9 +303,13 @@ describe("insert options", () => {
       { replaceAllExcept: [field] },
       { query: ast },
     ];
-    const targets: ConflictTarget[] = [{ fields: [field] }, { constraint: "users_email_index" }];
+    const targets: ConflictTarget[] = [
+      { fields: [field] },
+      { constraint: "users_email_index" },
+      { fragment },
+    ];
     const options: InsertPlanOptions = {
-      rows: 2,
+      source: { kind: "values", rows: 2 },
       returning: [],
       onConflict: forms[3]!,
       conflictTarget: targets[0],
@@ -284,5 +320,172 @@ describe("insert options", () => {
     // @ts-expect-error fields are FieldMeta, not names
     const names: OnConflict = { replace: ["name"] };
     void [bad, names];
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The features of later steps, written against the contract alone. None of these could
+// be written against the first version of the contract (step 02 review, findings 1-9).
+// ---------------------------------------------------------------------------
+
+function bindParams(slots: readonly ParamSlot[], params: readonly unknown[]): unknown[] {
+  return slots.map((slot) =>
+    slot.kind === "inline" || slot.kind === "list" ? params[slot.index] : undefined,
+  );
+}
+
+describe("what steps 08 to 17 need from the contract", () => {
+  test("step 12: a read in a per-call prefix, without touching the AST, with rows stamped with that prefix", () => {
+    async function all(
+      adapter: Adapter,
+      query: QueryAst,
+      options: { prefix?: string },
+      repoPrefix: string | undefined,
+    ) {
+      const compiled = adapter.compile(query, "all", options.prefix ?? repoPrefix);
+      const raw = await adapter.execute(compiled.sql, bindParams(compiled.slots, query.params), {
+        slots: compiled.slots,
+        context: { operation: "all" },
+      });
+      const output = compiled.output;
+      if (output === undefined || output.kind !== "row") return [];
+      const rowMeta = output.meta.rowMeta("loaded", compiled.prefix);
+      expectTypeOf(rowMeta).toEqualTypeOf<RowMeta>();
+      return raw.rows.map((row) =>
+        output.meta.create(
+          output.aliases.map((alias) => row[alias]),
+          rowMeta,
+        ),
+      );
+    }
+    expectTypeOf(all).returns.resolves.toEqualTypeOf<object[]>();
+    expectTypeOf(plan.prefix).toEqualTypeOf<string | undefined>();
+  });
+
+  test("step 13: an update of a loaded row goes to the prefix the row came from", () => {
+    function updatePlan(adapter: Adapter, row: { readonly [ROW]: RowMeta }, callPrefix: string | undefined) {
+      return adapter.compileUpdate(meta, [field], meta.primaryKey, [], callPrefix ?? row[ROW].prefix);
+    }
+    expectTypeOf(updatePlan).returns.toEqualTypeOf<CompiledQuery>();
+  });
+
+  test("step 12: repo.query compiles a bare fragment and returns raw rows", () => {
+    async function query(adapter: Adapter, sql: FragmentNode, params: readonly unknown[]) {
+      const compiled = adapter.compileFragment(sql);
+      const raw = await adapter.execute(compiled.sql, bindParams(compiled.slots, params), {
+        slots: compiled.slots,
+      });
+      return { rows: raw.rows, rowCount: raw.rowCount };
+    }
+    expectTypeOf(query).returns.resolves.toEqualTypeOf<{
+      rows: readonly Record<string, unknown>[];
+      rowCount: number;
+    }>();
+  });
+
+  test("steps 13 and 17: an insert without RETURNING reads the generated key from the result", () => {
+    async function insertedId(adapter: Adapter, values: readonly unknown[]) {
+      const options: InsertPlanOptions = {
+        ...insertOne,
+        returning: adapter.capabilities.returning ? [field] : [],
+      };
+      const compiled = adapter.compileInsert(meta, [field], options, undefined);
+      const raw = await adapter.execute(compiled.sql, bindParams(compiled.slots, values));
+      return adapter.capabilities.returning ? raw.rows[0]?.c0 : raw.insertId;
+    }
+    expectTypeOf(result.insertId).toEqualTypeOf<bigint | number | undefined>();
+    expectTypeOf(insertedId).returns.resolves.toBeUnknown();
+    // @ts-expect-error the insert id must be reported, even as undefined
+    const incomplete: RawResult = { rows: [], rowCount: 1 };
+    void incomplete;
+  });
+
+  test("step 13: insertAll expresses ragged rows, expressions, subqueries, placeholders and a source query", () => {
+    const value: ParamNode = { kind: "param", value: 1, type: undefined, redact: false };
+    const upper: ExprNode = { kind: "fn", name: "upper", args: [value] };
+    const subquery: ExprNode = { kind: "subquery", query: ast };
+    const cells: InsertCell[][] = [
+      [{ kind: "value" }, { kind: "default" }, { kind: "expr", expr: upper }],
+      [{ kind: "value" }, { kind: "placeholder", name: "now" }, { kind: "expr", expr: subquery }],
+    ];
+    const sources: InsertSource[] = [
+      { kind: "values", rows: 500 },
+      { kind: "cells", rows: cells },
+      { kind: "query", query: ast },
+    ];
+    for (const source of sources) {
+      const options: InsertPlanOptions = { ...insertOne, source };
+      expectTypeOf(
+        fake.compileInsert(meta, [field, field, field], options, "tenant_1"),
+      ).toEqualTypeOf<CompiledQuery>();
+    }
+    // @ts-expect-error a cell holds no value: values go in the parameter array
+    const withValue: InsertCell = { kind: "value", value: 1 };
+    // @ts-expect-error an expression cell needs a node, not a value
+    const rawExpr: InsertCell = { kind: "expr", expr: "now()" };
+    // @ts-expect-error not a source
+    const bad: InsertSource = { kind: "rows", rows: 1 };
+    void [withValue, rawExpr, bad];
+  });
+
+  test("step 13: onConflict takes an update query and conflictTarget a fragment", () => {
+    const options: InsertPlanOptions = {
+      source: { kind: "values", rows: 1 },
+      returning: [],
+      onConflict: { query: ast },
+      conflictTarget: { fragment },
+    };
+    expectTypeOf(fake.compileInsert(meta, [field], options, undefined)).toEqualTypeOf<CompiledQuery>();
+  });
+
+  test("step 08: a selected constant comes from the query, not from the plan or the database", () => {
+    const select: SelectNode = {
+      kind: "select",
+      shape: { kind: "object", keys: ["kind"], values: [{ kind: "constant", index: 0 }] },
+      constants: ["user"],
+    };
+    const output: OutputPlan = { kind: "object", keys: ["kind"], values: [{ kind: "constant", index: 0 }] };
+    const decode: RowDecoder = (_row, constants) => ({ kind: constants[0] });
+    expectTypeOf(decode({}, select.constants)).toBeUnknown();
+    // @ts-expect-error the plan holds an index, never the value
+    const leaked: OutputPlan = { kind: "constant", value: "user" };
+    void [output, leaked];
+  });
+
+  test("step 14: a join preload is part of the output plan and rows come from a factory variant", () => {
+    const posts: OutputPreload = {
+      assoc: "posts",
+      cardinality: "many",
+      row: { kind: "row", meta, aliases: ["c2", "c3"], preloads: [] },
+    };
+    const users: OutputPlan = { kind: "row", meta, aliases: ["c0", "c1"], preloads: [posts] };
+    if (users.kind === "row") {
+      const create = users.meta.createWith(users.preloads.map((preload) => preload.assoc));
+      expectTypeOf(create).toEqualTypeOf<
+        (values: readonly unknown[], loaded: readonly unknown[], row: RowMeta) => object
+      >();
+    }
+    // @ts-expect-error not a cardinality
+    const bad: OutputPreload = { ...posts, cardinality: "several" };
+    void bad;
+  });
+
+  test("steps 11 and 12: an event can be matched to its call and redacted parameters are known", () => {
+    const slots: ParamSlot[] = [
+      { kind: "inline", index: 0, dump: stringType.dump, redact: true },
+      { kind: "inline", index: 1, dump: undefined, redact: false },
+    ];
+    const context = { operation: "insert", source: "users" };
+    void fake.execute("insert", ["secret", 1], { slots, context });
+    fake.on("query", (event) => {
+      expectTypeOf(event.context).toBeUnknown();
+      const mine: boolean = event.context === context;
+      void mine;
+    });
+    const masked = (params: readonly unknown[]): unknown[] =>
+      params.map((value, i) => (slots[i]?.redact === true ? "**redacted**" : value));
+    expectTypeOf(masked).returns.toEqualTypeOf<unknown[]>();
+    // @ts-expect-error slots are ParamSlots, not a list of booleans
+    void fake.execute("insert", [], { slots: [true, false] });
   });
 });

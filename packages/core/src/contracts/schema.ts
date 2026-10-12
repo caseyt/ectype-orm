@@ -373,11 +373,30 @@ export interface SchemaMeta {
    */
   assocs(): ReadonlyMap<string, AssocMeta>;
   /**
-   * The generated row factory (decision D2): builds a row in state `"loaded"` from the
-   * values of the {@link SchemaMeta.persisted} fields, in that order. It never runs a user
-   * constructor and never applies defaults. Virtual fields start out `undefined`.
+   * The shared, frozen {@link RowMeta} for rows of this schema in `state`, read from or
+   * written to `prefix`. The same object is returned for the same arguments, so a decoder
+   * looks it up once per execution and every row of the result points at it. `prefix` is
+   * the prefix the statement actually ran in, which may differ from
+   * {@link SchemaMeta.prefix} (a per-call, per-query or repo-level prefix).
    */
-  readonly create: (values: readonly unknown[]) => object;
+  rowMeta(state: RowState, prefix: string | undefined): RowMeta;
+  /**
+   * The generated row factory (decision D2): builds a row from the values of the
+   * {@link SchemaMeta.persisted} fields, in that order, and stores `row` under {@link ROW}
+   * (take it from {@link SchemaMeta.rowMeta}). It never runs a user constructor and never
+   * applies defaults. Virtual fields start out `undefined`.
+   */
+  readonly create: (values: readonly unknown[], row: RowMeta) => object;
+  /**
+   * The row factory for rows that carry preloaded associations (step 14): like
+   * {@link SchemaMeta.create}, and it also assigns `loaded[i]` to the property
+   * `assocs[i]`, after the fields and in that order. One factory, and so one hidden class,
+   * exists per distinct `assocs` list; asking again with an equal list returns the same
+   * function.
+   */
+  createWith(
+    assocs: readonly string[],
+  ): (values: readonly unknown[], loaded: readonly unknown[], row: RowMeta) => object;
 }
 
 // ---------------------------------------------------------------------------
@@ -624,7 +643,7 @@ export type FieldNames<S> = keyof FieldsOf<S> & string;
  * type UserRow = Row<typeof User>; // { id: number; email: string }
  * ```
  */
-export type Row<S extends AnySchema> = InstanceType<S>;
+export type Row<S extends AnySchema> = S extends abstract new (...args: never[]) => infer R ? R : never;
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
@@ -800,10 +819,22 @@ type NestedPreload<P, K> = P extends readonly (infer E)[]
       ? Exclude<P[K], true | undefined>
       : never;
 
-// `Loaded` without the constraint on `P`. The public type checks `P` once, at the top, and
-// that check already covers every nested level; repeating it per level would make the
-// compiler expand `PreloadSpec` through every cycle of associations.
-type LoadedUnchecked<S extends AnySchema, P> = Row<S> & {
+/**
+ * {@link Loaded} without the constraint on `P`: the result type for a generic function
+ * that has already validated its spec with {@link ValidPreload}. Constraining `P` again
+ * there (`P & PreloadSpec<S>`) makes the compiler expand `PreloadSpec` through every cycle
+ * of associations and fail with "excessively deep". `Loaded` itself is defined with it,
+ * checking `P` once at the top, which covers every nested level.
+ *
+ * @example
+ * ```ts
+ * declare function preload<S extends AnySchema, const P>(
+ *   schema: S,
+ *   spec: P & ValidPreload<S, P>,
+ * ): LoadedUnchecked<S, P>;
+ * ```
+ */
+export type LoadedUnchecked<S extends AnySchema, P> = Row<S> & {
   [K in PreloadedKeys<P> & AssocKeys<S>]: LoadedAssoc<S, K, NestedPreload<P, K>>;
 };
 
@@ -864,3 +895,46 @@ type LoadedAssoc<S extends AnySchema, K extends string, N> = K extends keyof S
  * ```
  */
 export type Loaded<S extends AnySchema, P extends PreloadSpec<S>> = LoadedUnchecked<S, P>;
+
+/**
+ * `P` if it is a valid preload spec for schema `S`, with `never` in place of every part
+ * that is not: an unknown association name, at any depth, in any of the forms.
+ *
+ * It exists for generic functions. A parameter typed `P extends PreloadSpec<S>` accepts
+ * `{ posts: true, nope: true }`, because TypeScript checks excess properties only against
+ * a non-generic target. Intersecting the parameter with `ValidPreload` closes that gap:
+ * the stray key is required to be `never`, so the call does not compile. Every function
+ * that takes a preload spec (`Query.preload`, `repo.preload`) declares it this way.
+ *
+ * A function whose argument has other forms as well (step 14: a custom query, a binding
+ * alias, `$from`) first maps its argument type to a {@link PreloadSpec}, with `true` for
+ * "loaded, nothing nested", and validates and types the result with these two types.
+ *
+ * @example
+ * ```ts
+ * declare function preload<S extends AnySchema, const P>(
+ *   schema: S,
+ *   spec: P & ValidPreload<S, P>,
+ * ): LoadedUnchecked<S, P>;
+ * declare const Post: AnySchema;
+ * declare const User: AnySchema & { posts: Assoc<"hasMany", typeof Post> };
+ *
+ * preload(User, { posts: true });
+ * // preload(User, { posts: true, nope: true }) does not compile
+ * ```
+ */
+export type ValidPreload<S, P> = P extends string
+  ? P extends AssocKeys<S>
+    ? P
+    : never
+  : P extends readonly (infer E)[]
+    ? readonly ValidPreload<S, E>[]
+    : P extends object
+      ? {
+          readonly [K in keyof P]: K extends AssocKeys<S>
+            ? P[K] extends true
+              ? true
+              : ValidPreload<Target<S, K>, P[K]>
+            : never;
+        }
+      : never;

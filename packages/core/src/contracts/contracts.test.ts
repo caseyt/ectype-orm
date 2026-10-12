@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import * as contracts from "./index.js";
 import { err, ok } from "./result.js";
 import { META, ROW } from "./schema.js";
-import { IDENTITY } from "./type.js";
+import { CUSTOM_SQL_TYPE, IDENTITY } from "./type.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const sourceFiles = readdirSync(here).filter(
@@ -49,7 +49,14 @@ describe("contract files", () => {
   });
 
   test("the barrel has exactly these runtime exports; everything else is a type", () => {
-    expect(Object.keys(contracts).sort()).toEqual(["IDENTITY", "META", "ROW", "err", "ok"]);
+    expect(Object.keys(contracts).sort()).toEqual([
+      "CUSTOM_SQL_TYPE",
+      "IDENTITY",
+      "META",
+      "ROW",
+      "err",
+      "ok",
+    ]);
   });
 });
 
@@ -108,5 +115,55 @@ describe("META and ROW", () => {
     const seen: string[] = [];
     for (const key in row) seen.push(key);
     expect(seen).toEqual(["id"]);
+  });
+});
+
+describe("CUSTOM_SQL_TYPE", () => {
+  test.each([
+    "money",
+    "citext",
+    "int8",
+    "numeric(10, 2)",
+    "numeric(10,2)",
+    "varchar(255)",
+    "timestamp with time zone",
+    "double precision",
+    "public.mood",
+    "public.mood[]",
+    "int4[][]",
+    "_private_type",
+  ])("accepts the type name %j", (sql) => {
+    expect(CUSTOM_SQL_TYPE.test(sql)).toBe(true);
+  });
+
+  test.each([
+    "",
+    " ",
+    "text; drop table users",
+    "text) --",
+    "text'",
+    'te"xt',
+    "text/*x*/",
+    "text--",
+    "numeric(10, 2",
+    "numeric(a)",
+    "numeric(1, 2, 3)",
+    "int4[1]",
+    "text  with  spaces",
+    " text",
+    "text ",
+    "1text",
+    "text\nint",
+    "text::int",
+    "(select 1)",
+    "a.b.",
+    "text[",
+  ])("rejects %j", (sql) => {
+    expect(CUSTOM_SQL_TYPE.test(sql)).toBe(false);
+  });
+
+  test("is not stateful (no global or sticky flag)", () => {
+    expect(CUSTOM_SQL_TYPE.flags).toBe("");
+    expect([CUSTOM_SQL_TYPE.test("money"), CUSTOM_SQL_TYPE.test("money")]).toEqual([true, true]);
   });
 });

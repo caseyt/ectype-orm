@@ -45,14 +45,51 @@
  * (see `ParamSlot` in `./adapter.ts`). Two queries of the same shape therefore have their
  * values at the same indexes, which is what lets them share a plan.
  *
- * {@link NamedParamNode}s have no value and no entry in `params`.
+ * {@link NamedParamNode}s have no value and no entry in `params`. Neither have the
+ * constants of a select (`SelectNode.constants`): they are not sent to the database.
+ *
+ * {@link QueryAst.listLengths} is the same kind of cache for the lengths of the
+ * {@link ListNode}s, in the same order.
+ *
+ * ### Who keeps the order when a query is built
+ *
+ * A builder may add clauses in any order (`.limit(10)` and then `.where(…)`), so the
+ * values of a new clause do not always go at the end of `params`: they go where the
+ * clause sits in the canonical order. Finding that position must not need a walk
+ * (building is O(size of the added clause)). The AST deliberately holds no per-clause
+ * counts, so **the builder keeps them**: the `Query` object that wraps a `QueryAst`
+ * (step 08) carries, outside the AST, the number of params (and of lists) that each
+ * top-level property contributes, and derives the insertion offset from those. An
+ * expression knows its own params in canonical order (step 07), so adding a clause
+ * splices that array in at the offset. Code that builds a `QueryAst` by hand (tests,
+ * the compiler's own rewrites) computes `params` with `collectParams`.
  *
  * ## Shape
  *
- * {@link QueryAst.shape} is a 32-bit structural hash: every node contributes its kind,
- * operator, identifiers and parameter **types**, and never a parameter **value**. Queries
- * that differ only in bound values have equal shapes. The plan cache uses it as a key and
- * confirms a hit structurally, because hashes can collide.
+ * {@link QueryAst.shape} is a 32-bit structural hash, and it is **canonical**: two
+ * queries with the same structure have the same shape, in whatever order their clauses
+ * were added. Two such queries also have the same `params` layout, so they share one
+ * plan, which is what the plan cache of step 10 assumes.
+ *
+ * What contributes: every node's kind, operators, function names, identifiers (source,
+ * alias, column, prefix), flags, the `value` of a {@link LiteralNode} (it becomes SQL
+ * text), the **type** of a parameter, and of each preload its `assoc`, its `from` and its
+ * nested preloads (a join preload adds columns to the select list, and any preload
+ * changes how rows are built). What never contributes: the `value` of a {@link ParamNode}
+ * or {@link ListNode}, the length of a list, a select constant, and the `query` of a
+ * preload (a separate statement with its own shape). Queries that differ only in those
+ * have equal shapes.
+ *
+ * A running hash is order-dependent, so a canonical shape cannot be one hash threaded
+ * through the builder calls. The builder keeps one hash per top-level property of
+ * {@link QueryAst} (next to the counts above; extending one is O(added clause)) and
+ * `shape` is those hashes combined in declaration order, which is a fixed, small number
+ * of `hashInt` calls per builder method.
+ *
+ * The plan cache uses `shape` as a key and confirms a hit structurally, because hashes
+ * can collide. On a dialect that expands lists (`capabilities.arrayParams` false) the
+ * SQL depends on the list lengths, so the cache key there is `shape` combined with
+ * `listLengths`; on Postgres `listLengths` is ignored.
  *
  * @module
  */
@@ -85,9 +122,13 @@ export interface ColumnNode {
  * A bound value: `$1`. The value is dumped with `type` when there is one, and passed to
  * the driver unchanged otherwise.
  *
+ * `redact` marks a value that must not appear in logs or telemetry: an operand takes it
+ * from the redacted field it is compared with or assigned to (`FieldMeta.redact`), the
+ * way it takes its type.
+ *
  * @example
  * ```ts
- * const node: ParamNode = { kind: "param", value: 18, type: undefined };
+ * const node: ParamNode = { kind: "param", value: 18, type: undefined, redact: false };
  * ```
  */
 export interface ParamNode {
@@ -95,6 +136,7 @@ export interface ParamNode {
   /** The caller's value. Never part of the shape; never SQL text. */
   readonly value: unknown;
   readonly type: AnyEctoType | undefined;
+  readonly redact: boolean;
 }
 
 /**
@@ -102,13 +144,14 @@ export interface ParamNode {
  *
  * @example
  * ```ts
- * const node: NamedParamNode = { kind: "namedParam", name: "minAge", type: undefined };
+ * const node: NamedParamNode = { kind: "namedParam", name: "minAge", type: undefined, redact: false };
  * ```
  */
 export interface NamedParamNode {
   readonly kind: "namedParam";
   readonly name: string;
   readonly type: AnyEctoType | undefined;
+  readonly redact: boolean;
 }
 
 /**
@@ -117,13 +160,14 @@ export interface NamedParamNode {
  *
  * @example
  * ```ts
- * const node: ListNode = { kind: "list", value: ["admin", "member"], type: undefined };
+ * const node: ListNode = { kind: "list", value: ["admin", "member"], type: undefined, redact: false };
  * ```
  */
 export interface ListNode {
   readonly kind: "list";
   readonly value: readonly unknown[];
   readonly type: AnyEctoType | undefined;
+  readonly redact: boolean;
 }
 
 /**
@@ -648,20 +692,25 @@ export interface BoolNode {
  *
  * - `expr`: one expression; `type` loads the value when present.
  * - `binding`: a whole binding, which expands to the persisted columns of its schema.
+ * - `constant`: a plain value the callback returned (`{ kind: "user" }`). It is returned
+ *   as it is and never sent to the database: no select-list entry, no parameter. The
+ *   value is `constants[index]` of the enclosing {@link SelectNode}, so that it stays
+ *   out of the tree's structure and queries that differ only in it share a plan.
  * - `object`: an object literal; `keys[i]` belongs to `values[i]`.
  * - `tuple`: an array literal.
  *
  * @example
  * ```ts
- * // select(({ u }) => ({ id: u.id, author: u }))
+ * // select(({ u }) => ({ id: u.id, author: u, kind: "user" }))
  * declare const id: ColumnNode;
  * declare const meta: SchemaMeta;
  * const shape: SelectShape = {
  *   kind: "object",
- *   keys: ["id", "author"],
+ *   keys: ["id", "author", "kind"],
  *   values: [
  *     { kind: "expr", expr: id, type: undefined },
  *     { kind: "binding", binding: "u", meta },
+ *     { kind: "constant", index: 0 },
  *   ],
  * };
  * ```
@@ -669,21 +718,24 @@ export interface BoolNode {
 export type SelectShape =
   | { readonly kind: "expr"; readonly expr: ExprNode; readonly type: AnyEctoType | undefined }
   | { readonly kind: "binding"; readonly binding: string; readonly meta: SchemaMeta }
+  | { readonly kind: "constant"; readonly index: number }
   | { readonly kind: "object"; readonly keys: readonly string[]; readonly values: readonly SelectShape[] }
   | { readonly kind: "tuple"; readonly items: readonly SelectShape[] };
 
 /**
- * The `select` clause.
+ * The `select` clause: its shape, and the values of the shape's `constant` leaves.
  *
  * @example
  * ```ts
  * declare const shape: SelectShape;
- * const node: SelectNode = { kind: "select", shape };
+ * const node: SelectNode = { kind: "select", shape, constants: ["user"] };
  * ```
  */
 export interface SelectNode {
   readonly kind: "select";
   readonly shape: SelectShape;
+  /** The plain values the select returns as they are; empty when it has none. Not part of the shape hash. */
+  readonly constants: readonly unknown[];
 }
 
 /**
@@ -732,16 +784,29 @@ export interface CombinationNode {
 /**
  * A common table expression: `WITH [RECURSIVE] "name" AS [NOT] [MATERIALIZED] (…)`.
  *
+ * `operation` says what the query inside does. `"all"` is a `SELECT`. `"updateAll"` and
+ * `"deleteAll"` make a data-modifying CTE (`WITH "moved" AS (DELETE FROM … RETURNING …)`):
+ * the query's `updates` are the assignments and its `select` is the `RETURNING` list. A
+ * fragment is always `"all"`.
+ *
  * @example
  * ```ts
  * declare const query: QueryAst;
- * const node: CteNode = { kind: "cte", name: "recent", query, recursive: false, materialized: undefined };
+ * const node: CteNode = {
+ *   kind: "cte",
+ *   name: "recent",
+ *   query,
+ *   operation: "all",
+ *   recursive: false,
+ *   materialized: undefined,
+ * };
  * ```
  */
 export interface CteNode {
   readonly kind: "cte";
   readonly name: string;
   readonly query: QueryAst | FragmentNode;
+  readonly operation: QueryOperation;
   readonly recursive: boolean;
   /** `undefined` leaves the choice to the database. */
   readonly materialized: boolean | undefined;
@@ -802,6 +867,19 @@ export interface UpdateNode {
 }
 
 /**
+ * What a `QueryAst` is compiled as: a `SELECT`, an `UPDATE` or a `DELETE`. The AST does
+ * not record it; the caller says so (`Adapter.compile`, {@link CteNode.operation}).
+ *
+ * Ecto equivalent: the `:all`, `:update_all` and `:delete_all` operations of an adapter's `prepare/2`.
+ *
+ * @example
+ * ```ts
+ * const operation: QueryOperation = "all";
+ * ```
+ */
+export type QueryOperation = "all" | "updateAll" | "deleteAll";
+
+/**
  * A query, as data. See the module documentation for the rules, for the order of
  * `params` and for `shape`.
  *
@@ -832,6 +910,7 @@ export interface UpdateNode {
  *   prefix: undefined,
  *   hints: [],
  *   params: [],
+ *   listLengths: [],
  *   shape: 0,
  * };
  * ```
@@ -863,6 +942,11 @@ export interface QueryAst {
   readonly hints: readonly FragmentNode[];
   /** The bound values in canonical order. See "Parameter order" in the module documentation. */
   readonly params: readonly unknown[];
+  /**
+   * The lengths of the query's {@link ListNode}s in canonical order; empty when it has
+   * none. Part of the plan-cache key on dialects that expand lists.
+   */
+  readonly listLengths: readonly number[];
   /** The structural hash. See "Shape" in the module documentation. */
   readonly shape: number;
 }

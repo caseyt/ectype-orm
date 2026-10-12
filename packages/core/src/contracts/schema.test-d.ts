@@ -15,12 +15,14 @@ import type {
   FieldType,
   InsertShape,
   Loaded,
+  LoadedUnchecked,
   PreloadSpec,
   PrimaryKeyNames,
   PrimaryKeyOf,
   Row,
   SchemaClass,
   Target,
+  ValidPreload,
   WithFlag,
 } from "./schema.js";
 
@@ -404,9 +406,10 @@ describe("Loaded", () => {
     // @ts-expect-error unknown inside an array
     expectTypeOf<Loaded<typeof User, readonly ["posts", "nope"]>>();
 
-    // Known limit: in a type argument, an unknown key BESIDE a valid one is ignored, not
-    // rejected (TypeScript only checks excess properties on object literals). The value
-    // position below, which is what `preload()` and `repo.preload()` take, rejects it.
+    // Known limit of the `Loaded` TYPE ARGUMENT: an unknown key beside a valid one is
+    // ignored, not rejected. TypeScript checks excess properties only on an object literal
+    // assigned to a non-generic type, as in the annotated variable below. Functions are
+    // generic, so they use ValidPreload instead (see "ValidPreload").
     expectTypeOf<Loaded<typeof User, { posts: true; nope: true }>>().toExtend<Loaded<typeof User, "posts">>();
     expectTypeOf<Loaded<typeof User, { posts: true; nope: true }>>().not.toHaveProperty("nope");
 
@@ -420,5 +423,94 @@ describe("Loaded", () => {
   test("a Loaded row is still a Row", () => {
     expectTypeOf<Loaded<typeof User, "posts">>().toExtend<Row<typeof User>>();
     expectTypeOf<Loaded<typeof User, { posts: "comments" }>>().toExtend<Loaded<typeof User, "posts">>();
+  });
+});
+
+// How every function that takes a preload spec is declared.
+declare function preload<S extends AnySchema, const P>(
+  schema: S,
+  spec: P & ValidPreload<S, P>,
+): LoadedUnchecked<S, P>;
+
+describe("ValidPreload", () => {
+  test("a generic function accepts every valid form and types the result", () => {
+    const one = preload(User, "posts");
+    expectTypeOf(one.posts).toEqualTypeOf<Post[]>();
+    const nested = preload(User, { posts: "comments", profile: true });
+    expectTypeOf(nested.posts[0]!.comments).toEqualTypeOf<Comment[]>();
+    expectTypeOf(nested.profile).toEqualTypeOf<Profile | null>();
+    const deep = preload(User, { posts: { comments: { post: "author" } } });
+    expectTypeOf(deep.posts[0]!.comments[0]!.post.author).toEqualTypeOf<User>();
+    const list = preload(User, ["profile", { posts: ["comments", "author"] }]);
+    expectTypeOf(list.profile).toEqualTypeOf<Profile | null>();
+    expectTypeOf(list.posts[0]!.author).toEqualTypeOf<User>();
+    expectTypeOf(list.posts[0]!.comments).toEqualTypeOf<Comment[]>();
+    expectTypeOf(nested).not.toBeAny();
+    expectTypeOf(list).not.toBeAny();
+  });
+
+  test("a generic function rejects an unknown association in the string form", () => {
+    // @ts-expect-error unknown association
+    preload(User, "nope");
+    // @ts-expect-error a field is not an association
+    preload(User, "email");
+    // @ts-expect-error unknown nested association
+    preload(User, { posts: "nope" });
+  });
+
+  test("a generic function rejects a stray key beside a valid one, at any depth", () => {
+    // @ts-expect-error stray key at the top
+    preload(User, { posts: true, nope: true });
+    // @ts-expect-error stray key one level down
+    preload(User, { posts: { comments: true, zzz: true } });
+    // @ts-expect-error stray key two levels down
+    preload(User, { posts: { comments: { post: true, zzz: true } } });
+    // @ts-expect-error an object that names no association
+    preload(User, { nope: true });
+  });
+
+  test("a generic function rejects unknown names inside arrays", () => {
+    // @ts-expect-error unknown name in an array
+    preload(User, ["posts", "nope"]);
+    // @ts-expect-error stray key in an object in an array
+    preload(User, ["profile", { posts: true, nope: true }]);
+    // @ts-expect-error unknown name in a nested array
+    preload(User, { posts: ["comments", "nope"] });
+  });
+
+  test("maps a valid spec to itself and an invalid part to never", () => {
+    expectTypeOf<ValidPreload<typeof User, "posts">>().toEqualTypeOf<"posts">();
+    expectTypeOf<ValidPreload<typeof User, "nope">>().toBeNever();
+    expectTypeOf<ValidPreload<typeof User, { posts: true }>>().toEqualTypeOf<{ readonly posts: true }>();
+    expectTypeOf<ValidPreload<typeof User, { posts: true; nope: true }>>().toEqualTypeOf<{
+      readonly posts: true;
+      readonly nope: never;
+    }>();
+    expectTypeOf<ValidPreload<typeof User, 42>>().toBeNever();
+  });
+});
+
+describe("schema-derived types on AnySchema", () => {
+  // A signature that defaults its schema parameter to AnySchema must not lose checking.
+  test("none of them degrades to any", () => {
+    expectTypeOf<Row<AnySchema>>().not.toBeAny();
+    expectTypeOf<Row<AnySchema>>().toEqualTypeOf<object>();
+    expectTypeOf<Loaded<AnySchema, never>>().not.toBeAny();
+    expectTypeOf<InsertShape<AnySchema>>().not.toBeAny();
+    expectTypeOf<PrimaryKeyOf<AnySchema>>().not.toBeAny();
+    expectTypeOf<PrimaryKeyNames<AnySchema>>().not.toBeAny();
+    expectTypeOf<FieldNames<AnySchema>>().not.toBeAny();
+    expectTypeOf<AssocKeys<AnySchema>>().not.toBeAny();
+    expectTypeOf<Target<typeof User, AssocKeys<typeof User>>>().not.toBeAny();
+    expectTypeOf<FieldType<AnyFieldBuilder>>().not.toBeAny();
+    expectTypeOf<PreloadSpec<AnySchema>>().not.toBeAny();
+  });
+
+  test("a row of an unknown schema has no properties to misuse", () => {
+    const rows = [] as Row<AnySchema>[];
+    // @ts-expect-error an unknown row is an object, not any
+    rows[0]!.anything;
+    const generic = <S extends AnySchema>(row: Row<S>): Row<S> => row;
+    expectTypeOf(generic<typeof User>(new User())).toEqualTypeOf<User>();
   });
 });

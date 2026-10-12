@@ -16,4 +16,4 @@ export type * from "./schema.js";
 export { META, ROW } from "./schema.js";
 export type * from "./standard-schema.js";
 export type * from "./type.js";
-export { IDENTITY } from "./type.js";
+export { CUSTOM_SQL_TYPE, IDENTITY } from "./type.js";

@@ -35,8 +35,16 @@ export type CastResult<T> =
  * The logical column type of an {@link EctoType}. Adapters map it to a concrete SQL type
  * (for `CAST` and for migrations) and use it to choose driver-level conversions.
  *
- * `custom.sql` is SQL text that is emitted verbatim. It must be a constant written by the
- * author of the type, never a value that came from a user.
+ * `custom.sql` is a SQL type name, and it is **trusted input**: the one place besides the
+ * `fragment` template where text supplied from outside the compiler reaches the SQL
+ * (decision D9, ADR 0002 rule 2). It must be a constant written by the developer who
+ * defines the type, or assembled by a parameterized type from options that are
+ * themselves developer-written constants (a precision, a known type name). It must never
+ * be derived from user data. As a second line of defence the compiler refuses a
+ * `custom.sql` that is not a plain type name: identifiers separated by single spaces or
+ * dots, optionally followed by `(n)` or `(n, m)` and by `[]` pairs, such as `money`,
+ * `citext`, `numeric(10, 2)`, `timestamp with time zone` or `public.mood[]`
+ * (see {@link CUSTOM_SQL_TYPE}).
  *
  * @example
  * ```ts
@@ -64,6 +72,20 @@ export type DbType =
     }
   | { readonly kind: "array"; readonly of: DbType }
   | { readonly kind: "custom"; readonly sql: string };
+
+/**
+ * What a `custom` {@link DbType}'s `sql` must match to be emitted: a type name and
+ * nothing else. No quotes, semicolons, comments or operators can pass it.
+ *
+ * @example
+ * ```ts
+ * CUSTOM_SQL_TYPE.test("numeric(10, 2)"); // true
+ * CUSTOM_SQL_TYPE.test("public.mood[]"); // true
+ * CUSTOM_SQL_TYPE.test("text; drop table users"); // false
+ * ```
+ */
+export const CUSTOM_SQL_TYPE: RegExp =
+  /^[A-Za-z_][A-Za-z0-9_]*(?:[ .][A-Za-z_][A-Za-z0-9_]*)*(?:\(\d+(?:, ?\d+)?\))?(?:\[\])*$/;
 
 /**
  * The `kind` of a {@link DbType}.
@@ -167,7 +189,10 @@ export type DbTypeOf<T> = T extends EctoType<infer _TApp, infer TDb> ? TDb : nev
  * converts nothing, so hot paths compare by reference and skip the call.
  *
  * Always use this export for an identity conversion. Another function that happens to
- * return its argument is called for every value.
+ * return its argument is called for every value. That includes the `IDENTITY` of a second
+ * installed copy of the package: the marker is one function per copy (a function cannot
+ * be registered process-wide the way `META` and `ROW` are), so a type created with one
+ * copy and used by another is still correct, only without the shortcut.
  *
  * @example
  * ```ts

@@ -33,7 +33,7 @@ export interface ChangesetError {
   readonly message: string;
   /** The validation that produced the error: `"required"`, `"length"`, `"cast"`, … */
   readonly validation?: string;
-  /** The kind of constraint that produced the error: `"unique"`, `"foreign"`, … */
+  /** The {@link ConstraintType} of the declared constraint that produced the error: `"unique"`, `"foreignKey"`, … */
   readonly constraint?: string;
   readonly meta: Readonly<Record<string, unknown>>;
 }
@@ -157,8 +157,15 @@ export interface ValidatorContext<T> {
 
 /**
  * A validator written as a plain function: it receives the data with the changes applied
- * and returns the issues it found (an empty array, or nothing, when there are none). It
+ * and returns the issues it found, or an empty array or nothing when there are none. It
  * may be asynchronous, in which case it has to be run with `validateAsync`.
+ *
+ * "Nothing" is `void`, exactly as step 06 specifies, so that every ordinary way of
+ * writing such a function is accepted: no `return` at all, a `: void` annotation, an
+ * `async` function typed `Promise<void>`, and a body that returns issues on some paths
+ * only (under `noImplicitReturns`, annotate such a function with {@link ValidatorResult}).
+ * A function that returns something else, such as a string or a malformed issue, is
+ * still rejected.
  *
  * Step 06 specifies how the issues become changeset errors.
  *
@@ -180,7 +187,8 @@ export type ValidatorFn<T> = (
 ) => ValidatorResult | Promise<ValidatorResult>;
 
 /**
- * What a {@link ValidatorFn} returns: the issues, or nothing when there are none.
+ * What a {@link ValidatorFn} returns: the issues, or nothing when there are none. Code
+ * that receives one treats anything that is not an array as "no issues".
  *
  * @example
  * ```ts
@@ -188,7 +196,8 @@ export type ValidatorFn<T> = (
  * const some: ValidatorResult = [{ path: "email", message: "is not allowed" }];
  * ```
  */
-export type ValidatorResult = readonly ValidationIssue[] | undefined;
+// biome-ignore lint/suspicious/noConfusingVoidType: owner-approved (step 02 review, decision C). `void` is what makes a validator with no return value assignable; `undefined` rejects `: void` functions, `Promise<void>` and partial returns under noImplicitReturns.
+export type ValidatorResult = readonly ValidationIssue[] | void;
 
 /**
  * Anything a changeset can be validated with: a Standard Schema (Zod, Valibot, ArkType,

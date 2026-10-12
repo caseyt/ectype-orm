@@ -7,6 +7,7 @@ import type {
   BoolNode,
   ClauseNode,
   ColumnNode,
+  CteNode,
   ExprKind,
   ExprNode,
   FragmentNode,
@@ -18,6 +19,8 @@ import type {
   ParamNode,
   QueryAst,
   QueryNode,
+  QueryOperation,
+  SelectNode,
   SelectShape,
   SourceNode,
   TableSourceNode,
@@ -49,6 +52,7 @@ const EMPTY: Omit<QueryAst, "from"> = {
   prefix: undefined,
   hints: [],
   params: [],
+  listLengths: [],
   shape: 0,
 };
 
@@ -58,7 +62,12 @@ const col = (binding: string, field: string, column: string): ColumnNode => ({
   field,
   column,
 });
-const param = (value: unknown, type?: AnyEctoType): ParamNode => ({ kind: "param", value, type });
+const param = (value: unknown, type?: AnyEctoType): ParamNode => ({
+  kind: "param",
+  value,
+  type,
+  redact: false,
+});
 
 describe("QueryAst", () => {
   test("expresses the reference query of the plan as plain data", () => {
@@ -112,6 +121,7 @@ describe("QueryAst", () => {
       ],
       select: {
         kind: "select",
+        constants: [],
         shape: {
           kind: "object",
           keys: ["id", "posts"],
@@ -169,7 +179,25 @@ describe("QueryAst", () => {
       from: { kind: "subquerySource", query: inner, alias: "s" },
       wheres: [{ kind: "bool", op: "and", expr: { kind: "exists", query: inner } }],
       combinations: [{ kind: "combination", op: "union", all: true, query: inner }],
-      ctes: [{ kind: "cte", name: "recent", query: inner, recursive: false, materialized: undefined }],
+      ctes: [
+        {
+          kind: "cte",
+          name: "recent",
+          query: inner,
+          operation: "all",
+          recursive: false,
+          materialized: undefined,
+        },
+        // Step 09: a data-modifying CTE. The inner query's select is its RETURNING list.
+        {
+          kind: "cte",
+          name: "moved",
+          query: inner,
+          operation: "deleteAll",
+          recursive: false,
+          materialized: undefined,
+        },
+      ],
       preloads: [{ kind: "preload", assoc: "posts", from: undefined, query: inner, nested: [] }],
     };
     void outer;
@@ -251,7 +279,7 @@ describe("ExprNode", () => {
     // @ts-expect-error a fragment interpolates nodes, not values
     const fragment: FragmentNode = { kind: "fragment", strings: ["lower(", ")"], args: ["x"] };
     // @ts-expect-error a list holds an array
-    const list: ListNode = { kind: "list", value: "a,b", type: undefined };
+    const list: ListNode = { kind: "list", value: "a,b", type: undefined, redact: false };
     void [text, raw, fragment, list];
   });
 
@@ -267,7 +295,10 @@ describe("ExprNode", () => {
 
   test("optional parts are present and undefined, not absent", () => {
     // @ts-expect-error type must be given, even as undefined
-    const bare: ParamNode = { kind: "param", value: 1 };
+    const bare: ParamNode = { kind: "param", value: 1, redact: false };
+    // @ts-expect-error redact must be given
+    const unmarked: ParamNode = { kind: "param", value: 1, type: undefined };
+    void unmarked;
     // @ts-expect-error nulls must be given, even as undefined
     const order: OrderNode = { kind: "order", expr: param(1), direction: "asc" };
     void [bare, order];
@@ -309,6 +340,35 @@ describe("clause nodes", () => {
       ],
     };
     if (shape.kind === "object") expectTypeOf(shape.values).toEqualTypeOf<readonly SelectShape[]>();
+  });
+
+  test("a selected constant is an index into the select's constants, never a value in the shape", () => {
+    const select: SelectNode = {
+      kind: "select",
+      shape: {
+        kind: "object",
+        keys: ["id", "kind"],
+        values: [
+          { kind: "expr", expr: col("u", "id", "id"), type: integerType },
+          { kind: "constant", index: 0 },
+        ],
+      },
+      constants: ["user"],
+    };
+    expectTypeOf(select.constants).toEqualTypeOf<readonly unknown[]>();
+    // @ts-expect-error the value does not go in the shape
+    const inTree: SelectShape = { kind: "constant", value: "user" };
+    // @ts-expect-error a select states its constants, even when there are none
+    const noConstants: SelectNode = { kind: "select", shape: select.shape };
+    void [inTree, noConstants];
+  });
+
+  test("a CTE says what its query does, and list lengths have a place on the query", () => {
+    expectTypeOf<CteNode["operation"]>().toEqualTypeOf<QueryOperation>();
+    expectTypeOf<QueryAst["listLengths"]>().toEqualTypeOf<readonly number[]>();
+    // @ts-expect-error an insert is not a query operation
+    const bad: CteNode["operation"] = "insertAll";
+    void bad;
   });
 
   test("every node has a string kind", () => {

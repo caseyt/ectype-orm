@@ -33,21 +33,71 @@ describe("ValidatorFn", () => {
     void validator;
   });
 
-  test("accepts every way of returning issues or nothing, sync and async", () => {
+  test("accepts an inline function that returns issues, sync or async", () => {
     // The plain-function example of step 06, verbatim in shape.
     const crossField: ValidatorFn<Event> = (v, { isChanged }) =>
       isChanged("endsAt") && v.endsAt <= v.startsAt
         ? [{ path: "endsAt", message: "must be after start" }]
         : [];
+    const asyncIssues: ValidatorFn<Event> = async (v) =>
+      v.title === "" ? [{ path: "title", message: "is not allowed" }] : [];
+    void [crossField, asyncIssues];
+  });
+
+  // Each of these was rejected while the result was `issues | undefined` (step 02 review).
+  test("accepts an inline function with no return, sync or async", () => {
     const nothing: ValidatorFn<Event> = () => {};
+    const asyncNothing: ValidatorFn<Event> = async () => {};
+    void [nothing, asyncNothing];
+  });
+
+  test("accepts a named function with no return statement", () => {
+    function audit(values: Readonly<Event>) {
+      void values.title;
+    }
+    const validator: ValidatorFn<Event> = audit;
+    void validator;
+  });
+
+  test("accepts a function annotated to return void", () => {
+    function audit(_values: Readonly<Event>): void {}
+    const arrow = (_values: Readonly<Event>): void => {};
+    const validators: ValidatorFn<Event>[] = [audit, arrow];
+    void validators;
+  });
+
+  test("accepts an async function typed Promise<void>", () => {
+    async function audit(_values: Readonly<Event>): Promise<void> {}
+    const validator: ValidatorFn<Event> = audit;
+    void validator;
+  });
+
+  test("accepts an arrow whose body is a call to a void function", () => {
+    const log = (_message: string): void => {};
+    const validator: ValidatorFn<Event> = (values) => log(values.title);
+    void validator;
+  });
+
+  test("accepts a body that returns issues on some paths only", () => {
+    // Under `noImplicitReturns` (not enabled in this repository; checked by hand) the two
+    // annotated functions below compile because the return type includes void, and the
+    // unannotated inline forms are TS7030 whatever the contract says.
+    function annotated(v: Readonly<Event>): ValidatorResult {
+      if (v.endsAt <= v.startsAt) return [{ path: "endsAt", message: "must be after start" }];
+    }
+    async function annotatedAsync(v: Readonly<Event>): Promise<ValidatorResult> {
+      if (v.endsAt <= v.startsAt) return [{ path: "endsAt", message: "must be after start" }];
+    }
+    const annotatedValidators: ValidatorFn<Event>[] = [annotated, annotatedAsync];
+    void annotatedValidators;
     const sometimes: ValidatorFn<Event> = (v) => {
       if (v.endsAt <= v.startsAt)
         return [{ path: ["endsAt"], message: "must be after start", meta: { limit: 1 } }];
     };
-    const asyncIssues: ValidatorFn<Event> = async (v) =>
-      v.title === "" ? [{ path: "title", message: "is not allowed" }] : [];
-    const asyncNothing: ValidatorFn<Event> = async () => {};
-    void [crossField, nothing, sometimes, asyncIssues, asyncNothing];
+    const asyncSometimes: ValidatorFn<Event> = async (v) => {
+      if (v.endsAt <= v.startsAt) return [{ path: "endsAt", message: "must be after start" }];
+    };
+    void [sometimes, asyncSometimes];
   });
 
   test("rejects wrong field names, wrong issue shapes and other return values", () => {
@@ -59,7 +109,9 @@ describe("ValidatorFn", () => {
     const c: ValidatorFn<Event> = () => "is invalid";
     // @ts-expect-error not a property of Event
     const d: ValidatorFn<Event> = (v) => (v.nope ? [] : []);
-    void [a, b, c, d];
+    // @ts-expect-error a number is not a list of issues, sync or async
+    const e: ValidatorFn<Event> = async () => 42;
+    void [a, b, c, d, e];
   });
 
   test("the values are read-only", () => {
@@ -70,8 +122,11 @@ describe("ValidatorFn", () => {
     void mutating;
   });
 
-  test("its result is the issues or undefined, never any", () => {
-    expectTypeOf<ValidatorResult>().toEqualTypeOf<readonly ValidationIssue[] | undefined>();
+  test("its result is the issues or nothing, never any", () => {
+    expectTypeOf<ValidatorResult>().not.toBeAny();
+    expectTypeOf<readonly ValidationIssue[]>().toExtend<ValidatorResult>();
+    expectTypeOf<undefined>().toExtend<ValidatorResult>();
+    expectTypeOf<string>().not.toExtend<ValidatorResult>();
     expectTypeOf<ReturnType<ValidatorFn<Event>>>().toEqualTypeOf<
       ValidatorResult | Promise<ValidatorResult>
     >();
