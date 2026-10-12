@@ -8,12 +8,14 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { cpus, tmpdir, totalmem } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type BenchmarkResult, RESULT_PATH_ENV } from "./harness.js";
+import { type BenchmarkResult, RESULT_PATH_ENV, resolveBuiltEctype } from "./harness.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SUITES = ["micro"];
 /** Node flags are pinned so that runs are comparable. */
 const NODE_FLAGS = ["--expose-gc", "--import", "tsx"];
+/** Without workspace `paths`, so that benchmark files import the built dist/ output. */
+const RUN_TSCONFIG = join(ROOT, "tsconfig.run.json");
 
 function findBenchFiles(dir: string): string[] {
   const files: string[] = [];
@@ -37,6 +39,16 @@ function git(...args: string[]): string {
   }
 }
 
+// Refuse to measure anything but the built packages. Each benchmark process checks again.
+let ectypeEntry: string;
+try {
+  ectypeEntry = resolveBuiltEctype();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}
+console.log(`ectype resolves to ${relative(join(ROOT, ".."), ectypeEntry)}`);
+
 const filters = process.argv.slice(2);
 const files = SUITES.flatMap((suite) => findBenchFiles(join(ROOT, suite)))
   .map((file) => relative(ROOT, file))
@@ -58,7 +70,7 @@ try {
     const child = spawnSync(process.execPath, [...NODE_FLAGS, file], {
       cwd: ROOT,
       stdio: "inherit",
-      env: { ...process.env, [RESULT_PATH_ENV]: resultPath },
+      env: { ...process.env, [RESULT_PATH_ENV]: resultPath, TSX_TSCONFIG_PATH: RUN_TSCONFIG },
     });
     if (child.status !== 0) {
       console.error(`${file} exited with status ${child.status ?? child.signal}`);
@@ -88,6 +100,8 @@ const report = {
     cores: cpus().length,
     memoryBytes: totalmem(),
   },
+  /** The file `ectype` was loaded from, relative to the repository root. Always under dist/. */
+  ectypeEntry: relative(join(ROOT, ".."), ectypeEntry),
   unit: "ns/iter",
   benchmarks,
 };

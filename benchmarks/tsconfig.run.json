@@ -1,0 +1,15 @@
+{
+  // Used by tsx when benchmarks RUN (see package.json "bench" and src/run.ts). It drops the
+  // workspace `paths`, so `ectype` and `@ectype/*` resolve through node_modules to the built
+  // dist/ output: benchmarks measure what users install, not the TypeScript sources.
+  // Type-checking still uses tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "paths": {}
+  }
+}
