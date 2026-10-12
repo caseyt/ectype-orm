@@ -66,6 +66,11 @@ which has no source `paths`; the runner and every benchmark file refuse to run u
 (`ectypeEntry`). `pnpm bench` builds first. `scripts/check-bench-dist-guard.mjs` (run by CI
 before the build) proves the refusal.
 
+Code that is not public API cannot be imported from `ectype`. `packages/core` therefore has
+a second build entry, `dist/internal.js` (the utilities of `src/internal`), which is not in
+the package's `exports`; `benchmarks/micro/internal.bench.ts` shows how a benchmark loads
+it from `dist/` while taking its types from the sources.
+
 ## Tests
 
 Each package has three Vitest projects, named `<package>:unit`, `<package>:types` and
@@ -133,6 +138,12 @@ classes) and is type-checked by `pnpm typecheck` through `tsconfig.spikes.json`.
 `docs/plan/spikes/rejected-const-thunks.ts` intentionally does **not** compile; it is
 excluded from every tsconfig and from Biome, and `scripts/check-rejected-spike.mjs` asserts
 that it still fails with TS7022 and TS2506.
+
+`docs/plan/spikes/kysely-bridge/` is the evidence for ADR 0002 (Kysely as the SQL back
+end): five scripts that lower a hand-built query AST to Kysely nodes and run it against
+the Compose Postgres. It is a private workspace package, type-checked by `pnpm typecheck`
+but not run by CI. To run it: `pnpm db:up`, then
+`pnpm --filter @ectype/spike-kysely-bridge run spike` (see its `README.md`).
 
 ### Dependency versions
 
