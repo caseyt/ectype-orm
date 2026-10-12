@@ -56,6 +56,11 @@ examples/smoke           ESM + CJS smoke consumers
 - Relative imports use the `.js` extension; type-only imports use `import type`.
 - Every exported symbol has TSDoc with an `@example` and the Ecto equivalent where one exists.
 - Every literal in generated SQL is a bound parameter. No user value ever reaches SQL text.
+- Never add `minimumReleaseAgeExclude` to `pnpm-workspace.yaml` or turn off
+  `minimumReleaseAgeStrict`; pnpm adds exclusions by itself when strict mode is off. If a
+  release is too new, pin the newest one that passes. `pnpm lint` checks this. More
+  generally: never disable, exempt or work around a check without saying so in your status note.
+- Stage files by name and read the diff before committing; tools edit config files too.
 - Report failures, skipped items and unverified claims plainly.
 
 ## Hot-path rules (plan README §7)

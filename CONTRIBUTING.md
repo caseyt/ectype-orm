@@ -62,7 +62,7 @@ and tests never need a build.
 `examples/smoke` and the benchmarks are the exceptions: they load the built `dist/`, because
 that is what users install. Benchmark processes are started with `benchmarks/tsconfig.run.json`,
 which has no source `paths`; the runner and every benchmark file refuse to run unless
-`ectype` resolves into a `dist/` directory, and the report records the resolved file
+`ectype` resolves into the package's own `dist/` directory, and the report records the resolved file
 (`ectypeEntry`). `pnpm bench` builds first. `scripts/check-bench-dist-guard.mjs` (run by CI
 before the build) proves the refusal.
 
@@ -84,8 +84,10 @@ up at three levels: `withDatabase` drops its database when the callback settles 
 through Vitest's `onTestFinished`, so a test that times out does not leak it; after the run
 `global-setup.ts` drops everything the run still owns; before the run it drops databases
 older than 30 minutes (`ECTYPE_TEST_STALE_MINUTES`) that a killed run left behind. Several
-runs can share one server: a run never drops a younger database of another run, nor (on
-Postgres) one that has open connections. With `createTestDatabase` you call `drop()`
+runs can share one server: a run never drops a younger database of another run, nor one
+that has open connections (checked on Postgres and MySQL). A run that is interrupted
+(Ctrl-C) or killed skips its own cleanup, so its databases stay until the start-up sweep
+of a later run finds them stale, or until `pnpm db:reset`. With `createTestDatabase` you call `drop()`
 yourself, in `afterAll`.
 
 The proof that integration files really run concurrently without interfering is the pair
@@ -133,6 +135,15 @@ excluded from every tsconfig and from Biome, and `scripts/check-rejected-spike.m
 that it still fails with TS7022 and TS2506.
 
 ### Dependency versions
+
+pnpm refuses releases younger than its minimum release age. **Never add
+`minimumReleaseAgeExclude` to `pnpm-workspace.yaml`**, and keep `minimumReleaseAgeStrict: true`:
+without strict mode, `pnpm add pkg@<too-new exact version>` succeeds and pnpm writes the
+exclusion into the file by itself, with one log line as the only notice. If a release is
+too new, pin the newest one that passes and say so in your status note. `pnpm lint` runs
+`scripts/check-workspace-policy.mjs`, which fails on an exclusion or on strict mode being
+off. Read the diff of `pnpm-workspace.yaml` and `package.json` before committing a
+dependency change.
 
 Runtime support starts at Node 22 (decision D14) and every tool is on its current stable
 release, with one exception: TypeScript is held at `6` because tsup's declaration bundler
