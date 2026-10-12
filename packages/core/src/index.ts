@@ -11,3 +11,24 @@
  * ```
  */
 export const VERSION: string = "0.0.0";
+
+// Step 02: the two parts of the contracts that are public API by themselves. The contract
+// types (Row, Loaded, EctoType, Adapter, ...) are exported by the step that implements them.
+export type { Err, Ok, Result } from "./contracts/result.js";
+export { err, ok } from "./contracts/result.js";
+export type { AdapterErrorCode, ConstraintViolationType, ErrorCode } from "./errors.js";
+export {
+  AdapterError,
+  CastError,
+  ConstraintError,
+  EctypeError,
+  InvalidChangesetError,
+  isEctypeError,
+  MigrationError,
+  MultipleResultsError,
+  NoResultsError,
+  NotLoadedError,
+  QueryError,
+  SchemaDefinitionError,
+  StaleEntryError,
+} from "./errors.js";

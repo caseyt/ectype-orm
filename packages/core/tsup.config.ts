@@ -1,8 +1,11 @@
 import { defineConfig } from "tsup";
 
-// Build config is identical across packages on purpose; keep them in sync.
+// Build config is identical across packages on purpose; keep them in sync. The one
+// difference here is the second entry: `dist/internal.js` is NOT part of the package's
+// `exports` (nothing can import it by name). It exists so that benchmarks can measure the
+// built internal utilities (benchmarks/micro/internal.bench.ts) instead of the sources.
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: { index: "src/index.ts", internal: "src/internal/index.ts" },
   format: ["esm", "cjs"],
   target: "node22",
   platform: "node",
