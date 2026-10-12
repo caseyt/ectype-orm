@@ -1,5 +1,5 @@
 # Question 3: execution
-database: ectype_spike_p51556_tmt2kj_64d722f2 on 127.0.0.1:54329
+database: ectype_spike_p62918_tmtejn_6a7f2bb3 on 127.0.0.1:54329
 server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
 node:     v22.23.1
 

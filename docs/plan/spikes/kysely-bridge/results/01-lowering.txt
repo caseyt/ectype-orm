@@ -1,5 +1,5 @@
 # Question 1: lowering
-database: ectype_spike_p51551_tmt2ki_9fca6ce9 on 127.0.0.1:54329
+database: ectype_spike_p62914_tmtejm_f5bee21f on 127.0.0.1:54329
 server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
 node:     v22.23.1
 

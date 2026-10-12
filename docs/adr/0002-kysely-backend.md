@@ -1,9 +1,9 @@
 # 0002 — Kysely as the SQL back end
 
-- **Status:** proposed (verdict: **accept with raw-node escapes**; the owner decides whether that changes any step)
+- **Status:** accepted (2026-10-12, by the owner, after review round 1 of PR #2): **accept with raw-node escapes**
 - **Date:** 2026-10-12
 - **Step:** 02 (the Kysely bridge spike, part B of `docs/plan/02-core-contracts.md`)
-- **Affects:** decision D12 (plan README §2); the `Adapter` contract; steps 09, 10, 11, 17 and 21
+- **Affects:** decisions D12 and D14 (plan README §2); the `Adapter` contract; steps 09, 10, 11, 17 and 21
 
 ## Context
 
@@ -20,7 +20,7 @@ measured, on:
 - Kysely 0.29.6, `pg` 8.23.1, Node 22.23.1, Apple M2 (8 cores), macOS;
 - PostgreSQL 16.15 from the repository's `docker-compose.yml` (Docker through Colima, so
   every round trip crosses a VM boundary: about 340 µs for a one-row query);
-- spike code at commit `07f845f`, working tree clean.
+- spike code at commit `4df1c33`, working tree clean.
 
 ### 1. Lowering: yes
 
@@ -57,28 +57,47 @@ Two properties of Kysely's compiler that the lowering has to respect:
 
 ### 2. Parameter slots: yes
 
-The technique: the "value" of every `ValueNode` is not a value but the **slot object**
+Two things have to hold for a cached plan to be re-executed with other values.
+
+**Slot recovery.** The "value" of every `ValueNode` is not a value but the **slot object**
 that says where the value will come from (`{ kind: "inline", index: 0 }`). Kysely's
 compiler copies node values into `parameters` untouched and in placeholder order, so after
 compilation `parameters` **is** the slot list. No placeholder parsing, no mapping step.
-`02-param-slots.ts` shows:
 
-- parameters out of order, one parameter used twice, a named parameter and a list in one
-  statement: slots come back in placeholder order;
-- one cached plan executed against Postgres with five different sets of values, each
-  compared with a hand-written statement;
+**Canonical numbering.** A slot's `index` is a position in the contract's canonical
+parameter order (`QueryAst.params`: a depth-first walk in interface declaration order),
+which is not placeholder order and is the same for every AST of one shape. The spike's
+parameter nodes carry values and no index, as the contract's do. The lowering visits the
+AST in canonical order, whatever order SQL emits the clauses in, and numbers the
+parameters with a counter; `collectParams` is an independent walk that produces the
+values. (The first version of the spike used pre-assigned indexes and so did not test
+this; review finding 13.)
+
+`02-param-slots.ts` uses one statement with a CTE (a `WHERE` and a `HAVING` parameter), a
+join on a subquery containing `EXISTS … = ANY(list)`, a second list inside another
+`EXISTS`, a parameter in the select list, a named parameter used in two places,
+`UNION ALL`, `LIMIT` and `OFFSET`. Its placeholders appear in the order
+`0, 1, 5, 2, 3, minAge, 4, 8, minAge, 6, 7`. It shows:
+
+- the slots equal the order worked out by hand from the SQL text;
+- **one plan, compiled from an AST holding dummy values, executed against Postgres with
+  the values of 60 other ASTs** (via `collectParams`), each result equal to a hand-written
+  statement run through `pg` with hand-ordered parameters (40 rounds return rows, 39 more
+  than one, 19 rows from both `UNION` branches);
+- the check is not a tautology: with two indexes swapped in the slots, the result changes
+  in 13 of the 18 rounds that return rows (the other five return rows from the `UNION`
+  branch only, which uses neither parameter);
 - on Postgres a list is one array parameter (`= any($1)`), and lists of length 0, 1, 7 and
   500 compile to identical SQL;
 - for MySQL and SQLite (`?` placeholders) a list is expanded to `in (?, ?, ?)`, with one
-  slot per `?`, and a list of another length gives another SQL text (so the length belongs
-  in the plan-cache key);
-- 500 rounds × 3 statements × 3 dialects: a plan compiled with values A and bound with
-  values B equals a cold compile with B;
+  slot per `?`; a cached plan bound with 200 other value sets equals an array assembled by
+  hand in the order of the `?`s; and a list of another length gives another SQL text (so
+  the lengths belong in the plan-cache key: `QueryAst.listLengths`);
 - a `ValueNode` holding anything that is not a slot is detected after compilation, so a
   value cannot be bound by accident.
 
 Kysely emits a new placeholder for every value node, also on Postgres. A parameter used
-twice is therefore sent twice (`$3` and `$4` for the same value). That is harmless.
+twice is therefore sent twice. That is harmless.
 
 **Not verified:** the `?` dialects were compiled, not executed. Positional binding follows
 directly from the compile output, but step 17 should confirm it against MySQL and SQLite.
@@ -108,18 +127,18 @@ Cold path, CPU only (mitata, mean per call):
 
 | Operation | Time |
 |---|---|
-| Reference query: lower AST to Kysely nodes | 2.26 µs |
-| Reference query: Kysely compile + slot recovery | 3.31 µs |
-| **Reference query: cold compile, total** | **5.70 µs** |
-| CTE + join, cold compile | 7.78 µs |
-| `INSERT … ON CONFLICT … RETURNING`, cold compile | 4.55 µs |
-| `UPDATE … RETURNING`, cold compile | 4.71 µs |
-| `SELECT` of 10 columns by id, cold compile | 7.21 µs |
-| For scale: a hand-written string emitter for the reference query | 1.97 µs |
+| Reference query: lower AST to Kysely nodes | 2.31 µs |
+| Reference query: Kysely compile + slot recovery | 3.32 µs |
+| **Reference query: cold compile, total** | **5.67 µs** |
+| CTE + join, cold compile | 7.99 µs |
+| `INSERT … ON CONFLICT … RETURNING`, cold compile | 4.48 µs |
+| `UPDATE … RETURNING`, cold compile | 4.76 µs |
+| `SELECT` of 10 columns by id, cold compile | 7.23 µs |
+| For scale: a hand-written string emitter for the reference query | 2.18 µs |
 | `bindParams`, 2 slots | 9.7 ns |
-| Plan lookup (`WeakMap`) + `bindParams` + the `CompiledQuery` object | 19.5 ns |
-| `new PostgresQueryCompiler()` | 257 ns |
-| `ValueNode.create(x)` (factory, frozen) versus an object literal | 25.1 ns versus 1.5 ns |
+| Plan lookup (`WeakMap`) + `bindParams` + the `CompiledQuery` object | 19.7 ns |
+| `new PostgresQueryCompiler()` | 253 ns |
+| `ValueNode.create(x)` (factory, frozen) versus an object literal | 25.0 ns versus 1.5 ns |
 
 Cached execution through Kysely's driver versus `pg` directly, against Postgres. Both
 sides use the same `pg.Pool` with one connection (the same backend) and run byte-identical
@@ -129,36 +148,43 @@ interquartile range:
 
 | Query | Mode | `pg` | Bridge | Overhead (IQR) |
 |---|---|---|---|---|
-| 1 row | pool checkout per call | 343.0 µs | 341.6 µs | +0.47% (−1.73% … +1.88%) |
-| 1 row | held connection | 342.1 µs | 340.3 µs | −0.43% (−1.58% … +1.50%) |
-| 1,000 rows | pool checkout per call | 2,415.3 µs | 2,426.3 µs | +0.27% (−1.50% … +3.08%) |
-| 1,000 rows | held connection | 2,404.9 µs | 2,398.2 µs | −0.70% (−3.06% … +3.57%) |
+| 1 row | pool checkout per call | 340.9 µs | 340.3 µs | +0.42% (−1.04% … +1.29%) |
+| 1 row | held connection | 358.6 µs | 362.5 µs | −0.04% (−1.22% … +2.15%) |
+| 1,000 rows | pool checkout per call | 2,313.3 µs | 2,294.8 µs | −0.20% (−1.47% … +1.50%) |
+| 1,000 rows | held connection | 2,386.6 µs | 2,388.0 µs | +0.09% (−1.10% … +1.48%) |
+
+The two time columns and the overhead column are different statistics, which is why they
+can point in opposite directions: each time is the median over the 40 rounds of that
+side's mean time per call, while the overhead is the median of the 40 per-round ratios
+(bridge over `pg`, within one round). With differences this small the sign of either is
+not meaningful.
 
 **The overhead cannot be told apart from zero at this noise level.** The interquartile
-ranges straddle zero in all four cases, and two earlier full runs of the same script
-(outputs not kept) gave medians between −0.25% and +1.06%. What the measurement does establish is an upper bound
+ranges straddle zero in all four cases; three earlier full runs of the same script
+(outputs not kept) gave medians between −0.70% and +1.06%, and the reviewer's own run
+between −1.43% and +0.78%. What the measurement does establish is an upper bound
 of a few percent.
 
 To put an absolute number on it, part C of the script removes the network: with a stub
 pool whose client answers immediately (this is **not** a database measurement), one
-checkout + execute + release costs 120.8 ns directly and 293.4 ns through `PostgresDriver`,
-so Kysely's driver layer adds about **173 ns per call**. That is 0.05% of the 340 µs round
+checkout + execute + release costs 122.1 ns directly and 294.3 ns through `PostgresDriver`,
+so Kysely's driver layer adds about **172 ns per call**. That is 0.05% of the 340 µs round
 trip measured here; on a link with a 50 µs round trip it would be 0.35%.
 
 Against the budgets of plan README §7:
 
 | Budget | Limit | Measured share of the bridge |
 |---|---|---|
-| Compile, cold | < 40 µs | 5.70 µs for the reference query (14% of the budget); 4.55 to 7.78 µs for the others |
-| Compile, plan-cache hit | < 0.3 µs | Kysely is not involved; lookup + bind + object is 19.5 ns in the spike |
-| `repo.all` of 1,000 rows over the raw driver | < 15% | +0.27% and −0.70% (within noise); 173 ns absolute |
-| `repo.insert` of one row over the raw driver | < 20% | +0.47% and −0.43% for a one-row statement (within noise); 173 ns absolute |
+| Compile, cold | < 40 µs | 5.67 µs for the reference query (14% of the budget); 4.48 to 7.99 µs for the others |
+| Compile, plan-cache hit | < 0.3 µs | Kysely is not involved; lookup + bind + object is 19.7 ns in the spike |
+| `repo.all` of 1,000 rows over the raw driver | < 15% | −0.20% and +0.09% (within noise); 172 ns absolute |
+| `repo.insert` of one row over the raw driver | < 20% | +0.42% and −0.04% for a one-row statement (within noise); 172 ns absolute |
 | Step 11's own target, `adapter.execute` over raw `pg` | < 5% | as above |
 | Build a query, hydrate a row, cast a changeset | | not touched by Kysely; not measured here |
 
 Limits of these numbers: the spike's lowering handles a subset of the node kinds and
 builds no output plan, does no capability checks and resolves no types, so step 10's cold
-compile will cost more than 5.70 µs. There is a factor of seven of headroom. The figures
+compile will cost more than 5.67 µs. There is a factor of seven of headroom. The figures
 come from one machine.
 
 ### 5. Gaps: nothing is out of reach; a few constructs need a raw node
@@ -197,6 +223,11 @@ supplied as a `RawNode` because Kysely's typed list lacks it):
 In every one of the nine, the raw text is a constant of the lowering code. None needs a
 user value or a user-supplied identifier in SQL text, so decision D9 holds.
 
+The nine are constructs. They are not every `RawNode` the lowering creates: Kysely takes
+the sort direction of an `ORDER BY` item as a node, and the spike supplies `asc` and
+`desc` as two constant `RawNode`s (`bridge.ts`, `05-gaps.ts`). That is routine use of a
+field Kysely types as a node, with constant text, and is not counted as a gap.
+
 Native, among the things the step file asked about: lock clauses (`FOR UPDATE`,
 `FOR NO KEY UPDATE`, `FOR KEY SHARE`, `OF`, `NOWAIT`, `SKIP LOCKED`), `DISTINCT ON`,
 `LATERAL` joins, aggregate `FILTER`, array operators and `= ANY($1)`, every `ON CONFLICT`
@@ -215,12 +246,12 @@ parameter has to be cast, which the lowering can do because it knows the paramet
 
 ### Other facts found on the way
 
-- **Kysely 0.29 is ESM-only** and declares `engines.node >= 22.0.0`. Ectype ships a
-  CommonJS build, which will `require("kysely")` once steps 10 and 11 import it. That
-  works on Node 22.23.1 and 24.14.1 (checked). It relies on Node loading ES modules with
-  `require`, which older Node 22 releases did not do without a flag (from memory: before
-  22.12; not checked here). Ectype declares `engines.node >= 22`.
-- **A compiler instance must be reused.** Constructing one costs 257 ns (about a hundred
+- **Kysely 0.29 is ESM-only** and declares `engines.node >= 22.0.0`. A CommonJS build of
+  Ectype would have to `require("kysely")`, which only works where Node loads ES modules
+  with `require`. Checked with real binaries: Node 22.11.0 fails with `ERR_REQUIRE_ESM`;
+  22.12.0 works, with an `ExperimentalWarning`; 22.23.1 and 24.14.1 work silently. See
+  the decision on CommonJS below.
+- **A compiler instance must be reused.** Constructing one costs 253 ns (about a hundred
   bound methods), and `compileQuery` resets its state and is synchronous, so one instance
   per adapter is safe.
 - **Kysely's node factories freeze every node** (`Object.freeze`): 25 ns per node against
@@ -245,8 +276,8 @@ parameter has to be cast, which the lowering can do because it knows the paramet
 3. **Reject.** Step 10 writes its own Postgres compiler behind the same `Adapter`
    interface; steps 11 and 17 are re-scoped to own drivers, pooling, savepoints and two
    more compilers; D12 is rewritten. What it would buy, measured: at most 3.7 µs per cold
-   compile (5.70 µs against the 1.97 µs of a hand-written emitter; paid once per query
-   shape) and about 173 ns per execution. What it would cost: three SQL compilers, three
+   compile (5.67 µs against the 2.18 µs of a hand-written emitter; paid once per query
+   shape) and about 172 ns per execution. What it would cost: three SQL compilers, three
    driver integrations and DDL, written and maintained by this project.
 
 ## Decision
@@ -265,29 +296,46 @@ The rules that come with it:
    After compiling, every entry of `parameters` must be one of the slots created by that
    lowering; anything else is an error. (`ParamSlot` is defined in
    `packages/core/src/contracts/adapter.ts`.)
-2. **Raw text is constant.** A `RawNode`'s text, and every node field Kysely appends
-   unquoted (function names, operators, data types, lock and join keywords), comes from a
-   table in the lowering code or from the static strings of a `fragment` template. Names
-   that originate outside the lowering (function names, `fragment.ident`) are validated
-   against an identifier pattern first.
+2. **Raw text is constant or trusted.** A `RawNode`'s text, and every node field Kysely
+   appends unquoted (function names, operators, data types, sort directions, lock and join
+   keywords), comes from one of exactly three sources:
+   1. a table in the lowering code;
+   2. the static strings of a `fragment` template, which are program text;
+   3. the `sql` of a `custom` `DbType` (`{ kind: "custom", sql }`), used as a type name in
+      `CAST` and in DDL. This is **trusted input**: it is written by the developer who
+      defines the type (or assembled by a parameterized type from developer-written
+      options) and must never be derived from user data. It is a stated exception to
+      D9's "the only way to emit raw SQL text is `fragment`". As a second line of defence
+      the compiler emits it only if it matches `CUSTOM_SQL_TYPE`
+      (`packages/core/src/contracts/type.ts`): a plain type name, with no quotes,
+      semicolons, comments or operators.
+
+   Names that originate outside the lowering (function names, `fragment.ident`) are
+   validated against an identifier pattern first.
 3. **Parentheses are the lowering's job.**
 4. **One compiler instance per adapter**, reused for every compilation.
 5. **No Kysely type leaves `compiler/` and `adapter/`**, and none appears in `contracts/`
    (a test checks the latter).
 
-This ADR is marked *proposed* because the verdict is not the plain "accept" that the step
-files assume. Nothing in other steps was changed on the strength of it.
+### CommonJS (decision D14)
+
+Decided with this ADR by the owner: **the packages are ESM only; there is no CommonJS
+build.** A CommonJS build could not load the ESM-only Kysely on every Node the packages
+claimed to support, and two builds of one package are two copies of every class and
+symbol. A CommonJS project uses the packages through `require()` of the ES module, which
+Node supports from 22.12, so `engines.node` is `>=22.12` (it was `>=22`).
+`examples/smoke/require-esm.cjs` proves it on the Node that runs CI.
 
 ## Consequences
 
-For the owner to confirm or redirect. No plan file was edited.
-
-- **README D12:** no change needed. Optionally add "with raw nodes where Kysely has no
-  node for a construct (ADR 0002)".
-- **Step 10 (compiler):** follows the five rules above. It must also expand named windows
-  inline, wrap frames and expression partitions in raw `OVER (…)`, and cast parameters that
-  are selected. Its spec says `ast.params` is in "clause-append order"; the contract fixes
-  a canonical order instead (see `docs/plan/status/02.md`, decision 6).
+- **README D12:** unchanged (a `RawNode` is a Kysely `OperationNode`). **D14** now reads
+  "Node >= 22.12, ESM only"; steps 01 and 21 were edited where they mentioned a CommonJS
+  build. All six packages build ESM only, with `types` and `default` export conditions.
+- **Step 10 (compiler):** follows the five rules above, including the `CUSTOM_SQL_TYPE`
+  check. It must also expand named windows inline, wrap frames and expression partitions
+  in raw `OVER (…)`, and cast parameters that are selected. Parameters are numbered in
+  canonical order (the contract; `docs/plan/10-sql-compiler.md` was edited to agree), as
+  the spike's lowering does: visit in canonical order and count.
 - **Step 09 (advanced queries):** window frames, named windows, `VALUES` sources and
   hints work, through the escapes listed. No feature has to be dropped.
 - **Step 11 (adapter):** executes through Kysely's `Driver` and `DatabaseConnection`
@@ -295,13 +343,21 @@ For the owner to confirm or redirect. No plan file was edited.
   (`pg-cursor`), cancellation, and that the root node handed to the driver can be a shared
   constant instead of the compiled tree (our `CompiledQuery` keeps no node).
 - **Step 17 (SQLite, MySQL):** the `?` path was compiled, not executed. List expansion puts
-  list lengths in the plan-cache key, as the step already expects. The drivers' use of
+  the list lengths in the plan-cache key (`QueryAst.listLengths`). The drivers' use of
   `CompiledQuery.query` needs checking.
-- **Step 21 (release):** decide what the CommonJS build promises on Node 22 versions that
-  cannot `require` an ES module: raise `engines.node`, or document the limit.
 - **Maintenance:** a Kysely minor upgrade is a deliberate change. The spike is type-checked
-  by `pnpm typecheck`, so an upgrade that breaks the node API fails CI; step 10's SQL
-  snapshots will catch a change in output.
+  by `pnpm typecheck`, so an upgrade that breaks the node API fails CI; it is not run by
+  CI (owner decision). Step 10's SQL snapshots and execution tests take over as the
+  behavioural guard.
+
+### Not verified by the spike
+
+- The `?` dialects: compiled only, never executed against MySQL or SQLite.
+- Streaming, cancellation, and Kysely's MySQL and SQLite drivers.
+- The node kinds the spike's small AST does not have. Canonical numbering is verified for
+  the kinds it has (see question 2), not for the contract's full node set.
+- Which Node 22 release first loads ES modules with `require` **without** a warning
+  (22.12.0 warns, 22.23.1 does not; the releases between were not tried).
 
 Revisit this decision if a Kysely release removes the node factories or stops passing
 node values through to `parameters`, or if step 10's measured cold compile approaches the
