@@ -4,6 +4,12 @@ packages:
   - "examples/*"
   - "docs/site"
 
+# Supply-chain policy. pnpm refuses releases younger than its minimum release age. Strict
+# mode makes that an error; without it pnpm silently appends the package to
+# `minimumReleaseAgeExclude` in this file. Never add an exclusion: pin the newest release
+# that passes instead. scripts/check-workspace-policy.mjs (part of `pnpm lint`) enforces both.
+minimumReleaseAgeStrict: true
+
 # Dependencies allowed to run install scripts (pnpm blocks them by default).
 allowBuilds:
   esbuild: true
