@@ -1,6 +1,8 @@
+import { randomBytes } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { withDatabase } from "./db.js";
-import { tier2Enabled } from "./env.js";
+import { currentRunId, withDatabase } from "./db.js";
+import { connectionSettings, tier2Enabled } from "./env.js";
+import { sweepTestDatabases } from "./sweep.js";
 import { truncateAll } from "./truncate.js";
 
 // Tier 2: runs only with ECTYPE_TEST_TIER2=1 and `pnpm db:up:tier2`.
@@ -16,6 +18,48 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
         inner,
       ]);
       expect(rows).toEqual([]);
+    });
+  });
+
+  test.fails("a test times out while it holds a database", { timeout: 500 }, () =>
+    withDatabase("mysql", { label: "leak_timeout" }, (db) => db.query("SELECT SLEEP(30)")),
+  );
+
+  test("the database of the timed-out test is gone", () =>
+    withDatabase("mysql", async (other) => {
+      const leaked = await other.query(
+        "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?",
+        [`ectype\\_leak\\_timeout\\_${currentRunId()}\\_%`],
+      );
+      expect(leaked).toEqual([]);
+    }));
+
+  test("the sweep drops stale and own databases and nothing else", async () => {
+    const settings = connectionSettings("mysql");
+    await withDatabase("mysql", async (db) => {
+      // Made-up run ids, so this cannot collide with another run sharing the server.
+      const [staleRun, freshRun] = [
+        `x${randomBytes(5).toString("hex")}`,
+        `x${randomBytes(5).toString("hex")}`,
+      ];
+      const stale = `ectype_sweep_${staleRun}_1a2b3c_00000001`;
+      const fresh = `ectype_sweep_${freshRun}_${Math.floor(Date.now() / 1000).toString(36)}_00000002`;
+      const other = `ectype_notatest_${randomBytes(4).toString("hex")}`;
+      const only = new RegExp(`^ectype_(sweep_(${staleRun}|${freshRun})|notatest)_`);
+      await db.exec(`CREATE DATABASE ${stale}; CREATE DATABASE ${fresh}; CREATE DATABASE ${other};`);
+      try {
+        expect(await sweepTestDatabases("mysql", { olderThanMs: 60_000, settings, only })).toEqual([stale]);
+        expect(await sweepTestDatabases("mysql", { runId: freshRun, settings, only })).toEqual([fresh]);
+        const rows = await db.query(
+          "SELECT schema_name AS name FROM information_schema.schemata WHERE schema_name = ?",
+          [other],
+        );
+        expect(rows).toEqual([{ name: other }]);
+      } finally {
+        await db.exec(
+          `DROP DATABASE IF EXISTS ${stale}; DROP DATABASE IF EXISTS ${fresh}; DROP DATABASE IF EXISTS ${other};`,
+        );
+      }
     });
   });
 

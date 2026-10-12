@@ -2,4 +2,5 @@
 export * from "./db.js";
 export * from "./env.js";
 export * from "./sql.js";
+export * from "./sweep.js";
 export * from "./truncate.js";

@@ -53,6 +53,8 @@ function projectsFor(pkg: (typeof PACKAGES)[number]): TestProjectConfiguration[]
         root,
         environment: "node",
         include: ["src/**/*.itest.ts", "test/**/*.itest.ts"],
+        // Gives the run an id and sweeps leaked test databases before and after it.
+        globalSetup: [fromRoot("./packages/core/test/support/global-setup.ts")],
         // Files run in parallel (each owns a database, see test/support/db.ts);
         // tests inside one file run serially.
         fileParallelism: true,
@@ -64,10 +66,29 @@ function projectsFor(pkg: (typeof PACKAGES)[number]): TestProjectConfiguration[]
   ];
 }
 
+/**
+ * The two files that prove integration files can run concurrently (step 01 acceptance).
+ * They only pass when they overlap in time, which needs two workers, so they are not part
+ * of `core:integration`: `parallel.itest.ts` there starts this project in its own Vitest
+ * process with exactly two workers. No globalSetup on purpose; the outer run owns the sweep.
+ */
+const parallelPair: TestProjectConfiguration = {
+  resolve: { alias },
+  test: {
+    name: "core:parallel-pair",
+    root: fromRoot("./packages/core"),
+    environment: "node",
+    include: ["test/support/parallel-*.pair.ts"],
+    fileParallelism: true,
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
+  },
+};
+
 export default defineConfig({
   test: {
     passWithNoTests: true,
-    projects: PACKAGES.flatMap(projectsFor),
+    projects: [...PACKAGES.flatMap(projectsFor), parallelPair],
     coverage: {
       provider: "v8",
       // Resolved against each project root (packages/<name>), not the repository root.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createTestDatabase, type TestDatabase, withDatabase } from "./db.js";
+import { createTestDatabase, currentRunId, type TestDatabase, withDatabase } from "./db.js";
 import { connectionSettings } from "./env.js";
 import { truncateAll } from "./truncate.js";
 
@@ -45,11 +45,11 @@ describe("withDatabase (postgres)", () => {
   });
 
   test("drops the database when a fixture fails to load, and drop is idempotent", async () => {
-    await expect(createTestDatabase("postgres", { fixtures: ["blog", "blog"] })).rejects.toThrow(
-      /already exists/,
-    );
+    await expect(
+      createTestDatabase("postgres", { label: "dropcheck", fixtures: ["blog", "blog"] }),
+    ).rejects.toThrow(/already exists/);
 
-    const handle = await createTestDatabase("postgres");
+    const handle = await createTestDatabase("postgres", { label: "dropcheck" });
     const { name } = handle.db;
     await handle.drop();
     await handle.drop();
@@ -57,7 +57,7 @@ describe("withDatabase (postgres)", () => {
       expect(await databaseExists(other, name)).toBe(false);
       const leftovers = await other.query(
         "SELECT datname FROM pg_database WHERE datname LIKE $1 AND datname <> $2",
-        [`ectype\\_t\\_${process.pid}\\_%`, other.name],
+        [`ectype\\_dropcheck\\_${currentRunId()}\\_%`, other.name],
       );
       expect(leftovers).toEqual([]);
     });
@@ -69,6 +69,22 @@ describe("withDatabase (postgres)", () => {
       /Cannot reach the postgres test server at .*:1\. Start it with `pnpm db:up`/,
     );
   });
+});
+
+describe("cleanup when a test times out (postgres)", () => {
+  // `fails`: this test is expected to time out. Vitest abandons the callback, so the
+  // `finally` in withDatabase cannot run in time; the onTestFinished hook must drop it.
+  test.fails("a test times out while it holds a database", { timeout: 500 }, () =>
+    withDatabase("postgres", { label: "leak_timeout" }, (db) => db.query("SELECT pg_sleep(30)")),
+  );
+
+  test("the database of the timed-out test is gone", () =>
+    withDatabase("postgres", async (other) => {
+      const leaked = await other.query("SELECT datname FROM pg_database WHERE datname LIKE $1", [
+        `ectype\\_leak\\_timeout\\_${currentRunId()}\\_%`,
+      ]);
+      expect(leaked).toEqual([]);
+    }));
 });
 
 describe("blog fixture (postgres)", () => {

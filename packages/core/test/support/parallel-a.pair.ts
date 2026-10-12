@@ -1,4 +1,4 @@
 import { test } from "vitest";
 import { runParallelPeer } from "./parallel.js";
 
-test("runs alongside parallel-b.itest.ts without sharing any state", () => runParallelPeer("a", 3));
+test("runs alongside parallel-b.pair.ts without sharing any state", () => runParallelPeer("a", 3));
