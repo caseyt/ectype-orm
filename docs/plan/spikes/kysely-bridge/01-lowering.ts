@@ -27,8 +27,10 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
       if (viaPg.rows.length === 0) throw new Error(`${label}: the comparison is empty, so it proves nothing`);
     }
 
+    // Every plan below is compiled from an AST built with placeholder values (0, "") and
+    // then executed with other values: a plan holds slots, never values.
     console.log("reference SELECT (join, where, group by, order by, limit)");
-    const reference = compile(q.REFERENCE);
+    const reference = compile(q.reference(0, 0));
     check("sql", reference.sql, q.REFERENCE_SQL);
     check("slots", reference.slots, [
       { kind: "inline", index: 0 },
@@ -44,7 +46,7 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
     );
 
     console.log("\nCTE (WITH ... AS MATERIALIZED)");
-    const cte = compile(q.CTE);
+    const cte = compile(q.cte(0, 0));
     check("sql", cte.sql, q.CTE_SQL);
     await same(
       "executes",
@@ -56,7 +58,7 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
     );
 
     console.log("\nwindow function");
-    const window = compile(q.WINDOW);
+    const window = compile(q.windowed(0));
     check("sql", window.sql, q.WINDOW_SQL);
     await same(
       "executes",
@@ -68,7 +70,7 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
     );
 
     console.log("\nraw fragment");
-    const fragment = compile(q.FRAGMENT);
+    const fragment = compile(q.fragmented(""));
     check("sql", fragment.sql, q.FRAGMENT_SQL);
     await same(
       "executes",
@@ -79,7 +81,7 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
     );
 
     console.log("\nprecedence: (a OR b) AND c");
-    const precedence = compile(q.PRECEDENCE);
+    const precedence = compile(q.precedence(0, 0, ""));
     check("sql", precedence.sql, q.PRECEDENCE_SQL);
     await same(
       "executes",
@@ -90,7 +92,7 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
     );
 
     console.log("\nINSERT ... ON CONFLICT ... RETURNING");
-    const upsert = compile(q.UPSERT);
+    const upsert = compile(q.upsert("", "", 0, 0));
     check("sql", upsert.sql, q.UPSERT_SQL);
     check(
       "slots",
@@ -127,18 +129,17 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
     check("the database holds the updated row, once", stored.rows, [{ name: "Second", lock_version: 2 }]);
 
     console.log("\nUPDATE ... RETURNING");
-    const update = compile(q.UPDATE);
+    const update = compile(q.update("", 0, 0, 0));
     check("sql", update.sql, q.UPDATE_SQL);
-    // The SET clause comes first in the text, so the slots are not in params order.
     check(
       "slots",
       update.slots,
-      [0, 3, 1, 2].map((index) => ({ kind: "inline", index })),
+      [0, 1, 2, 3].map((index) => ({ kind: "inline", index })),
     );
     const id = inserted.rows[0]?.c0;
-    const updated = await bridge.execute<Record<string, unknown>>(update, ["Third", id, 2, 1]);
+    const updated = await bridge.execute<Record<string, unknown>>(update, ["Third", 1, id, 2]);
     check("update returns the row", updated.rows, [{ c0: id, c1: "Third", c2: 3 }]);
-    const stale = await bridge.execute<Record<string, unknown>>(update, ["Fourth", id, 2, 1]);
+    const stale = await bridge.execute<Record<string, unknown>>(update, ["Fourth", 1, id, 2]);
     check("a stale lock_version updates nothing", [stale.rows, stale.numAffectedRows], [[], 0n]);
   } finally {
     await bridge.close();

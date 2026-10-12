@@ -12,20 +12,28 @@
 //           (It runs in the same mitata pass as part A, before part B.)
 //
 // Run with: pnpm --filter @ectype/spike-kysely-bridge run spike:cost
-// Writes results/04-cost.json next to this file.
+// Writes results/04-cost.local.json (git-ignored). The committed results/04-cost.json,
+// which ADR 0002 quotes, is replaced only with SPIKE_COST_RECORD=1.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { createQueryId, type Driver, PostgresDriver, PostgresQueryCompiler, ValueNode } from "kysely";
 import { bench, do_not_optimize, group, run } from "mitata";
 import pg from "pg";
-import type { Expr, SelectAst } from "./ast.js";
-import { col, param, select } from "./ast.js";
+import type { Expr, SelectAst, Source } from "./ast.js";
+import { col, collectParams, param, select, table } from "./ast.js";
 import { bindParams, compile, compileNode, lower, type Plan } from "./bridge.js";
 import { main } from "./db.js";
-import { CTE, REFERENCE, REFERENCE_SQL, UPDATE, UPSERT } from "./queries.js";
+import { cte, REFERENCE_SQL, reference, update, upsert } from "./queries.js";
+
+const REFERENCE = reference(18, 10);
+const CTE = cte(9, 7);
+const UPSERT = upsert("a@example.com", "A", 30, 1);
+const UPDATE = update("A", 1, 1, 1);
 
 const QUICK = process.env.SPIKE_COST_QUICK === "1";
+/** Only a run that is meant to replace the committed evidence writes results/04-cost.json. */
+const RECORD = process.env.SPIKE_COST_RECORD === "1" && !QUICK;
 
 /** The version of a dependency as installed, read from its own package.json. */
 function installedVersion(name: string): string {
@@ -45,7 +53,7 @@ function emitDirect(ast: SelectAst): { sql: string; slots: number[] } {
       case "column":
         return `${q(e.binding)}.${q(e.column)}`;
       case "param":
-        slots.push(e.index);
+        slots.push(slots.length);
         return `$${slots.length}`;
       case "binary":
         return `${expr(e.left)} ${e.op} ${expr(e.right)}`;
@@ -58,9 +66,13 @@ function emitDirect(ast: SelectAst): { sql: string; slots: number[] } {
     }
   };
   let sql = `select ${ast.select.map((e, i) => `${expr(e)} as ${q(`c${i}`)}`).join(", ")}`;
-  sql += ` from ${q(ast.from.table)} as ${q(ast.from.alias)}`;
+  const tableOf = (source: Source): string => {
+    if (source.kind !== "table") throw new Error("emitDirect handles tables only");
+    return `${q(source.table)} as ${q(source.alias)}`;
+  };
+  sql += ` from ${tableOf(ast.from)}`;
   for (const join of ast.joins) {
-    sql += ` ${join.type} join ${q(join.source.table)} as ${q(join.source.alias)} on ${expr(join.on)}`;
+    sql += ` ${join.type} join ${tableOf(join.source)} on ${expr(join.on)}`;
   }
   if (ast.wheres.length > 0) sql += ` where ${ast.wheres.map(expr).join(" and ")}`;
   if (ast.groupBys.length > 0) sql += ` group by ${ast.groupBys.map(expr).join(", ")}`;
@@ -88,12 +100,12 @@ const USER_COLUMNS = [
   "updated_at",
 ];
 const ONE_ROW: SelectAst = select({
-  from: { table: "users", alias: "u" },
+  from: table("users", "u"),
   select: USER_COLUMNS.map((name) => col("u", name)),
   wheres: [{ kind: "binary", op: "=", left: col("u", "id"), right: param(0) }],
 });
 const MANY_ROWS: SelectAst = select({
-  from: { table: "users", alias: "u" },
+  from: table("users", "u"),
   select: USER_COLUMNS.map((name) => col("u", name)),
   orderBys: [{ expr: col("u", "id"), direction: "asc" }],
   limit: param(0),
@@ -216,7 +228,7 @@ await main("Question 4: cost", { users: 1000, postsPerUser: 3 }, async (db) => {
   const lowered = lower(REFERENCE, "postgres");
   const referencePlan = compile(REFERENCE);
   const planCache = new WeakMap<object, Plan>([[REFERENCE, referencePlan]]);
-  const referenceParams = [18, 10];
+  const referenceParams = collectParams(REFERENCE);
 
   group("cold path, reference 3-clause query", () => {
     bench("lower: AST -> Kysely nodes", () => do_not_optimize(lower(REFERENCE, "postgres")));
@@ -411,7 +423,7 @@ await main("Question 4: cost", { users: 1000, postsPerUser: 3 }, async (db) => {
     cpuNsPerCall: cpu,
     executionAgainstPostgres: comparisons,
   };
-  const out = new URL(QUICK ? "./results/04-cost.quick.json" : "./results/04-cost.json", import.meta.url);
+  const out = new URL(RECORD ? "./results/04-cost.json" : "./results/04-cost.local.json", import.meta.url);
   writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`\nWrote ${out.pathname}`);
 });

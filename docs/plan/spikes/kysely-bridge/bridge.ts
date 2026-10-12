@@ -16,11 +16,13 @@ import {
   FunctionNode,
   GroupByItemNode,
   GroupByNode,
+  HavingNode,
   IdentifierNode,
   type InsertQueryNode,
   JoinNode,
   LimitNode,
   MysqlQueryCompiler,
+  OffsetNode,
   OnConflictNode,
   type OperationNode,
   OperatorNode,
@@ -38,8 +40,10 @@ import {
   type RootOperationNode,
   SelectionNode,
   type SelectQueryNode,
+  SetOperationNode,
   SqliteQueryCompiler,
   TableNode,
+  UnaryOperationNode,
   type UpdateQueryNode,
   ValueListNode,
   ValueNode,
@@ -53,7 +57,8 @@ export type DialectName = "postgres" | "mysql" | "sqlite";
 
 /**
  * Where one placeholder of the compiled SQL gets its value at execution time.
- * Mirrors `ParamSlot` in packages/core/src/contracts/adapter.ts (without the `dump` field).
+ * Mirrors `ParamSlot` in packages/core/src/contracts/adapter.ts (without `dump` and `redact`).
+ * `index` is a position in `collectParams(ast)`, the canonical parameter order.
  */
 export type ParamSlot =
   /** `params[index]`. */
@@ -112,12 +117,14 @@ const FUNCTION_NAME = /^[a-z_][a-z0-9_]*$/;
 class Lowering {
   /** Every slot object handed to Kysely as a ValueNode value, to verify the output. */
   readonly created = new Set<ParamSlot>();
+  /**
+   * The number of parameter nodes met so far. The lowering visits the AST in canonical
+   * order (see ast.ts), whatever order the SQL clauses are emitted in, so this counter IS
+   * the index of the next parameter in `collectParams(ast)`.
+   */
+  #next = 0;
 
-  constructor(
-    readonly dialect: Dialect,
-    /** Needed only by dialects that expand lists: the expansion depends on the length. */
-    readonly params: readonly unknown[],
-  ) {}
+  constructor(readonly dialect: Dialect) {}
 
   /** The technique under test: the "value" of a ValueNode is the slot object itself. */
   slot(slot: ParamSlot): OperationNode {
@@ -130,28 +137,46 @@ class Lowering {
   }
 
   source(source: Source): OperationNode {
-    return AliasNode.create(TableNode.create(source.table), IdentifierNode.create(source.alias));
+    const node = source.kind === "table" ? TableNode.create(source.table) : this.select(source.query);
+    return AliasNode.create(node, IdentifierNode.create(source.alias));
   }
 
-  /** `nested` is true when the result is an operand, so a compound expression needs parentheses. */
+  /** One list parameter: one array slot where the dialect binds arrays, else one slot per element. */
+  list(left: OperationNode, values: readonly unknown[]): OperationNode {
+    const index = this.#next++;
+    if (this.dialect.arrayParams) {
+      // The SQL does not depend on the list length.
+      return BinaryOperationNode.create(
+        left,
+        OPERATORS["="],
+        FunctionNode.create("any", [this.slot({ kind: "list", index })]),
+      );
+    }
+    const items = values.map((_, element) => this.slot({ kind: "element", index, element }));
+    return BinaryOperationNode.create(left, OPERATORS.in, ValueListNode.create(items));
+  }
+
+  /**
+   * `nested` is true when the result is an operand, so a compound expression needs
+   * parentheses. Children are lowered in the order the AST declares them, which keeps the
+   * parameter counter canonical.
+   */
   expr(expr: Expr, nested = false): OperationNode {
     switch (expr.kind) {
       case "column":
         return this.ref(expr.binding, expr.column);
       case "param":
-        return this.slot({ kind: "inline", index: expr.index });
+        return this.slot({ kind: "inline", index: this.#next++ });
       case "namedParam":
         return this.slot({ kind: "named", name: expr.name });
       case "list":
-        return this.slot({ kind: "list", index: expr.index });
+        return this.slot({ kind: "list", index: this.#next++ });
       case "excluded":
         return this.ref("excluded", expr.column);
       case "binary": {
-        const node = BinaryOperationNode.create(
-          this.expr(expr.left, true),
-          OPERATORS[expr.op],
-          this.expr(expr.right, true),
-        );
+        const left = this.expr(expr.left, true);
+        const right = this.expr(expr.right, true);
+        const node = BinaryOperationNode.create(left, OPERATORS[expr.op], right);
         return nested ? ParensNode.create(node) : node;
       }
       case "nary": {
@@ -163,28 +188,14 @@ class Lowering {
         for (const arg of rest) node = create(node, this.expr(arg, arg.kind === "nary"));
         return nested && expr.args.length > 1 ? ParensNode.create(node) : node;
       }
-      case "in": {
-        const left = this.expr(expr.left, true);
-        if (this.dialect.arrayParams) {
-          // One array parameter: the SQL does not depend on the list length.
-          return BinaryOperationNode.create(
-            left,
-            OPERATORS["="],
-            FunctionNode.create("any", [this.slot({ kind: "list", index: expr.list.index })]),
-          );
-        }
-        const values = this.params[expr.list.index];
-        if (!Array.isArray(values)) throw new Error(`params[${expr.list.index}] is not an array`);
-        const index = expr.list.index;
-        const items = values.map((_, element) => this.slot({ kind: "element", index, element }));
-        return BinaryOperationNode.create(left, OPERATORS.in, ValueListNode.create(items));
-      }
+      case "in":
+        return this.list(this.expr(expr.left, true), expr.list.value);
+      case "exists":
+        return UnaryOperationNode.create(OperatorNode.create("exists"), this.select(expr.query));
       case "aggregate": {
         if (!FUNCTION_NAME.test(expr.fn)) throw new Error(`bad function name ${JSON.stringify(expr.fn)}`);
-        let node = AggregateFunctionNode.create(
-          expr.fn,
-          expr.args.map((arg) => this.expr(arg)),
-        );
+        const args = expr.args.map((arg) => this.expr(arg));
+        let node = AggregateFunctionNode.create(expr.fn, args);
         if (expr.filter !== undefined) {
           node = AggregateFunctionNode.cloneWithFilter(node, this.expr(expr.filter));
         }
@@ -224,10 +235,8 @@ class Lowering {
     );
   }
 
-  where(wheres: readonly Expr[]) {
-    return wheres.length === 0
-      ? undefined
-      : WhereNode.create(this.expr({ kind: "nary", op: "and", args: wheres }));
+  conjunction(conditions: readonly Expr[]): OperationNode | undefined {
+    return conditions.length === 0 ? undefined : this.expr({ kind: "nary", op: "and", args: conditions });
   }
 
   returning(table: string | undefined, columns: readonly string[]) {
@@ -243,6 +252,13 @@ class Lowering {
     );
   }
 
+  /**
+   * Every clause is lowered here in the order SelectAst declares it (the canonical
+   * order), into locals; only then is the Kysely node assembled. SQL emits the select
+   * list before FROM and WHERE, but the parameters of the select list are numbered after
+   * theirs: placeholder order and parameter order are different things, and the slots
+   * are what connects them.
+   */
   select(ast: SelectAst): SelectQueryNode {
     let withNode: WithNode | undefined;
     for (const cte of ast.ctes) {
@@ -256,34 +272,45 @@ class Lowering {
       withNode =
         withNode === undefined ? WithNode.create(node) : WithNode.cloneWithExpression(withNode, node);
     }
-    const where = this.where(ast.wheres);
+    const from = FromNode.create([this.source(ast.from)]);
+    const joins = ast.joins.map((join) => {
+      const source = this.source(join.source);
+      const on = this.expr(join.on);
+      return JoinNode.createWithOn(join.type === "inner" ? "InnerJoin" : "LeftJoin", source, on);
+    });
+    const where = this.conjunction(ast.wheres);
+    const selections = ast.select.map((expr, i) =>
+      SelectionNode.create(AliasNode.create(this.expr(expr), IdentifierNode.create(`c${i}`))),
+    );
+    const groupBys = ast.groupBys.map((expr) => GroupByItemNode.create(this.expr(expr)));
+    const having = this.conjunction(ast.havings);
+    const orderBys = this.orderItems(ast.orderBys);
+    const limit = ast.limit === undefined ? undefined : LimitNode.create(this.expr(ast.limit));
+    const offset = ast.offset === undefined ? undefined : OffsetNode.create(this.expr(ast.offset));
+    const setOperations = ast.unionAll.map((other) =>
+      SetOperationNode.create("union", this.select(other), true),
+    );
     // One object literal for the root, checked against Kysely's own interface.
     return {
       kind: "SelectQueryNode",
       ...(withNode !== undefined && { with: withNode }),
-      from: FromNode.create([this.source(ast.from)]),
-      selections: ast.select.map((expr, i) =>
-        SelectionNode.create(AliasNode.create(this.expr(expr), IdentifierNode.create(`c${i}`))),
-      ),
-      ...(ast.joins.length > 0 && {
-        joins: ast.joins.map((join) =>
-          JoinNode.createWithOn(
-            join.type === "inner" ? "InnerJoin" : "LeftJoin",
-            this.source(join.source),
-            this.expr(join.on),
-          ),
-        ),
-      }),
-      ...(where !== undefined && { where }),
-      ...(ast.groupBys.length > 0 && {
-        groupBy: GroupByNode.create(ast.groupBys.map((expr) => GroupByItemNode.create(this.expr(expr)))),
-      }),
-      ...(ast.orderBys.length > 0 && { orderBy: OrderByNode.create(this.orderItems(ast.orderBys)) }),
-      ...(ast.limit !== undefined && { limit: LimitNode.create(this.expr(ast.limit)) }),
+      from,
+      selections,
+      ...(joins.length > 0 && { joins }),
+      ...(where !== undefined && { where: WhereNode.create(where) }),
+      ...(groupBys.length > 0 && { groupBy: GroupByNode.create(groupBys) }),
+      ...(having !== undefined && { having: HavingNode.create(having) }),
+      ...(setOperations.length > 0 && { setOperations }),
+      ...(orderBys.length > 0 && { orderBy: OrderByNode.create(orderBys) }),
+      ...(limit !== undefined && { limit }),
+      ...(offset !== undefined && { offset }),
     } satisfies SelectQueryNode;
   }
 
   insert(ast: InsertAst): InsertQueryNode {
+    const values = ValuesNode.create(
+      ast.rows.map((row) => ValueListNode.create(row.map((expr) => this.expr(expr)))),
+    );
     let onConflict: OnConflictNode | undefined;
     if (ast.onConflict !== undefined) {
       onConflict = OnConflictNode.cloneWith(OnConflictNode.create(), {
@@ -297,23 +324,22 @@ class Lowering {
       kind: "InsertQueryNode",
       into: TableNode.create(ast.table),
       columns: ast.columns.map((column) => ColumnNode.create(column)),
-      values: ValuesNode.create(
-        ast.rows.map((row) => ValueListNode.create(row.map((expr) => this.expr(expr)))),
-      ),
+      values,
       ...(onConflict !== undefined && { onConflict }),
       ...(ast.returning.length > 0 && { returning: this.returning(undefined, ast.returning) }),
     } satisfies InsertQueryNode;
   }
 
   update(ast: UpdateAst): UpdateQueryNode {
-    const where = this.where(ast.wheres);
+    const updates = ast.set.map((set) =>
+      ColumnUpdateNode.create(ColumnNode.create(set.column), this.expr(set.value)),
+    );
+    const where = this.conjunction(ast.wheres);
     return {
       kind: "UpdateQueryNode",
-      table: this.source({ table: ast.table, alias: ast.alias }),
-      updates: ast.set.map((set) =>
-        ColumnUpdateNode.create(ColumnNode.create(set.column), this.expr(set.value)),
-      ),
-      ...(where !== undefined && { where }),
+      table: this.source({ kind: "table", table: ast.table, alias: ast.alias }),
+      updates,
+      ...(where !== undefined && { where: WhereNode.create(where) }),
       ...(ast.returning.length > 0 && { returning: this.returning(ast.alias, ast.returning) }),
     } satisfies UpdateQueryNode;
   }
@@ -331,8 +357,8 @@ class Lowering {
 }
 
 /** AST -> Kysely node tree. Exposed separately so the cost of each stage can be measured. */
-export function lower(ast: Ast, dialect: DialectName, params: readonly unknown[] = []) {
-  const lowering = new Lowering(DIALECTS[dialect], params);
+export function lower(ast: Ast, dialect: DialectName) {
+  const lowering = new Lowering(DIALECTS[dialect]);
   return { node: lowering.root(ast), created: lowering.created };
 }
 
@@ -361,9 +387,12 @@ export function compileNode(
 /** Compilation needs a query id only to copy it onto the result; one frozen object will do. */
 const SHARED_QUERY_ID = Object.freeze({ queryId: "ectype-spike-compile" });
 
-/** Cold path: lower + compile + slot recovery. */
-export function compile(ast: Ast, dialect: DialectName = "postgres", params: readonly unknown[] = []): Plan {
-  const { node, created } = lower(ast, dialect, params);
+/**
+ * Cold path: lower + compile + slot recovery. The slots index `collectParams(ast)`, and
+ * equally `collectParams` of any other statement of the same shape.
+ */
+export function compile(ast: Ast, dialect: DialectName = "postgres"): Plan {
+  const { node, created } = lower(ast, dialect);
   return compileNode(node, created, dialect);
 }
 

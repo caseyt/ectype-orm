@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { compile } from "./bridge.js";
 import { Bridge, check, main } from "./db.js";
-import { REFERENCE, UPSERT } from "./queries.js";
+import { reference, upsert as upsertAst } from "./queries.js";
 
 await main("Question 3: execution", { users: 40, postsPerUser: 6 }, async (db) => {
   const bridge = await Bridge.open({ ...db.config, max: 4 });
@@ -21,8 +21,8 @@ await main("Question 3: execution", { users: 40, postsPerUser: 6 }, async (db) =
       await observer.query("SELECT name FROM users WHERE email LIKE $1 ORDER BY name", [`${prefix}%`])
     ).rows.map((row: { name: string }) => row.name);
   try {
-    const select = compile(REFERENCE);
-    const upsert = compile(UPSERT);
+    const select = compile(reference(0, 0));
+    const upsert = compile(upsertAst("", "", 0, 0));
 
     console.log("cached plan, many executions, pooled connections");
     const expected = await observer.query(

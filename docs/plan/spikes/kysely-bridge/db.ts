@@ -72,6 +72,16 @@ export async function createSpikeDatabase(seed: {
        FROM users u CROSS JOIN generate_series(1, $1::int) AS n`,
       [seed.postsPerUser],
     );
+    // Comments, tags and post tags, for the statements of 02-param-slots.ts.
+    await client.query(
+      `INSERT INTO comments (post_id, author_id, body)
+       SELECT p.id, p.author_id, 'comment ' || n FROM posts p CROSS JOIN generate_series(1, 2) AS n`,
+    );
+    await client.query(`INSERT INTO tags (name) SELECT 'tag' || n FROM generate_series(1, 5) AS n`);
+    await client.query(
+      `INSERT INTO posts_tags (post_id, tag_id)
+       SELECT p.id, t.id FROM posts p JOIN tags t ON (p.id + t.id) % 3 = 0`,
+    );
     const version = await client.query<{ version: string }>("SELECT version()");
     serverVersion = version.rows[0]?.version ?? "unknown";
   } finally {
