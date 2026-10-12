@@ -29,6 +29,7 @@ temp/
 *.key
 .npmrc.local
 .claude/settings.local.json
+.claude/worktrees/
 
 # Editors and operating systems. No .vscode files are committed; if that changes, add
 # negations for exactly those files (for example !.vscode/extensions.json).

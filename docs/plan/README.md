@@ -235,7 +235,7 @@ All of these apply to every step. Step files add specifics.
 Performance is a feature with tests. Step 19 owns the harness; **every step that touches a
 hot path adds its own micro-benchmarks** under `benchmarks/micro/<area>.bench.ts`.
 
-Budgets (Node 20, Apple M-series or CI reference runner; step 19 calibrates and records
+Budgets (Node 22, Apple M-series or CI reference runner; step 19 calibrates and records
 the reference numbers, then CI fails on a regression of more than 10%):
 
 | Operation | Budget |

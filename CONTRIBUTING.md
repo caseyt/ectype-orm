@@ -8,8 +8,9 @@ protocol and the pull request and review loop that every change follows.
 ## Prerequisites
 
 - Node.js >= 22 (`.nvmrc` pins 22; CI also runs Node 24)
-- pnpm 12.11.2 (pinned in `package.json` `"packageManager"`; pnpm 9 and newer, and Corepack, switch
-  to the pinned version automatically)
+- pnpm 12.11.2, pinned in `package.json` `"packageManager"`. Corepack (`corepack enable`) and
+  pnpm 9 or newer switch to the pinned version by themselves. An older global pnpm does
+  not; `engines.pnpm` makes it stop with an "unsupported engine" error instead of running.
 - Docker with Compose v2, for the test databases
 
 ## Everyday commands
@@ -56,7 +57,14 @@ docs/site            VitePress site; docs/site/examples holds the type-checked e
 
 Inside the workspace, `ectype` and `@ectype/*` imports resolve to package **sources**
 (TypeScript `paths` in `tsconfig.base.json`, aliases in `vitest.config.ts`), so type-checking
-and tests never need a build. `examples/smoke` and the benchmarks use the built `dist/`.
+and tests never need a build.
+
+`examples/smoke` and the benchmarks are the exceptions: they load the built `dist/`, because
+that is what users install. Benchmark processes are started with `benchmarks/tsconfig.run.json`,
+which has no source `paths`; the runner and every benchmark file refuse to run unless
+`ectype` resolves into a `dist/` directory, and the report records the resolved file
+(`ectypeEntry`). `pnpm bench` builds first. `scripts/check-bench-dist-guard.mjs` (run by CI
+before the build) proves the refusal.
 
 ## Tests
 
@@ -71,29 +79,45 @@ Each package has three Vitest projects, named `<package>:unit`, `<package>:types
   `createTestDatabase` from `@ectype/test-support`, and reset it between tests with
   `truncateAll` (until the sandbox of step 16 exists).
 
+Test databases are named `ectype_<label>_<run id>_<creation time>_<random>` and are cleaned
+up at three levels: `withDatabase` drops its database when the callback settles **and**
+through Vitest's `onTestFinished`, so a test that times out does not leak it; after the run
+`global-setup.ts` drops everything the run still owns; before the run it drops databases
+older than 30 minutes (`ECTYPE_TEST_STALE_MINUTES`) that a killed run left behind. Several
+runs can share one server: a run never drops a younger database of another run, nor (on
+Postgres) one that has open connections. With `createTestDatabase` you call `drop()`
+yourself, in `afterAll`.
+
+The proof that integration files really run concurrently without interfering is the pair
+`parallel-a.pair.ts` / `parallel-b.pair.ts`, which only pass when they overlap in time.
+`parallel.itest.ts` runs them in a nested Vitest process with exactly two workers, so
+`pnpm test:integration` works with any worker count, including `--maxWorkers=1`.
+
 Test support (`packages/core/test/support`):
 
 | Module | Provides |
 |---|---|
 | `env.ts` | `connectionSettings(dialect)`, `connectionUrl`, `tier2Enabled` |
-| `db.ts` | `withDatabase`, `createTestDatabase`, `loadFixture`, `uniqueDatabaseName` |
+| `db.ts` | `withDatabase`, `createTestDatabase`, `loadFixture`, `uniqueDatabaseName`, `parseDatabaseName` |
+| `sweep.ts`, `global-setup.ts` | `sweepTestDatabases`; the Vitest global setup that sweeps leaked databases |
 | `truncate.ts` | `truncateAll(db, { except })` |
 | `sql.ts` | `expectSql(compiled).toMatchInlineSnapshot()`, `normalizeSql` |
 | `fixtures/blog.sql` | The reference blog schema (PostgreSQL DDL) |
 
 ### Databases
 
-`docker-compose.yml` starts Postgres 16 on **localhost:54329** (user `ectype`, password
+`docker-compose.yml` starts Postgres 16 on **127.0.0.1:54329** (user `ectype`, password
 `ectype`, database `ectype_dev`) and, with the `tier2` profile, MySQL 8.4 on
-**localhost:33069** (user `root`, password `ectype`). Data lives on tmpfs and is discarded
-when the containers stop. To point the tests elsewhere, set `ECTYPE_PG_HOST`,
+**127.0.0.1:33069** (user `root`, password `ectype`). Both ports are published on the
+loopback interface only. Data lives on tmpfs and is discarded when the containers stop. To point the tests elsewhere, set `ECTYPE_PG_HOST`,
 `ECTYPE_PG_PORT`, `ECTYPE_PG_USER`, `ECTYPE_PG_PASSWORD`, `ECTYPE_PG_DATABASE` (and the
 `ECTYPE_MYSQL_*` equivalents). MySQL tests run only with `ECTYPE_TEST_TIER2=1`.
 
 ## Code rules the tools enforce
 
-- No default exports (config files excepted), no `any`, no non-null assertions outside
-  tests, sorted imports, no `console` under `packages/`.
+- No default exports (config files excepted), no `any`, no `@ts-ignore`, no non-null
+  assertions outside tests, sorted imports, no `console` under `packages/`. Biome warnings
+  fail `pnpm lint` too (`--error-on-warnings`).
 - `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`,
   `verbatimModuleSyntax`. Relative imports carry the `.js` extension (`module: NodeNext`).
 - `packages/core/src/index.ts` is the only public entry point of `ectype`.
