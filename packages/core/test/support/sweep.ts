@@ -9,8 +9,8 @@ export interface SweepOptions {
   readonly runId?: string;
   /**
    * Drop databases of any run whose name is older than this many milliseconds. Such a
-   * database was leaked by a run that was killed; a live run's databases are younger. On
-   * Postgres a database with open connections is never treated as stale.
+   * database was leaked by a run that was killed; a live run's databases are younger. A
+   * database with open connections is never treated as stale.
    */
   readonly olderThanMs?: number;
   /** Connection settings for the server. Default: `connectionSettings(dialect)`. */
@@ -70,13 +70,18 @@ async function sweepMysql(server: ConnectionSettings, options: SweepOptions): Pr
   }
   try {
     const [rows] = await connection.query(
-      "SELECT schema_name AS name FROM information_schema.schemata WHERE schema_name LIKE 'ectype\\\\_%' ORDER BY schema_name",
+      `SELECT s.schema_name AS name, COUNT(p.id) AS connections
+         FROM information_schema.schemata s LEFT JOIN information_schema.processlist p ON p.db = s.schema_name
+        WHERE s.schema_name LIKE 'ectype\\\\_%' GROUP BY s.schema_name ORDER BY s.schema_name`,
     );
     const dropped: string[] = [];
-    for (const row of rows as { name: string }[]) {
-      if (!shouldSweep(row.name, options)) continue;
-      await connection.query(`DROP DATABASE IF EXISTS ${row.name}`);
-      dropped.push(row.name);
+    for (const { name, connections } of rows as { name: string; connections: number | string }[]) {
+      const parsed = parseDatabaseName(name);
+      if (parsed === undefined || !shouldSweep(name, options)) continue;
+      // A database another run is connected to is in use, however old its name is.
+      if (parsed.runId !== options.runId && Number(connections) > 0) continue;
+      await connection.query(`DROP DATABASE IF EXISTS ${name}`);
+      dropped.push(name);
     }
     return dropped;
   } finally {
@@ -93,7 +98,7 @@ async function sweepMysql(server: ConnectionSettings, options: SweepOptions): Pr
  *
  * Only names produced by `uniqueDatabaseName` are ever touched. Two runs can share one
  * server: a run drops another run's database only when it is older than `olderThanMs`
- * (and, on Postgres, has no open connections).
+ * and has no open connections.
  */
 export function sweepTestDatabases(dialect: Dialect, options: SweepOptions): Promise<string[]> {
   const server = options.settings ?? connectionSettings(dialect);

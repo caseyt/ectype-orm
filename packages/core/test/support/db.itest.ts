@@ -72,19 +72,41 @@ describe("withDatabase (postgres)", () => {
 });
 
 describe("cleanup when a test times out (postgres)", () => {
+  const TIMEOUT_MS = 500;
+  // What the timed-out test got up to, for the test after it.
+  const observed: { database?: string; settledAfterMs?: number } = {};
+
   // `fails`: this test is expected to time out. Vitest abandons the callback, so the
   // `finally` in withDatabase cannot run in time; the onTestFinished hook must drop it.
-  test.fails("a test times out while it holds a database", { timeout: 500 }, () =>
-    withDatabase("postgres", { label: "leak_timeout" }, (db) => db.query("SELECT pg_sleep(30)")),
-  );
+  // `fails` accepts any failure, so the next test checks that it really was this one.
+  test.fails("a test times out while it holds a database", { timeout: TIMEOUT_MS }, () => {
+    const startedAt = Date.now();
+    return withDatabase("postgres", { label: "leak_timeout" }, async (db) => {
+      observed.database = db.name;
+      try {
+        await db.query("SELECT pg_sleep(30)");
+      } finally {
+        observed.settledAfterMs = Date.now() - startedAt;
+      }
+    });
+  });
 
-  test("the database of the timed-out test is gone", () =>
-    withDatabase("postgres", async (other) => {
+  test("the database of the timed-out test was created, outlived the timeout, and is gone", async () => {
+    // The previous test got as far as holding a database (not, say, a refused connection)...
+    expect(observed.database).toMatch(new RegExp(`^ectype_leak_timeout_${currentRunId()}_`));
+    // ...and its query did not end by itself before the timeout: it was cut off by the drop.
+    // (`undefined`: the driver never settled the abandoned query, which is fine too.)
+    expect(observed.settledAfterMs ?? TIMEOUT_MS).toBeGreaterThanOrEqual(TIMEOUT_MS);
+    expect(observed.settledAfterMs ?? 0).toBeLessThan(30_000);
+
+    await withDatabase("postgres", async (other) => {
+      expect(await databaseExists(other, observed.database ?? "")).toBe(false);
       const leaked = await other.query("SELECT datname FROM pg_database WHERE datname LIKE $1", [
         `ectype\\_leak\\_timeout\\_${currentRunId()}\\_%`,
       ]);
       expect(leaked).toEqual([]);
-    }));
+    });
+  });
 });
 
 describe("blog fixture (postgres)", () => {

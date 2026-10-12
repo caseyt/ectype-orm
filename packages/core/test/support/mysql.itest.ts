@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { createConnection } from "mysql2/promise";
 import { describe, expect, test } from "vitest";
 import { currentRunId, withDatabase } from "./db.js";
 import { connectionSettings, tier2Enabled } from "./env.js";
@@ -21,18 +22,36 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
     });
   });
 
-  test.fails("a test times out while it holds a database", { timeout: 500 }, () =>
-    withDatabase("mysql", { label: "leak_timeout" }, (db) => db.query("SELECT SLEEP(30)")),
-  );
+  const TIMEOUT_MS = 500;
+  const observed: { database?: string; settledAfterMs?: number } = {};
 
-  test("the database of the timed-out test is gone", () =>
-    withDatabase("mysql", async (other) => {
+  // `fails` accepts any failure, so the next test checks that it really was the timeout.
+  test.fails("a test times out while it holds a database", { timeout: TIMEOUT_MS }, () => {
+    const startedAt = Date.now();
+    return withDatabase("mysql", { label: "leak_timeout" }, async (db) => {
+      observed.database = db.name;
+      try {
+        await db.query("SELECT SLEEP(30)");
+      } finally {
+        observed.settledAfterMs = Date.now() - startedAt;
+      }
+    });
+  });
+
+  test("the database of the timed-out test was created, outlived the timeout, and is gone", async () => {
+    expect(observed.database).toMatch(new RegExp(`^ectype_leak_timeout_${currentRunId()}_`));
+    // (`undefined`: the driver never settled the abandoned query, which is fine too.)
+    expect(observed.settledAfterMs ?? TIMEOUT_MS).toBeGreaterThanOrEqual(TIMEOUT_MS);
+    expect(observed.settledAfterMs ?? 0).toBeLessThan(30_000);
+
+    await withDatabase("mysql", async (other) => {
       const leaked = await other.query(
         "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?",
         [`ectype\\_leak\\_timeout\\_${currentRunId()}\\_%`],
       );
       expect(leaked).toEqual([]);
-    }));
+    });
+  });
 
   test("the sweep drops stale and own databases and nothing else", async () => {
     const settings = connectionSettings("mysql");
@@ -48,6 +67,16 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
       const only = new RegExp(`^ectype_(sweep_(${staleRun}|${freshRun})|notatest)_`);
       await db.exec(`CREATE DATABASE ${stale}; CREATE DATABASE ${fresh}; CREATE DATABASE ${other};`);
       try {
+        // Another run's database with an ancient name, but somebody is connected to it.
+        const user = await createConnection({ ...settings, database: stale });
+        try {
+          const onlyStale = new RegExp(`^${stale}$`);
+          expect(await sweepTestDatabases("mysql", { olderThanMs: 0, settings, only: onlyStale })).toEqual(
+            [],
+          );
+        } finally {
+          await user.end();
+        }
         expect(await sweepTestDatabases("mysql", { olderThanMs: 60_000, settings, only })).toEqual([stale]);
         expect(await sweepTestDatabases("mysql", { runId: freshRun, settings, only })).toEqual([fresh]);
         const rows = await db.query(
