@@ -81,4 +81,45 @@ describe("constructors", () => {
     expectTypeOf(new AdapterError("x").retryable).toEqualTypeOf<boolean>();
     expectTypeOf(new AdapterError("x").sql).toEqualTypeOf<string | undefined>();
   });
+
+  test("the detail fields of every error are typed, never any", () => {
+    const constraint = {} as ConstraintError;
+    expectTypeOf(constraint.constraint).toEqualTypeOf<string | undefined>();
+    expectTypeOf(constraint.table).toEqualTypeOf<string | undefined>();
+    expectTypeOf(constraint.column).toEqualTypeOf<string | undefined>();
+    expectTypeOf(constraint.detail).toEqualTypeOf<string | undefined>();
+    for (const field of [constraint.constraint, constraint.table, constraint.column, constraint.detail]) {
+      expectTypeOf(field).not.toBeAny();
+    }
+    expectTypeOf({} as NoResultsError)
+      .toHaveProperty("query")
+      .toEqualTypeOf<string | undefined>();
+    expectTypeOf({} as MultipleResultsError)
+      .toHaveProperty("count")
+      .toEqualTypeOf<number>();
+    expectTypeOf({} as MultipleResultsError)
+      .toHaveProperty("query")
+      .not.toBeAny();
+    expectTypeOf({} as StaleEntryError)
+      .toHaveProperty("action")
+      .toEqualTypeOf<string>();
+    expectTypeOf({} as NotLoadedError)
+      .toHaveProperty("association")
+      .toEqualTypeOf<string>();
+    expectTypeOf({} as NotLoadedError)
+      .toHaveProperty("schema")
+      .not.toBeAny();
+    expectTypeOf({} as InvalidChangesetError)
+      .toHaveProperty("action")
+      .not.toBeAny();
+    expectTypeOf({} as AdapterError)
+      .toHaveProperty("retryable")
+      .not.toBeAny();
+    expectTypeOf({} as AdapterError)
+      .toHaveProperty("sql")
+      .not.toBeAny();
+    expectTypeOf({} as EctypeError)
+      .toHaveProperty("cause")
+      .toBeUnknown();
+  });
 });

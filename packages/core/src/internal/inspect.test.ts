@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, test } from "vitest";
+import { META } from "../contracts/schema.js";
 import { formatStruct, formatValue, omitRedacted, REDACTED, redactFields } from "./inspect.js";
 
 const SECRET = "s3cr3t-value";
@@ -41,6 +42,42 @@ describe("redactFields", () => {
     const out = redactFields({ nested }, new Set());
     expect(out).toEqual({ nested });
     expect(out.nested).toBe(nested);
+  });
+});
+
+describe("an own __proto__ key (as JSON.parse produces)", () => {
+  const parsed = (): object =>
+    JSON.parse('{"id":1,"__proto__":{"isAdmin":true},"token":"s3cr3t-value"}') as object;
+
+  test("redactFields keeps it as an own key and leaves the copy's prototype alone", () => {
+    const out = redactFields(parsed(), new Set(["token"]));
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect((out as { isAdmin?: unknown }).isAdmin).toBeUndefined();
+    expect(Object.keys(out)).toEqual(["id", "__proto__", "token"]);
+    expect(Object.getOwnPropertyDescriptor(out, "__proto__")?.value).toEqual({ isAdmin: true });
+    expect(JSON.stringify(out)).toBe('{"id":1,"__proto__":{"isAdmin":true},"token":"**redacted**"}');
+  });
+
+  test("omitRedacted keeps it as an own key and leaves the copy's prototype alone", () => {
+    const out = omitRedacted(parsed(), new Set(["token"]));
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect((out as { isAdmin?: unknown }).isAdmin).toBeUndefined();
+    expect(Object.keys(out)).toEqual(["id", "__proto__"]);
+    expect(JSON.stringify(out)).toBe('{"id":1,"__proto__":{"isAdmin":true}}');
+  });
+
+  test("it can itself be redacted or omitted", () => {
+    const redacted = redactFields(parsed(), new Set(["__proto__"]));
+    expect(Object.getOwnPropertyDescriptor(redacted, "__proto__")?.value).toBe(REDACTED);
+    expect(Object.getPrototypeOf(redacted)).toBe(Object.prototype);
+    expect(Object.keys(omitRedacted(parsed(), new Set(["__proto__"])))).toEqual(["id", "token"]);
+  });
+
+  test("the formatters print it as an ordinary key", () => {
+    expect(formatValue(parsed())).toBe('{ id: 1, __proto__: { isAdmin: true }, token: "s3cr3t-value" }');
+    expect(formatStruct("Row", parsed(), new Set(["token"]))).toBe(
+      "Row { id: 1, __proto__: { isAdmin: true }, token: **redacted** }",
+    );
   });
 });
 
@@ -173,14 +210,110 @@ describe("formatValue", () => {
     );
   });
 
-  test("renders a value whose getters throw as [unprintable]", () => {
-    const hostile = {
+  test("shows an accessor as [Getter] without running it", () => {
+    let ran = false;
+    const value = {
+      id: 1,
       get boom(): never {
+        ran = true;
         throw new Error("getter called");
       },
     };
-    expect(formatValue(hostile)).toBe("[unprintable]");
-    expect(formatValue([hostile])).toBe("[unprintable]");
+    expect(formatValue(value)).toBe("{ id: 1, boom: [Getter] }");
+    expect(formatValue([value])).toBe("[{ id: 1, boom: [Getter] }]");
+    const list: unknown[] = [1];
+    Object.defineProperty(list, 1, {
+      get: () => {
+        ran = true;
+        return 2;
+      },
+      enumerable: true,
+    });
+    expect(formatValue(list)).toBe("[1, [Getter]]");
+    expect(ran).toBe(false);
+  });
+
+  test("shows the holes of a sparse array as undefined", () => {
+    const sparse: unknown[] = [];
+    sparse[0] = 1;
+    sparse[2] = 3;
+    expect(formatValue(sparse)).toBe("[1, undefined, 3]");
+  });
+
+  test("does not run a toISOString, a name getter or a constructor getter that the value defines", () => {
+    const calls: string[] = [];
+    const date = new Date(0);
+    Object.defineProperty(date, "toISOString", {
+      value: () => {
+        calls.push("toISOString");
+        return "secret";
+      },
+    });
+    Object.defineProperty(date, "getTime", {
+      value: () => {
+        calls.push("getTime");
+        return 1;
+      },
+    });
+    expect(formatValue(date)).toBe("1970-01-01T00:00:00.000Z");
+
+    class Sneaky {
+      static get name(): string {
+        calls.push("name");
+        return "Leaked";
+      }
+      x = 1;
+    }
+    expect(formatValue(new Sneaky())).toBe("Object { x: 1 }");
+
+    const proto = {};
+    Object.defineProperty(proto, "constructor", {
+      get: () => {
+        calls.push("constructor");
+        return Date;
+      },
+    });
+    expect(formatValue(Object.create(proto))).toBe("Object {}");
+
+    function fn() {}
+    Object.defineProperty(fn, "name", {
+      get: () => {
+        calls.push("fn name");
+        return "x";
+      },
+    });
+    expect(formatValue(fn)).toBe("[Function]");
+
+    const bytes = new Uint8Array(3);
+    Object.defineProperty(bytes, "byteLength", {
+      get: () => {
+        calls.push("byteLength");
+        return 99;
+      },
+    });
+    expect(formatValue(bytes)).toBe("<Uint8Array 3 bytes>");
+    expect(formatValue(new DataView(new ArrayBuffer(2)))).toBe("DataView {}");
+    expect(calls).toEqual([]);
+  });
+
+  test("copes with a typed array without a class and a Proxy that changes its mind", () => {
+    const bare = new Uint8Array(2);
+    Object.setPrototypeOf(bare, null);
+    expect(formatValue(bare)).toBe("<TypedArray 2 bytes>");
+
+    // Lists the key "a" (and confirms it to Object.keys), then denies having it.
+    let asked = 0;
+    const fickle = new Proxy(
+      { a: 1 },
+      {
+        getOwnPropertyDescriptor: (target, key) =>
+          asked++ === 0 ? Reflect.getOwnPropertyDescriptor(target, key) : undefined,
+      },
+    );
+    expect(formatValue(fickle)).toBe("{ a: undefined }");
+  });
+
+  test("renders a Proxy whose traps throw as [unprintable]", () => {
     const proxy = new Proxy(
       {},
       {
@@ -190,6 +323,8 @@ describe("formatValue", () => {
       },
     );
     expect(formatValue(proxy)).toBe("[unprintable]");
+    expect(formatValue({ nested: [proxy] })).toBe("[unprintable]");
+    expect(formatStruct("Row", proxy, new Set())).toBe("Row [unprintable]");
   });
 
   test("never throws and always returns a string, whatever it is given", () => {
@@ -256,7 +391,7 @@ describe("formatStruct", () => {
     expect(read).toBe(false);
   });
 
-  test("a field whose getter throws is [unprintable]; the others still render", () => {
+  test("a field that is an accessor shows as [Getter]; the others still render", () => {
     const row = {
       id: 1,
       get broken(): never {
@@ -264,7 +399,7 @@ describe("formatStruct", () => {
       },
       name: "ada",
     };
-    expect(formatStruct("User", row, new Set())).toBe('User { id: 1, broken: [unprintable], name: "ada" }');
+    expect(formatStruct("User", row, new Set())).toBe('User { id: 1, broken: [Getter], name: "ada" }');
   });
 
   test("no redacted value ever appears in the output", () => {
@@ -285,6 +420,155 @@ describe("formatStruct", () => {
           }
         },
       ),
+      { numRuns: 1000 },
+    );
+  });
+});
+
+// --- Rows of schemas, faked the way step 04 builds them: the base class returned by
+// `Schema()` holds the metadata under META, and the user's class extends it. ---
+
+function schemaBase(fields: readonly { name: string; redact: boolean }[]): new () => object {
+  const Base = function Base() {} as unknown as new () => object;
+  Object.defineProperty(Base, META, { value: { fields } });
+  return Base;
+}
+class User extends schemaBase([
+  { name: "id", redact: false },
+  { name: "email", redact: false },
+  { name: "passwordHash", redact: true },
+]) {
+  constructor(
+    readonly id: number,
+    readonly email: string,
+    readonly passwordHash: string,
+  ) {
+    super();
+  }
+}
+class Post extends schemaBase([
+  { name: "id", redact: false },
+  { name: "secretNote", redact: true },
+  { name: "author", redact: false },
+]) {
+  constructor(
+    readonly id: number,
+    readonly secretNote: string,
+    readonly author: unknown,
+  ) {
+    super();
+  }
+}
+
+describe("redaction of rows, at any depth", () => {
+  const user = new User(1, "a@b.c", "s3cret-hash");
+
+  test("formatValue hides a row's redacted fields without being told", () => {
+    expect(formatValue(user)).toBe('User { id: 1, email: "a@b.c", passwordHash: **redacted** }');
+  });
+
+  test("a row nested in a plain record is still redacted (the reviewer's case)", () => {
+    const text = formatStruct("Post", { id: 1, author: user }, new Set());
+    expect(text).toBe('Post { id: 1, author: User { id: 1, email: "a@b.c", passwordHash: **redacted** } }');
+    expect(text).not.toContain("s3cret-hash");
+  });
+
+  test("a row nested in a row, in an array and in a changeset-like record is redacted", () => {
+    const post = new Post(7, "do not print", user);
+    expect(formatValue(post)).toBe(
+      'Post { id: 7, secretNote: **redacted**, author: User { id: 1, email: "a@b.c", passwordHash: **redacted** } }',
+    );
+    const changeset = { action: "update", data: post, changes: { title: "x" }, rows: [user, user] };
+    const text = formatStruct("Changeset", changeset, new Set());
+    expect(text).not.toContain("s3cret-hash");
+    expect(text).not.toContain("do not print");
+    expect(text).toContain('rows: [User { id: 1, email: "a@b.c", passwordHash: **redacted** }, User {');
+  });
+
+  test("formatStruct on a row hides the schema's redacted fields even when the caller names none", () => {
+    expect(formatStruct("User", user, new Set())).toBe(
+      'User { id: 1, email: "a@b.c", passwordHash: **redacted** }',
+    );
+    expect(formatStruct("User", user, new Set(["email"]))).toBe(
+      "User { id: 1, email: **redacted**, passwordHash: **redacted** }",
+    );
+  });
+
+  test("a redacted field's value is not read", () => {
+    let read = false;
+    class Guarded extends schemaBase([{ name: "token", redact: true }]) {}
+    const row = new Guarded();
+    Object.defineProperty(row, "token", {
+      enumerable: true,
+      get: () => {
+        read = true;
+        return "x";
+      },
+    });
+    expect(formatValue(row)).toBe("Guarded { token: **redacted** }");
+    expect(read).toBe(false);
+  });
+
+  test("malformed metadata redacts nothing and does not throw", () => {
+    class NoFields {
+      static readonly [META] = {};
+      x = 1;
+    }
+    class OddFields {
+      static readonly [META] = {
+        fields: [null, 3, { name: 5, redact: true }, { redact: true }, { name: "y", redact: "yes" }],
+      };
+      y = 2;
+    }
+    class NotAnObject {
+      static readonly [META] = "meta";
+      z = 3;
+    }
+    expect(formatValue(new NoFields())).toBe("NoFields { x: 1 }");
+    expect(formatValue(new OddFields())).toBe("OddFields { y: 2 }");
+    expect(formatValue(new NotAnObject())).toBe("NotAnObject { z: 3 }");
+    // The same metadata object is looked up again from the cache.
+    expect(formatValue(new OddFields())).toBe("OddFields { y: 2 }");
+  });
+
+  test("a plain object holding field values is NOT recognised: the caller passes the names", () => {
+    const changes = { email: "a@b.c", passwordHash: "s3cret-hash" };
+    expect(formatValue(changes)).toContain("s3cret-hash");
+    expect(formatStruct("changes", changes, new Set(["passwordHash"]))).not.toContain("s3cret-hash");
+  });
+
+  test("no redacted value appears in the output, whatever the nesting", () => {
+    // Every secret is a unique token, so finding one in the output is a leak.
+    let counter = 0;
+    const secret = (): string => `SECRET${counter++}X`;
+    const secrets: string[] = [];
+    const makeUser = (): User => {
+      const token = secret();
+      secrets.push(token);
+      return new User(counter, `user${counter}@example.com`, token);
+    };
+    const tree: fc.Arbitrary<unknown> = fc.letrec<{ node: unknown }>((tie) => ({
+      node: fc.oneof(
+        { depthSize: "small", maxDepth: 5 },
+        fc.constant(null).map(() => makeUser()),
+        fc.tuple(tie("node")).map(([author]) => {
+          const token = secret();
+          secrets.push(token);
+          return new Post(counter, token, author);
+        }),
+        fc.array(tie("node"), { maxLength: 3 }),
+        fc.dictionary(fc.stringMatching(/^[a-z]{1,5}$/), tie("node"), { maxKeys: 3 }),
+      ),
+    })).node;
+    fc.assert(
+      fc.property(tree, (value) => {
+        secrets.length = 0;
+        const built = value;
+        const outputs = [formatValue(built), formatStruct("Top", { value: built, list: [built] }, new Set())];
+        for (const text of outputs) {
+          for (const token of secrets) expect(text).not.toContain(token);
+        }
+      }),
       { numRuns: 1000 },
     );
   });

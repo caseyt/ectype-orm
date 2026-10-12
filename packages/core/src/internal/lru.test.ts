@@ -43,16 +43,35 @@ describe("LruCache", () => {
     expect(cache.has("a")).toBe(false);
   });
 
-  test("setting an existing key replaces the value, refreshes it and evicts nothing", () => {
+  test("setting an existing key replaces the value and evicts nothing", () => {
     const cache = new LruCache<string, number>(2);
     cache.set("a", 1);
     cache.set("b", 2);
     cache.set("a", 10);
     expect(cache.size).toBe(2);
+    expect(cache.has("b")).toBe(true);
     expect(cache.get("a")).toBe(10);
+  });
+
+  test("setting an existing key makes it the most recently used", () => {
+    // Nothing but the set may refresh "a" here: no get, and has() does not count as a use.
+    const cache = new LruCache<string, number>(2);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("a", 10);
     cache.set("c", 3);
-    expect(cache.has("b")).toBe(false);
     expect(cache.has("a")).toBe(true);
+    expect(cache.has("b")).toBe(false);
+    expect(cache.has("c")).toBe(true);
+  });
+
+  test("setting the most recently used key again keeps the order", () => {
+    const cache = new LruCache<string, number>(2);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("b", 20);
+    cache.set("c", 3);
+    expect([cache.has("a"), cache.get("b"), cache.has("c")]).toEqual([false, 20, true]);
   });
 
   test("delete removes one entry and reports whether it existed", () => {

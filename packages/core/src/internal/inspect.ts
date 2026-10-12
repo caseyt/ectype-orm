@@ -5,6 +5,8 @@
  *
  * @module
  */
+import type { FieldMeta, SchemaMeta } from "../contracts/schema.js";
+import { META } from "../contracts/schema.js";
 
 /**
  * What stands in for the value of a redacted field.
@@ -20,8 +22,22 @@
 export const REDACTED = "**redacted**";
 
 /**
+ * Assigns an own property. A plain `out[key] = value` is wrong for the key `"__proto__"`
+ * (which `JSON.parse` produces as an ordinary own key): it would set the copy's prototype
+ * instead, dropping the key and making the value's properties appear inherited.
+ */
+function setOwn(out: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === "__proto__") {
+    Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+  } else {
+    out[key] = value;
+  }
+}
+
+/**
  * Copies the own enumerable string-keyed properties of `values`, replacing the value of
- * every key in `redacted` with {@link REDACTED}. Key order is kept.
+ * every key in `redacted` with {@link REDACTED}. Key order is kept. The copy is shallow:
+ * nested values are the same objects.
  *
  * @example
  * ```ts
@@ -32,7 +48,7 @@ export const REDACTED = "**redacted**";
 export function redactFields(values: object, redacted: ReadonlySet<string>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(values)) {
-    out[key] = redacted.has(key) ? REDACTED : (values as Record<string, unknown>)[key];
+    setOwn(out, key, redacted.has(key) ? REDACTED : (values as Record<string, unknown>)[key]);
   }
   return out;
 }
@@ -40,6 +56,7 @@ export function redactFields(values: object, redacted: ReadonlySet<string>): Rec
 /**
  * Copies the own enumerable string-keyed properties of `values`, leaving out every key in
  * `redacted`. This is what `toJSON` uses: a redacted value must not be serialised at all.
+ * The copy is shallow; a nested row is serialised by its own `toJSON`.
  *
  * @example
  * ```ts
@@ -50,7 +67,7 @@ export function redactFields(values: object, redacted: ReadonlySet<string>): Rec
 export function omitRedacted(values: object, redacted: ReadonlySet<string>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(values)) {
-    if (!redacted.has(key)) out[key] = (values as Record<string, unknown>)[key];
+    if (!redacted.has(key)) setOwn(out, key, (values as Record<string, unknown>)[key]);
   }
   return out;
 }
@@ -63,6 +80,68 @@ const MAX_ENTRIES = 20;
 const MAX_DEPTH = 3;
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const NOTHING_REDACTED: ReadonlySet<string> = new Set();
+
+// Built-in accessors and methods, captured once, so that formatting a value never runs
+// a method or getter that the value (or its class) defines in their place.
+const dateTime = Date.prototype.getTime;
+const dateIso = Date.prototype.toISOString;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const byteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")?.get as (
+  this: unknown,
+) => number;
+const symbolToString = Symbol.prototype.toString;
+
+/** The value of an own data property; `undefined` for a missing property or an accessor. */
+function ownData(target: object, key: PropertyKey): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  return descriptor === undefined || !("value" in descriptor) ? undefined : descriptor.value;
+}
+
+/** The constructor a value's prototype names, read without running a getter. */
+function constructorOf(value: object): unknown {
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype ? undefined : ownData(proto as object, "constructor");
+}
+
+/** A function's name, read without running a getter; `""` when it has none. */
+function functionName(fn: unknown): string {
+  if (typeof fn !== "function") return "";
+  const name = ownData(fn, "name");
+  return typeof name === "string" ? name : "";
+}
+
+/** The redacted field names per schema metadata object, computed once each. */
+const redactedByMeta = new WeakMap<object, ReadonlySet<string>>();
+
+/**
+ * The names of the redacted fields of a row, found through its class: a schema class
+ * holds its metadata under `META`, and the metadata lists the fields. Anything that is
+ * not a row of a schema has none.
+ */
+function redactedFieldsOf(ctor: unknown): ReadonlySet<string> {
+  // A class extends the base that `Schema()` returned, so the metadata is an own static
+  // of an ancestor: walk the constructor chain, reading data properties only.
+  let meta: unknown;
+  for (let c: unknown = ctor; typeof c === "function" && meta === undefined; c = Object.getPrototypeOf(c)) {
+    meta = ownData(c, META);
+  }
+  if (typeof meta !== "object" || meta === null) return NOTHING_REDACTED;
+  const known = redactedByMeta.get(meta);
+  if (known !== undefined) return known;
+  const names = new Set<string>();
+  const fields = ownData(meta, "fields" satisfies keyof SchemaMeta);
+  if (Array.isArray(fields)) {
+    for (const field of fields as readonly unknown[]) {
+      if (typeof field !== "object" || field === null) continue;
+      const name = ownData(field, "name" satisfies keyof FieldMeta);
+      if (ownData(field, "redact" satisfies keyof FieldMeta) === true && typeof name === "string")
+        names.add(name);
+    }
+  }
+  redactedByMeta.set(meta, names);
+  return names;
+}
 
 function formatPrimitive(value: string | number | bigint | boolean | symbol | undefined): string {
   switch (typeof value) {
@@ -75,43 +154,69 @@ function formatPrimitive(value: string | number | bigint | boolean | symbol | un
     case "bigint":
       return `${value}n`;
     case "symbol":
-      return value.toString();
+      return symbolToString.call(value);
     default:
       return String(value);
   }
 }
 
+/** One `key: value` entry, without reading a redacted value or running an accessor. */
+function formatEntry(
+  target: object,
+  key: string,
+  redacted: ReadonlySet<string>,
+  depth: number,
+  seen: Set<object>,
+): string {
+  const label = IDENTIFIER.test(key) ? key : JSON.stringify(key);
+  if (redacted.has(key)) return `${label}: ${REDACTED}`;
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  if (descriptor === undefined) return `${label}: undefined`;
+  if (!("value" in descriptor)) return `${label}: [Getter]`;
+  return `${label}: ${format(descriptor.value, depth, seen)}`;
+}
+
 function format(value: unknown, depth: number, seen: Set<object>): string {
   if (value === null) return "null";
-  if (typeof value === "function") return value.name === "" ? "[Function]" : `[Function: ${value.name}]`;
+  if (typeof value === "function") {
+    const name = functionName(value);
+    return name === "" ? "[Function]" : `[Function: ${name}]`;
+  }
   if (typeof value !== "object") {
     return formatPrimitive(value as string | number | bigint | boolean | symbol | undefined);
   }
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
-  if (value instanceof Uint8Array) return `<${value.constructor.name} ${value.byteLength} bytes>`;
+  if (value instanceof Date) {
+    return Number.isNaN(dateTime.call(value)) ? "Invalid Date" : dateIso.call(value);
+  }
+  const ctor = constructorOf(value);
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return `<${functionName(ctor) || "TypedArray"} ${byteLength.call(value)} bytes>`;
+  }
   if (seen.has(value)) return "[Circular]";
   if (Array.isArray(value)) {
     if (depth >= MAX_DEPTH) return "[Array]";
     seen.add(value);
     const parts: string[] = [];
-    for (let i = 0; i < value.length && i < MAX_ENTRIES; i++) parts.push(format(value[i], depth + 1, seen));
+    for (let i = 0; i < value.length && i < MAX_ENTRIES; i++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, i);
+      if (descriptor === undefined) parts.push("undefined");
+      else if (!("value" in descriptor)) parts.push("[Getter]");
+      else parts.push(format(descriptor.value, depth + 1, seen));
+    }
     if (value.length > MAX_ENTRIES) parts.push(`… ${value.length - MAX_ENTRIES} more`);
     seen.delete(value);
     return `[${parts.join(", ")}]`;
   }
   const proto: unknown = Object.getPrototypeOf(value);
-  const name =
-    proto === null || proto === Object.prototype
-      ? ""
-      : `${(proto as { constructor?: { name?: string } }).constructor?.name ?? "Object"} `;
+  const name = proto === null || proto === Object.prototype ? "" : `${functionName(ctor) || "Object"} `;
   if (depth >= MAX_DEPTH) return name === "" ? "[Object]" : `[${name.trimEnd()}]`;
+  // A nested row hides its own redacted fields, wherever it sits.
+  const redacted = redactedFieldsOf(ctor);
   seen.add(value);
   const keys = Object.keys(value);
   const parts: string[] = [];
   for (let i = 0; i < keys.length && i < MAX_ENTRIES; i++) {
-    const key = keys[i] as string;
-    const label = IDENTIFIER.test(key) ? key : JSON.stringify(key);
-    parts.push(`${label}: ${format((value as Record<string, unknown>)[key], depth + 1, seen)}`);
+    parts.push(formatEntry(value, keys[i] as string, redacted, depth + 1, seen));
   }
   if (keys.length > MAX_ENTRIES) parts.push(`… ${keys.length - MAX_ENTRIES} more`);
   seen.delete(value);
@@ -122,10 +227,18 @@ function format(value: unknown, depth: number, seen: Set<object>): string {
  * Renders any value as one line of text for an error message or a log line: strings are
  * quoted and cut at 100 characters, dates are ISO strings, binary data is summarised,
  * arrays and objects show at most 20 entries and 3 levels, and cycles are marked.
- * It never throws (a value whose getters throw renders as `[unprintable]`) and never
- * calls a `toString`, `toJSON` or inspect method that the value defines.
  *
- * It does not redact. Redact first ({@link redactFields}), or use {@link formatStruct}.
+ * It runs no code of the value: no `toString`, `toJSON`, `valueOf` or inspect method, no
+ * overridden `toISOString`, and no getter (an accessor property shows as `[Getter]`).
+ * The one exception is a `Proxy`, whose traps necessarily run; if one throws, the result
+ * is `[unprintable]`. It never throws.
+ *
+ * **Redaction.** A row of a schema, at any depth, has the values of its redacted fields
+ * replaced by `**redacted**`: the row's class leads to the schema metadata, which names
+ * them. A value that is not a row is printed as it is, so a *plain object* holding
+ * field values (a changeset's `changes`, a params object) is NOT redacted by this
+ * function: format it with {@link formatStruct} and the schema's redacted names, or
+ * redact it first with {@link redactFields}.
  *
  * @example
  * ```ts
@@ -139,14 +252,19 @@ export function formatValue(value: unknown): string {
   try {
     return format(value, 0, new Set());
   } catch {
-    // A getter or a Proxy trap of the value threw. An error message must still be produced.
+    // A Proxy trap threw. An error message must still be produced.
     return "[unprintable]";
   }
 }
 
 /**
- * Renders a named record of fields, such as a row or a changeset, with the values of the
- * redacted keys replaced by `**redacted**`.
+ * Renders a named record of fields, such as a row or a changeset's changes, with the
+ * values of the keys in `redacted` replaced by `**redacted**`. Those values are not
+ * read at all. Nested values are formatted as by {@link formatValue}, so a row nested
+ * inside (a preloaded association, a changeset's data) hides its own redacted fields.
+ *
+ * When `values` is itself a row of a schema, its redacted fields are hidden whether or
+ * not `redacted` names them.
  *
  * Ecto equivalent: `inspect/2` on a schema struct, which honours `redact: true`.
  *
@@ -158,21 +276,15 @@ export function formatValue(value: unknown): string {
  */
 export function formatStruct(name: string, values: object, redacted: ReadonlySet<string>): string {
   const parts: string[] = [];
-  const seen = new Set<object>([values]);
-  for (const key of Object.keys(values)) {
-    const label = IDENTIFIER.test(key) ? key : JSON.stringify(key);
-    let text: string;
-    if (redacted.has(key)) {
-      // The value of a redacted field is not even read.
-      text = REDACTED;
-    } else {
-      try {
-        text = format((values as Record<string, unknown>)[key], 1, seen);
-      } catch {
-        text = "[unprintable]";
-      }
+  try {
+    const own = redactedFieldsOf(constructorOf(values));
+    const seen = new Set<object>([values]);
+    for (const key of Object.keys(values)) {
+      // Hidden when either the caller or the row's own schema says so.
+      parts.push(formatEntry(values, key, own.has(key) ? own : redacted, 1, seen));
     }
-    parts.push(`${label}: ${text}`);
+  } catch {
+    return `${name} [unprintable]`;
   }
   return parts.length === 0 ? `${name} {}` : `${name} { ${parts.join(", ")} }`;
 }
