@@ -20,11 +20,13 @@ services:
     # Durability is irrelevant for throwaway test data; these settings make DDL-heavy suites faster.
     command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=200"]
     ports:
-      - "54329:5432"
+      # Loopback only: the credentials are well known.
+      - "127.0.0.1:54329:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ectype -d ectype_dev"]
+      # Checks over TCP: during initialisation a temporary server answers on the socket only.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ectype -d ectype_dev"]
       interval: 1s
       timeout: 5s
       retries: 60
@@ -36,7 +38,7 @@ services:
       MYSQL_ROOT_PASSWORD: ectype
       MYSQL_DATABASE: ectype_dev
     ports:
-      - "33069:3306"
+      - "127.0.0.1:33069:3306"
     tmpfs:
       - /var/lib/mysql
     healthcheck:
