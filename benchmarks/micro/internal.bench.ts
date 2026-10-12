@@ -32,10 +32,13 @@ const {
 const KINDS = ["query", "table", "bool", "binary", "column", "param", "order", "column", "param"];
 const IDENTIFIERS = ["users", "u", "age", "inserted_at"];
 
+// A changing input, so that the JIT cannot fold a call into a constant.
+let counter = 0;
+
 group("internal/hash", () => {
-  bench("hashInt", () => doNotOptimize(hashInt(HASH_SEED, 12345)));
+  bench("hashInt", () => doNotOptimize(hashInt(HASH_SEED, counter++)));
   bench('hashString, 11 characters ("inserted_at")', () =>
-    doNotOptimize(hashString(HASH_SEED, "inserted_at")),
+    doNotOptimize(hashString(counter++, "inserted_at")),
   );
   bench("shape of a 3-clause query: 9 kinds, 4 identifiers, 3 ints", () => {
     let hash = HASH_SEED;
@@ -51,17 +54,59 @@ group("internal/hash", () => {
 // --- lru: the plan cache's second level holds 1,000 plans keyed by shape hash ---
 const full = new LruCache<number, object>(1000);
 for (let i = 0; i < 1000; i++) full.set(hashInt(HASH_SEED, i), { i });
-const hitKey = hashInt(HASH_SEED, 500);
+// Hits rotate over 64 keys, as a server cycling through its hot queries would.
+const hitKeys = Array.from({ length: 64 }, (_, i) => hashInt(HASH_SEED, i * 15));
 const missKey = hashInt(HASH_SEED, 5000);
 const plan = { sql: "select 1" };
+let turn = 0;
 let next = 1000;
 
+/**
+ * The design that LruCache does NOT use, kept here as the baseline that justifies the
+ * linked list: a Map in insertion order, where a hit deletes and re-inserts the entry.
+ */
+class InsertionOrderLru<K, V> {
+  readonly #entries = new Map<K, V>();
+  constructor(readonly capacity: number) {}
+  get(key: K): V | undefined {
+    const value = this.#entries.get(key);
+    if (value === undefined) return undefined;
+    this.#entries.delete(key);
+    this.#entries.set(key, value);
+    return value;
+  }
+  set(key: K, value: V): void {
+    if (!this.#entries.delete(key) && this.#entries.size >= this.capacity) {
+      for (const oldest of this.#entries.keys()) {
+        this.#entries.delete(oldest);
+        break;
+      }
+    }
+    this.#entries.set(key, value);
+  }
+}
+const baseline = new InsertionOrderLru<number, object>(1000);
+for (let i = 0; i < 1000; i++) baseline.set(hashInt(HASH_SEED, i), { i });
+let baselineTurn = 0;
+let baselineNext = 1000;
+
 group("internal/lru (1,000 entries, full)", () => {
-  bench("get, hit", () => doNotOptimize(full.get(hitKey)));
+  bench("get, hit", () => doNotOptimize(full.get(hitKeys[turn++ & 63] as number)));
+  bench("get, hit on the most recently used key", () => doNotOptimize(full.get(hitKeys[0] as number)));
   bench("get, miss", () => doNotOptimize(full.get(missKey)));
-  bench("has", () => doNotOptimize(full.has(hitKey)));
-  bench("set, existing key", () => full.set(hitKey, plan));
+  bench("has", () => doNotOptimize(full.has(hitKeys[0] as number)));
+  bench("set, existing key", () => full.set(hitKeys[turn++ & 63] as number, plan));
   bench("set, new key (evicts the oldest)", () => full.set(hashInt(HASH_SEED, next++), plan));
+});
+
+group("baseline, not used: insertion-order Map LRU (1,000 entries, full)", () => {
+  bench("baseline get, hit", () => doNotOptimize(baseline.get(hitKeys[baselineTurn++ & 63] as number)));
+  bench("baseline get, hit on the most recently used key", () =>
+    doNotOptimize(baseline.get(hitKeys[0] as number)),
+  );
+  bench("baseline set, new key (evicts the oldest)", () =>
+    baseline.set(hashInt(HASH_SEED, baselineNext++), plan),
+  );
 });
 
 // --- naming: memoised, so the steady state is one Map lookup ---
