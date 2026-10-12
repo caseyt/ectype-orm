@@ -1,0 +1,19 @@
+{
+  "name": "@ectype/docs-site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ectype documentation site (VitePress).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview"
+  },
+  "dependencies": {
+    "ectype": "workspace:*"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}
