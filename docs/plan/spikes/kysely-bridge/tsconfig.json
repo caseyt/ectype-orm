@@ -1,0 +1,13 @@
+{
+  // Type-checked by `pnpm typecheck` (referenced from the root tsconfig.json), so a Kysely
+  // upgrade that breaks the bridge technique fails CI. The scripts themselves need the
+  // Compose Postgres and are run by hand: see README.md.
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./.tsbuild",
+    "tsBuildInfoFile": "./.tsbuild/tsconfig.tsbuildinfo",
+    "paths": {}
+  },
+  "include": ["*.ts"]
+}
