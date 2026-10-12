@@ -6,27 +6,57 @@
 // That happened once in this repository. So: strict mode must stay on, and no exclusion
 // may be committed. If a dependency is too new, pin the newest release that passes.
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const file = new URL("../pnpm-workspace.yaml", import.meta.url);
-// Comments are ignored, so the settings can be discussed in the file itself.
-const lines = readFileSync(file, "utf8")
-  .split("\n")
-  .map((line) => line.replace(/#.*$/, "").trimEnd());
+// No YAML parser is resolvable from the workspace root, and adding one for this check is
+// not worth a dependency. The scan below reads `key: value` lines, with the key bare,
+// single-quoted or double-quoted and at any indentation, and errs on the strict side.
+const KEY_LINE = /^\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_.-]+))\s*:\s*(.*)$/;
 
-const problems = [];
-if (lines.some((line) => /^\s*minimumReleaseAgeExclude\s*:/.test(line))) {
-  problems.push("minimumReleaseAgeExclude is present: no package may be exempt from the release-age policy.");
-}
-if (!lines.some((line) => /^minimumReleaseAgeStrict:\s*true$/.test(line))) {
-  problems.push("minimumReleaseAgeStrict: true is missing: without it pnpm adds exclusions by itself.");
-}
-for (const line of lines) {
-  const match = /^minimumReleaseAge:\s*(\S+)$/.exec(line);
-  if (match !== null) problems.push(`minimumReleaseAge is overridden (${match[1]}): keep pnpm's default.`);
+/**
+ * Returns the `key: value` pairs of a YAML document, one per line that has a key.
+ * Comments are dropped, so the settings can be discussed in the file itself.
+ */
+export function readEntries(yaml) {
+  const entries = [];
+  for (const raw of yaml.split(/\r?\n/)) {
+    const match = KEY_LINE.exec(raw.replace(/\s+#.*$|^#.*$/, ""));
+    if (match === null) continue;
+    entries.push({ key: match[1] ?? match[2] ?? match[3], value: match[4].trim() });
+  }
+  return entries;
 }
 
-if (problems.length > 0) {
-  console.error(`pnpm-workspace.yaml:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
-  process.exit(1);
+/** Returns one message per way `yaml` (the text of pnpm-workspace.yaml) weakens the policy. */
+export function findPolicyProblems(yaml) {
+  const entries = readEntries(yaml);
+  const problems = [];
+  if (entries.some(({ key }) => key === "minimumReleaseAgeExclude")) {
+    problems.push(
+      "minimumReleaseAgeExclude is present: no package may be exempt from the release-age policy.",
+    );
+  }
+  const strict = entries.filter(({ key }) => key === "minimumReleaseAgeStrict");
+  if (strict.length !== 1 || strict[0].value !== "true") {
+    problems.push(
+      "minimumReleaseAgeStrict must be set exactly once, to an unquoted `true`: without it pnpm adds exclusions by itself.",
+    );
+  }
+  for (const { key, value } of entries) {
+    if (key === "minimumReleaseAge") {
+      problems.push(`minimumReleaseAge is overridden (${value}): keep pnpm's default.`);
+    }
+  }
+  return problems;
 }
-console.log("ok: pnpm-workspace.yaml keeps the release-age policy strict, with no exclusions");
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const problems = findPolicyProblems(
+    readFileSync(new URL("../pnpm-workspace.yaml", import.meta.url), "utf8"),
+  );
+  if (problems.length > 0) {
+    console.error(`pnpm-workspace.yaml:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
+    process.exit(1);
+  }
+  console.log("ok: pnpm-workspace.yaml keeps the release-age policy strict, with no exclusions");
+}

@@ -17,7 +17,7 @@
     "typecheck": "tsc -b && pnpm typecheck:spikes",
     "typecheck:spikes": "tsc -p tsconfig.spikes.json && node scripts/check-rejected-spike.mjs",
     "test": "pnpm test:unit && pnpm test:types",
-    "test:unit": "vitest run --project '*:unit' --coverage && pnpm --filter @ectype/benchmarks run test",
+    "test:unit": "vitest run --project '*:unit' --coverage && pnpm --filter @ectype/benchmarks run test && node --test \"scripts/*.test.mjs\"",
     "test:types": "vitest run --project '*:types'",
     "test:integration": "vitest run --project '*:integration'",
     "test:watch": "vitest --project '*:unit'",
