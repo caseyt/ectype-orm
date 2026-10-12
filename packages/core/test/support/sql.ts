@@ -1,4 +1,4 @@
-import { type Assertion, expect } from "vitest";
+import { expect } from "vitest";
 
 /** Anything that carries compiled SQL: a bare string, or an object with `sql` and optional `params`. */
 export type CompiledSql = string | { readonly sql: string; readonly params?: readonly unknown[] };
@@ -8,6 +8,9 @@ export interface NormalizedSql {
   readonly sql: string;
   readonly params: readonly unknown[];
 }
+
+/** The Vitest assertion object returned by {@link expectSql}. */
+export type SqlAssertion = ReturnType<typeof expect<NormalizedSql>>;
 
 const QUOTES = new Set(["'", '"', "`"]);
 const WHITESPACE = /\s/;
@@ -65,7 +68,7 @@ export function normalizeSql(sql: string): string {
  * `);
  * ```
  */
-export function expectSql(compiled: CompiledSql): Assertion<NormalizedSql> {
+export function expectSql(compiled: CompiledSql): SqlAssertion {
   const sql = typeof compiled === "string" ? compiled : compiled.sql;
   const params = typeof compiled === "string" ? [] : (compiled.params ?? []);
   return expect<NormalizedSql>({ sql: normalizeSql(sql), params });

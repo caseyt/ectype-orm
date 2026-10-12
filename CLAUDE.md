@@ -76,7 +76,7 @@ Budgets: build a 3-clause query < 1.5 µs; compile with plan-cache hit < 0.3 µs
 
 ## Toolchain constraints
 
-The toolchain must run on Node 20 (decision D14), which holds several tools below their
-latest major: Kysely 0.28, Vitest 4 + Vite 6, `@changesets/cli` 2, TypeScript 6 (tsup's
-declaration bundler does not work with TypeScript 7). See `docs/plan/status/01.md` before
-bumping any of them.
+Node >= 22 (decision D14) and pnpm 12; use the versions pinned in `.nvmrc` and
+`"packageManager"`. TypeScript is held at 6 because tsup's declaration bundler does not
+work with TypeScript 7, and Kysely is pinned to one minor (`~0.29`) on purpose. See
+`docs/plan/status/01.md` before bumping either.

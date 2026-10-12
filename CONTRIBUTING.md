@@ -7,8 +7,9 @@ protocol and the pull request and review loop that every change follows.
 
 ## Prerequisites
 
-- Node.js >= 20 (`.nvmrc` pins 20; CI also runs Node 22)
-- pnpm 8.15.5 (pinned in `package.json` `"packageManager"`; `corepack enable` picks it up)
+- Node.js >= 22 (`.nvmrc` pins 22; CI also runs Node 24)
+- pnpm 12.11.2 (pinned in `package.json` `"packageManager"`; pnpm 9 and newer, and Corepack, switch
+  to the pinned version automatically)
 - Docker with Compose v2, for the test databases
 
 ## Everyday commands
@@ -109,11 +110,11 @@ that it still fails with TS7022 and TS2506.
 
 ### Dependency versions
 
-Runtime support starts at Node 20 (decision D14), and the toolchain must run on it, so a
-few tools are deliberately held below their latest major: Kysely `0.28` (0.29 needs Node
-22), Vitest `4` with Vite `6` (Vitest 5 and Vite 7+ need newer Node), `@changesets/cli` `2`
-(3 needs Node 22), TypeScript `6` (tsup cannot bundle declarations with TypeScript 7).
-`docs/plan/status/01.md` has the details. Do not bump these without checking Node 20.
+Runtime support starts at Node 22 (decision D14) and every tool is on its current stable
+release, with one exception: TypeScript is held at `6` because tsup's declaration bundler
+does not work with TypeScript 7. `docs/plan/status/01.md` has the details. Kysely is
+pinned to one minor (`~0.29`), because the compiler in step 10 depends on its internals;
+bump it deliberately, not as routine maintenance.
 
 ## Pull requests
 
@@ -135,7 +136,7 @@ stored in the repo):
 - Require a pull request before merging, with **1 approving review**; dismiss stale
   approvals when new commits are pushed.
 - Require status checks to pass, branch up to date: require the **`ci`** check, which is
-  green only when every CI job (`lint`, `typecheck`, `unit+types` on Node 20 and 22,
+  green only when every CI job (`lint`, `typecheck`, `unit+types` on Node 22 and 24,
   `integration`, `integration (tier 2)`, `build+publint+attw`, `docs:build`) is green.
 - Allow squash merging only; delete head branches automatically.
 - No force pushes and no deletion of `main`.

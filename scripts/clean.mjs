@@ -8,7 +8,9 @@ const projects = [
   ".",
   "benchmarks",
   "docs/site",
-  ...readdirSync(join(root, "packages")).map((name) => join("packages", name)),
+  ...readdirSync(join(root, "packages"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join("packages", entry.name)),
 ];
 const targets = ["dist", ".tsbuild", "coverage", ".vitepress/dist", ".vitepress/cache"];
 

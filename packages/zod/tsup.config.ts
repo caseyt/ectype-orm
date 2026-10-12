@@ -4,7 +4,7 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm", "cjs"],
-  target: "node20",
+  target: "node22",
   platform: "node",
   tsconfig: "tsconfig.build.json",
   // tsup 8 injects the deprecated `baseUrl` option into its declaration build, which

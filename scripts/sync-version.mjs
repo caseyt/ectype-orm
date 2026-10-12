@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 const packagesDir = fileURLToPath(new URL("../packages", import.meta.url));
 const pattern = /^export const VERSION: string = "[^"]*";$/m;
 
-for (const name of readdirSync(packagesDir)) {
+const packages = readdirSync(packagesDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name);
+
+for (const name of packages) {
   const { version } = JSON.parse(readFileSync(join(packagesDir, name, "package.json"), "utf8"));
   const indexPath = join(packagesDir, name, "src", "index.ts");
   const source = readFileSync(indexPath, "utf8");

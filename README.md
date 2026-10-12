@@ -19,7 +19,7 @@ code generation.
 
 ## Development
 
-Requires Node.js 20 or newer, pnpm 8 and Docker.
+Requires Node.js 22 or newer, pnpm 12 and Docker.
 
 ```sh
 pnpm i
