@@ -96,7 +96,8 @@ describe("cleanup when a test times out (postgres)", () => {
     expect(observed.database).toMatch(new RegExp(`^ectype_leak_timeout_${currentRunId()}_`));
     // ...and its query did not end by itself before the timeout: it was cut off by the drop.
     // (`undefined`: the driver never settled the abandoned query, which is fine too.)
-    expect(observed.settledAfterMs ?? TIMEOUT_MS).toBeGreaterThanOrEqual(TIMEOUT_MS);
+    // The margin absorbs scheduling jitter: this clock starts a moment after Vitest's timer.
+    expect(observed.settledAfterMs ?? TIMEOUT_MS).toBeGreaterThanOrEqual(TIMEOUT_MS * 0.8);
     expect(observed.settledAfterMs ?? 0).toBeLessThan(30_000);
 
     await withDatabase("postgres", async (other) => {
