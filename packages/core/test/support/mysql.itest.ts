@@ -24,7 +24,7 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
       expect(await truncateAll(db)).toEqual([]);
       await db.exec(`
         CREATE TABLE parents (id bigint PRIMARY KEY AUTO_INCREMENT, name text);
-        CREATE TABLE children (id bigint PRIMARY KEY AUTO_INCREMENT, parent_id bigint NOT NULL REFERENCES parents (id),
+        CREATE TABLE children (id bigint PRIMARY KEY AUTO_INCREMENT, parent_id bigint NOT NULL,
           FOREIGN KEY (parent_id) REFERENCES parents (id));
         CREATE TABLE keep (id int);
         INSERT INTO parents (name) VALUES ('p');

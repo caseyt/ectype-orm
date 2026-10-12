@@ -54,7 +54,7 @@ CREATE INDEX comments_author_id_index ON comments (author_id);
 -- many_to_many: posts <-> tags through posts_tags
 CREATE TABLE tags (
   id   bigserial PRIMARY KEY,
-  name text NOT NULL UNIQUE
+  name text UNIQUE
 );
 
 CREATE TABLE posts_tags (
