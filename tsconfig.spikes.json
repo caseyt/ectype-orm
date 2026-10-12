@@ -1,0 +1,15 @@
+{
+  // Type-checks the accepted design spike for decision D1 (see docs/adr/0001-schema-classes.md).
+  // docs/plan/spikes/rejected-const-thunks.ts intentionally does not compile and must never be
+  // listed here; scripts/check-rejected-spike.mjs asserts that it still fails.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "paths": {}
+  },
+  "files": ["docs/plan/spikes/schema-typing.ts"]
+}

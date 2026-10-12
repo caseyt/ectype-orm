@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.tsbuild/
+*.tsbuildinfo
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# Vitest typecheck scratch files
+tsconfig.vitest-temp.json
+
+# VitePress
+docs/site/.vitepress/cache/
+docs/site/.vitepress/dist/
+
+# Benchmark results are written per run; step 19 decides which are committed.
+benchmarks/results/*.json
