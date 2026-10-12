@@ -1,0 +1,30 @@
+# Question 3: execution
+database: ectype_spike_p51556_tmt2kj_64d722f2 on 127.0.0.1:54329
+server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+node:     v22.23.1
+
+cached plan, many executions, pooled connections
+  ok  25 concurrent executions on a pool of 4 returned the expected 10 rows each
+  ok  the pool never grew past its limit
+
+transaction: commit
+  ok  not visible to another connection before commit
+  ok  same backend and same transaction id throughout
+  ok  visible after commit
+
+transaction: rollback
+  ok  visible inside the transaction
+  ok  gone after rollback
+
+savepoints on the same connection
+  ok  A and C committed, B and D rolled back to their savepoints
+
+an error inside a transaction keeps the driver error, and the connection survives
+  ok  the pg error code is intact (23502 not_null_violation)
+  ok  and so are column and table
+  ok  the same connection runs the cached plan after rollback
+
+no connection leaked
+  ok  every pooled connection is idle
+
+Question 3: cached plans, transactions and savepoints all run through the driver API alone.

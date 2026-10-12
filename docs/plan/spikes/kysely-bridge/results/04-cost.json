@@ -1,0 +1,212 @@
+{
+  "date": "2026-10-12T17:46:16.822Z",
+  "quick": false,
+  "gitSha": "07f845fad6802a7d7cbd3617ad5ac3d5ec2144c8",
+  "gitDirty": false,
+  "node": "v22.23.1",
+  "kysely": "0.29.6",
+  "pg": "8.23.1",
+  "server": "PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M2",
+    "cores": 8,
+    "memoryBytes": 17179869184
+  },
+  "cpuNsPerCall": [
+    {
+      "name": "lower: AST -> Kysely nodes",
+      "avg": 2264.24466281468,
+      "p50": 2254.0283203125,
+      "p75": 2265.431884765625,
+      "p99": 2383.036376953125,
+      "min": 2230.77392578125,
+      "samples": 72
+    },
+    {
+      "name": "Kysely compile + slot recovery (pre-lowered tree)",
+      "avg": 3312.8621877034507,
+      "p50": 3292.6025390625,
+      "p75": 3314.646240234375,
+      "p99": 3436.02490234375,
+      "min": 3271.7490234375,
+      "samples": 48
+    },
+    {
+      "name": "cold compile: lower + compile + slots",
+      "avg": 5700.036331741898,
+      "p50": 5668.243408203125,
+      "p75": 5722.707275390625,
+      "p99": 5901.947021484375,
+      "min": 5634.073974609375,
+      "samples": 27
+    },
+    {
+      "name": "for scale: hand-written string emitter, same query",
+      "avg": 1967.347159249442,
+      "p50": 1943.49169921875,
+      "p75": 1959.818359375,
+      "p99": 2320.98388671875,
+      "min": 1919.708251953125,
+      "samples": 84
+    },
+    {
+      "name": "cold compile: CTE + join",
+      "avg": 7784.752197265625,
+      "p50": 7750.65087890625,
+      "p75": 7808.766845703125,
+      "p99": 7906.097412109375,
+      "min": 7706.5634765625,
+      "samples": 18
+    },
+    {
+      "name": "cold compile: INSERT ... ON CONFLICT ... RETURNING",
+      "avg": 4554.321016199462,
+      "p50": 4505.961181640625,
+      "p75": 4600.5859375,
+      "p99": 4746.938232421875,
+      "min": 4470.3876953125,
+      "samples": 34
+    },
+    {
+      "name": "cold compile: UPDATE ... RETURNING",
+      "avg": 4713.830522017045,
+      "p50": 4707.427978515625,
+      "p75": 4723.622802734375,
+      "p99": 4756.0322265625,
+      "min": 4677.5615234375,
+      "samples": 33
+    },
+    {
+      "name": "cold compile: SELECT 10 columns WHERE id = $1",
+      "avg": 7205.7713623046875,
+      "p50": 7123.76904296875,
+      "p75": 7311.63525390625,
+      "p99": 7422.576904296875,
+      "min": 7096.150634765625,
+      "samples": 20
+    },
+    {
+      "name": "bindParams, 2 slots",
+      "avg": 9.708845154773755,
+      "p50": 9.257080078125,
+      "p75": 9.368896484375,
+      "p99": 27.5673828125,
+      "min": 9.0126953125,
+      "samples": 17517
+    },
+    {
+      "name": "plan lookup (WeakMap) + bindParams + CompiledQuery object",
+      "avg": 19.527542830085036,
+      "p50": 18.47314453125,
+      "p75": 18.635986328125,
+      "p99": 38.472412109375,
+      "min": 18.17822265625,
+      "samples": 8761
+    },
+    {
+      "name": "new PostgresQueryCompiler() (must be reused, not per query)",
+      "avg": 256.76519719735467,
+      "p50": 258.005615234375,
+      "p75": 264.85205078125,
+      "p99": 297.017333984375,
+      "min": 237.457275390625,
+      "samples": 658
+    },
+    {
+      "name": "ValueNode.create(x) (factory: object + Object.freeze)",
+      "avg": 25.097592506738266,
+      "p50": 24.4140625,
+      "p75": 24.505615234375,
+      "p99": 38.584228515625,
+      "min": 24.23095703125,
+      "samples": 6829
+    },
+    {
+      "name": "{ kind: 'ValueNode', value: x } (literal, not frozen)",
+      "avg": 1.4858857730736992,
+      "p50": 1.3427734375,
+      "p75": 1.413818359375,
+      "p99": 2.471923828125,
+      "min": 1.2001953125,
+      "samples": 108039
+    },
+    {
+      "name": "stub client directly: connect + query + release",
+      "avg": 120.7707001185974,
+      "p50": 116.2822265625,
+      "p75": 126.03759765625,
+      "p99": 150.075439453125,
+      "min": 111.43994140625,
+      "samples": 1413
+    },
+    {
+      "name": "through PostgresDriver: acquire + executeQuery + release",
+      "avg": 293.437702192064,
+      "p50": 295.145751953125,
+      "p75": 300.262451171875,
+      "p99": 336.52734375,
+      "min": 273.01025390625,
+      "samples": 582
+    }
+  ],
+  "executionAgainstPostgres": [
+    {
+      "rows": 1,
+      "mode": "pool checkout per call",
+      "rounds": 40,
+      "callsPerRound": 1500,
+      "rawUs": 343.04819433333336,
+      "bridgeUs": 341.55665266666665,
+      "overheadPct": {
+        "p25": -1.7290564595505016,
+        "p50": 0.46684053272095793,
+        "p75": 1.8825037560342595
+      },
+      "differenceUs": 1.6137360000000172
+    },
+    {
+      "rows": 1,
+      "mode": "held connection",
+      "rounds": 40,
+      "callsPerRound": 1500,
+      "rawUs": 342.1490693333334,
+      "bridgeUs": 340.320389,
+      "overheadPct": {
+        "p25": -1.582076322087464,
+        "p50": -0.4258408778564149,
+        "p75": 1.5021986536701337
+      },
+      "differenceUs": -1.5053193333333752
+    },
+    {
+      "rows": 1000,
+      "mode": "pool checkout per call",
+      "rounds": 40,
+      "callsPerRound": 150,
+      "rawUs": 2415.2794433333333,
+      "bridgeUs": 2426.3276400000004,
+      "overheadPct": {
+        "p25": -1.499879025235018,
+        "p50": 0.2676074442236165,
+        "p75": 3.0832798409129056
+      },
+      "differenceUs": 6.506250000000136
+    },
+    {
+      "rows": 1000,
+      "mode": "held connection",
+      "rounds": 40,
+      "callsPerRound": 150,
+      "rawUs": 2404.94708,
+      "bridgeUs": 2398.1543066666663,
+      "overheadPct": {
+        "p25": -3.056344218228588,
+        "p50": -0.6991238375718023,
+        "p75": 3.573867295076022
+      },
+      "differenceUs": -16.629026666666732
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+# Question 2: parameter slots
+database: ectype_spike_p51554_tmt2ki_305a27b3 on 127.0.0.1:54329
+server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+node:     v22.23.1
+
+Postgres: positional $n, out of order, repeated, named, list
+  ok  sql
+  ok  slots are in placeholder order
+  ok  bindParams
+  ok  a missing named parameter is an error, not undefined
+
+one cached plan, executed with different values against Postgres
+  ok  maxAge=40 minAge=18 ids[60] -> 30 rows
+  ok  maxAge=64 minAge=0 ids[3] -> 3 rows
+  ok  maxAge=30 minAge=0 ids[0] -> 0 rows
+  ok  maxAge=22 minAge=16 ids[12] -> 2 rows
+  ok  maxAge=50 minAge=45 ids[30] -> 2 rows
+
+list length does not change the Postgres SQL (one plan for every length)
+  ok  lengths 0, 1, 7 and 500 compile to identical SQL
+
+a cached plan bound with new values equals a cold compile with those values
+  ok  500 rounds x 3 statements x 3 dialects
+
+MySQL and SQLite: `?` placeholders, lists expanded (compile only, no database)
+  ok  mysql sql
+  ok  mysql slots
+  ok  mysql one slot per ?
+  ok  mysql bindParams
+  ok  mysql: a list of another length is another SQL text (length belongs in the cache key)
+  ok  sqlite sql
+  ok  sqlite slots
+  ok  sqlite one slot per ?
+  ok  sqlite bindParams
+  ok  sqlite: a list of another length is another SQL text (length belongs in the cache key)
+
+a value that is not a slot cannot reach the parameters unnoticed
+  ok  compileNode rejects it
+
+Question 2: parameter order is recovered exactly, for $n and for ?, including arrays.
