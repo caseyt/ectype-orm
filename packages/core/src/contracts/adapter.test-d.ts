@@ -95,6 +95,7 @@ const fake: Adapter = {
   capabilities,
   compile: () => plan,
   compileFragment: () => plan,
+  compileExplain: () => plan,
   compileInsert: () => plan,
   compileUpdate: () => plan,
   compileDelete: () => plan,
@@ -282,7 +283,7 @@ describe("CompiledQuery and OutputPlan", () => {
       keys: ["id", "author", "pair"],
       values: [
         { kind: "value", alias: "c0", type: undefined },
-        { kind: "row", meta, aliases: ["c1", "c2"], preloads: [] },
+        { kind: "row", meta, aliases: ["c1", "c2"], nullable: false, preloads: [] },
         { kind: "tuple", items: [{ kind: "value", alias: "c3", type: undefined }] },
       ],
     };
@@ -456,9 +457,15 @@ describe("what steps 08 to 17 need from the contract", () => {
     const posts: OutputPreload = {
       assoc: "posts",
       cardinality: "many",
-      row: { kind: "row", meta, aliases: ["c2", "c3"], preloads: [] },
+      row: { kind: "row", meta, aliases: ["c2", "c3"], nullable: false, preloads: [] },
     };
-    const users: OutputPlan = { kind: "row", meta, aliases: ["c0", "c1"], preloads: [posts] };
+    const users: OutputPlan = {
+      kind: "row",
+      meta,
+      aliases: ["c0", "c1"],
+      nullable: false,
+      preloads: [posts],
+    };
     if (users.kind === "row") {
       const create = users.meta.createWith(users.preloads.map((preload) => preload.assoc));
       expectTypeOf(create).toEqualTypeOf<
@@ -468,6 +475,31 @@ describe("what steps 08 to 17 need from the contract", () => {
     // @ts-expect-error not a cardinality
     const bad: OutputPreload = { ...posts, cardinality: "several" };
     void bad;
+  });
+
+  test("steps 08 and 12: a whole binding from an outer join decodes to null", () => {
+    const profile: OutputPlan = { kind: "row", meta, aliases: ["c2", "c3"], nullable: true, preloads: [] };
+    const decode = (row: Readonly<Record<string, unknown>>): object | null => {
+      if (profile.kind !== "row") return null;
+      const absent =
+        profile.nullable &&
+        profile.meta.primaryKey.every((key) => row[profile.aliases[key.index] ?? ""] === null);
+      return absent ? null : profile.meta.create([], profile.meta.rowMeta("loaded", undefined));
+    };
+    expectTypeOf(decode).returns.toEqualTypeOf<object | null>();
+    // @ts-expect-error whether the row can be absent must be stated
+    const unstated: OutputPlan = { kind: "row", meta, aliases: [], preloads: [] };
+    void unstated;
+  });
+
+  test("steps 09 and 12: explain and named prepared statements go through the contract", () => {
+    const explain = fake.compileExplain(ast, "all", undefined, { analyze: true, format: "json" });
+    expectTypeOf(explain).toEqualTypeOf<CompiledQuery>();
+    void fake.execute(plan.sql, [], { statementName: "user_by_email", slots: plan.slots });
+    // @ts-expect-error not an explain format
+    fake.compileExplain(ast, "all", undefined, { format: "yaml" });
+    // @ts-expect-error the options are required
+    fake.compileExplain(ast, "all", undefined);
   });
 
   test("steps 11 and 12: an event can be matched to its call and redacted parameters are known", () => {

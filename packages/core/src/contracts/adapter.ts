@@ -122,6 +122,9 @@ export interface OutputPreload {
  *
  * - `value`: one column; `type` loads it when present.
  * - `row`: a schema row; `aliases[i]` is the output column of `meta.persisted[i]`.
+ *   `nullable` is true when the binding can be absent from a result row (it is on the
+ *   optional side of an outer join): the decoder then yields `null` instead of a row
+ *   when every primary-key column is `null`.
  *   `preloads` lists the associations filled from joined columns of the same result row
  *   (empty for an ordinary row). With preloads, several result rows make one parent: the
  *   decoder de-duplicates parents by primary key and builds them with
@@ -150,6 +153,7 @@ export type OutputPlan =
       readonly kind: "row";
       readonly meta: SchemaMeta;
       readonly aliases: readonly string[];
+      readonly nullable: boolean;
       readonly preloads: readonly OutputPreload[];
     }
   | { readonly kind: "constant"; readonly index: number }
@@ -321,6 +325,12 @@ export interface ExecuteOptions {
   /** Aborting cancels the statement on the server; the call rejects with `AdapterError` (code `"aborted"`). */
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  /**
+   * Runs the statement as a named server-side prepared statement, where the dialect has
+   * them (step 09, `prepare(query, { name })`). The same name must always go with the
+   * same SQL text. Ignored by dialects without named statements.
+   */
+  readonly statementName?: string;
   /**
    * The slots of the plan being executed (`plan.slots`, no copy). The adapter needs them
    * for one thing: `params[i]` is replaced by `**redacted**` in a {@link QueryEvent} when
@@ -541,6 +551,20 @@ export interface InsertPlanOptions {
 }
 
 /**
+ * Options for {@link Adapter.compileExplain}.
+ *
+ * @example
+ * ```ts
+ * const options: ExplainOptions = { analyze: true, format: "json" };
+ * ```
+ */
+export interface ExplainOptions {
+  /** Executes the statement and reports actual timings. A write really happens. */
+  readonly analyze?: boolean;
+  readonly format?: "text" | "json";
+}
+
+/**
  * One executed statement, as reported to telemetry listeners. `params` is present only
  * when the adapter was configured to log parameters. A parameter that fills a slot marked
  * `redact` appears as `**redacted**`; when the execution was not given its slots
@@ -643,6 +667,20 @@ export interface Adapter extends Executor {
    * @throws QueryError when the query is invalid or uses a feature the dialect lacks.
    */
   compile(ast: QueryAst, operation: QueryOperation, prefix: string | undefined): CompiledQuery;
+
+  /**
+   * Compiles the statement that asks the database for the plan of a query: what
+   * `repo.explain` runs. The `EXPLAIN` syntax and its options are the dialect's. Slots
+   * refer to `ast.params`; `output` is `undefined` (the rows are the database's report).
+   *
+   * @throws QueryError when the dialect lacks an option that was asked for.
+   */
+  compileExplain(
+    ast: QueryAst,
+    operation: QueryOperation,
+    prefix: string | undefined,
+    options: ExplainOptions,
+  ): CompiledQuery;
 
   /**
    * Compiles a bare fragment as a whole statement: what `repo.query(fragment\`…\`)` runs.

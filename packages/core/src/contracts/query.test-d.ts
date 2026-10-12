@@ -311,6 +311,11 @@ describe("clause nodes", () => {
     expectTypeOf(source.alias).toEqualTypeOf<string>();
     if (source.kind === "table") expectTypeOf(source.meta).toEqualTypeOf<SchemaMeta | undefined>();
     if (source.kind === "subquerySource") expectTypeOf(source.query).toEqualTypeOf<QueryAst>();
+    if (source.kind === "cteSource") {
+      expectTypeOf(source.name).toEqualTypeOf<string>();
+      // @ts-expect-error a CTE reference has no prefix: it is not a table in a schema
+      source.prefix;
+    }
     if (source.kind === "values") expectTypeOf(source.rows).toEqualTypeOf<readonly (readonly ExprNode[])[]>();
   });
 

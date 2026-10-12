@@ -577,6 +577,26 @@ export interface TableSourceNode {
 }
 
 /**
+ * A reference to a common table expression of the query as a source: `"tree" AS "t"`.
+ * It is a separate kind from a table because no prefix applies to it: the name is the
+ * CTE's, not a table's in some schema.
+ *
+ * @example
+ * ```ts
+ * const node: CteSourceNode = { kind: "cteSource", name: "tree", meta: undefined, alias: "t" };
+ * ```
+ */
+export interface CteSourceNode {
+  readonly kind: "cteSource";
+  /** The name of a {@link CteNode} of this query or of an enclosing one. */
+  readonly name: string;
+  /** The schema whose rows the CTE yields, when it was declared with one (`cte("tree", Category)`). */
+  readonly meta: SchemaMeta | undefined;
+  /** The binding alias. */
+  readonly alias: string;
+}
+
+/**
  * A query as a source: `(SELECT …) AS "s"`.
  *
  * @example
@@ -638,7 +658,12 @@ export interface FragmentSourceNode {
  * }
  * ```
  */
-export type SourceNode = TableSourceNode | SubquerySourceNode | ValuesSourceNode | FragmentSourceNode;
+export type SourceNode =
+  | TableSourceNode
+  | CteSourceNode
+  | SubquerySourceNode
+  | ValuesSourceNode
+  | FragmentSourceNode;
 
 /**
  * The join kinds.
