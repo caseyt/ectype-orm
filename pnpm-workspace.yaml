@@ -3,8 +3,6 @@ packages:
   - "benchmarks"
   - "examples/*"
   - "docs/site"
-minimumReleaseAgeExclude:
-  - zod@4.6.6
 
 # Dependencies allowed to run install scripts (pnpm blocks them by default).
 allowBuilds:
