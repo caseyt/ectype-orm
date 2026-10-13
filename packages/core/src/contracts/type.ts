@@ -35,7 +35,7 @@ export type CastResult<T> =
  *
  * `custom.sql` is a SQL type name, and it is **trusted input**: the one place besides the
  * `fragment` template where text supplied from outside the compiler reaches the SQL
- * (decision D9, ADR 0002 rule 2). It must be a constant written by the developer who
+ * (decision D9, ADR 0003 rule 1). It must be a constant written by the developer who
  * defines the type, or assembled by a parameterized type from options that are
  * themselves developer-written constants (a precision, a known type name). It must never
  * be derived from user data. As a second line of defence the compiler refuses a

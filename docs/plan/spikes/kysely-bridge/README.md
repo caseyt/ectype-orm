@@ -1,7 +1,11 @@
 # Kysely bridge spike (step 02)
 
-The evidence for [ADR 0002](../../../adr/0002-kysely-backend.md), which decides plan
-decision D12: is Kysely usable as Egon's hidden SQL back end?
+> **Superseded.** [ADR 0003](../../../adr/0003-own-sql-emitter.md) removed Kysely: Egon
+> emits its own SQL. This directory is kept as the record behind ADR 0002, and its
+> statements and expected SQL are a checklist for the emitter (step 10).
+
+The evidence for [ADR 0002](../../../adr/0002-kysely-backend.md), which decided plan
+decision D12 at the time: is Kysely usable as Egon's hidden SQL back end?
 
 The spike is the smallest code that answers the five questions of
 [`02-core-contracts.md`](../../02-core-contracts.md), part B. It is not the compiler

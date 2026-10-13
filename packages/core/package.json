@@ -39,9 +39,6 @@
     "build": "tsup",
     "lint:package": "publint --strict && attw --pack . --profile esm-only"
   },
-  "dependencies": {
-    "kysely": "~0.29.6"
-  },
   "devDependencies": {
     "@types/pg": "8.23.1",
     "mysql2": "3.24.5",

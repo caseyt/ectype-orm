@@ -25,8 +25,7 @@ No library code is written in this step beyond placeholder exports.
 3. **Packages.** Create `core`, `postgres`, `zod`, `cli` (and empty `sqlite`, `mysql`
    marked `private` until step 17) with `package.json`, `tsconfig.json`, `src/index.ts`.
    `exports` map with `types`/`default` conditions (ESM only, decision D14); `sideEffects: false`;
-   `files: ["dist"]`. Core's only runtime dependency is `kysely` (pin the current stable
-   minor; record the version in the status note).
+   `files: ["dist"]`. Core has no runtime dependency (ADR 0003; it was `kysely` until then).
 4. **Build.** `tsup` (or `tsdown`) producing ESM + `.d.ts` with source maps (ESM only,
    decision D14). Verify output with `publint` and `@arethetypeswrong/cli` in CI.
 5. **Lint and format.** Biome with rules: no default exports, no `any` (error), no

@@ -67,10 +67,10 @@ param binding, hydration, changeset cast, insert, preload stitching):
 3. Fix, re-measure, and land as a small PR with before/after numbers. Keep changes that
    win ≥ 3% with significance; revert those that do not (complexity is a cost).
 4. Specific investigations to run and write up:
-   - Kysely bridge overhead on cold compile and on execution (from ADR 0002); whether to
-     bypass any Kysely layer on the hot execution path.
+   - Emitter cost on cold compile, and driver-wrapper cost on execution, against the
+     spike's floors (ADR 0003: 2.18 µs for the reference query, 122 ns for a stub driver call).
    - Hydration codegen vs interpreter across row widths (5/10/30/100 columns).
-   - Whether asking the driver for array-mode rows is reachable through Kysely and worth it.
+   - Whether asking the driver for array-mode rows is worth it.
    - Server-side prepared statements for `prepare`d queries (latency and plan-cache effects).
    - Cost of `Result` object allocation on writes; cost of copy-on-write changesets.
    - Startup cost: time to define 100 schemas and resolve associations; import time of `egon-orm` (target < 30 ms cold).

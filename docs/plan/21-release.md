@@ -62,7 +62,7 @@ before `1.0`), and make publishing a one-command, repeatable act.
 
 - `publint` and `attw` clean for every package; `exports` verified from real consumer
   projects (ESM, CommonJS via `require()` of the ES module on Node >= 22.12, TS `moduleResolution` `node16` and `bundler`).
-- Peer dependency ranges tested at their lower and upper bounds (Kysely, `pg`, Zod, `better-sqlite3`, `mysql2`).
+- Peer dependency ranges tested at their lower and upper bounds (`pg`, Zod, `better-sqlite3`, `mysql2`).
 - The package name is decided: `egon-orm` / `@egon-orm/*` (plan README §11). Confirm the
   npm scope is claimed and verify nothing still references `ectype`.
 - Changesets-based release workflow: version PR, changelog generation, npm publish with

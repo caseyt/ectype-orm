@@ -1,7 +1,8 @@
 /**
  * The adapter contract: everything the repo needs from a database, and nothing about how
- * it is provided. Kysely is the back end today (decision D12, ADR 0002), but no Kysely
- * type appears here, so it can be replaced without touching the repo.
+ * it is provided. Egon emits its own SQL and wraps the drivers itself (decision D12,
+ * ADR 0003), but no driver type appears here, so a back end can be replaced without
+ * touching the repo.
  *
  * Implemented by step 10 (the `compile*` methods and the plan cache), step 11 (execution,
  * connections, errors, `@egon-orm/postgres`) and step 17 (SQLite, MySQL). Consumed by the

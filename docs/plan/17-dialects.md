@@ -9,8 +9,8 @@ The two dialects are independent; they can be two workers and two PRs.
 
 ## Goal
 
-Run the same schemas, changesets, queries and Repo API on SQLite and MySQL through
-Kysely's dialects, with every gap either bridged or reported by a clear error, and a
+Run the same schemas, changesets, queries and Repo API on SQLite and MySQL, each through
+its own dialect table and driver wrapper (ADR 0003), with every gap either bridged or reported by a clear error, and a
 published support matrix.
 
 ## Public API
@@ -27,8 +27,12 @@ const adapter = mysql({ connectionString: process.env.DATABASE_URL, pool: { max:
 
 ## Work per dialect
 
-1. **Adapter wiring** on `kysely-adapter.ts` (step 11): dialect, capabilities, lock modes,
-   identifier quoting, parameter limit (SQLite 32,766; MySQL 65,535).
+1. **Adapter wiring** on the shared adapter (`core/src/adapter/adapter.ts`, step 11): a
+   driver wrapper over `better-sqlite3` / `mysql2` implementing step 11's internal
+   `DriverWrapper` interface, and a dialect table for the emitter (step 10): capabilities,
+   lock modes, identifier quoting (backticks on MySQL), `?` placeholders, parameter limit
+   (SQLite 32,766; MySQL 65,535). `better-sqlite3` is synchronous and has one connection:
+   the wrapper serialises access to it.
 2. **Capabilities table.** Fill in honestly; every `false` gets a compile-time `QueryError`
    test. Expected starting point:
 
@@ -62,9 +66,9 @@ const adapter = mysql({ connectionString: process.env.DATABASE_URL, pool: { max:
    name from the message), `ER_NO_REFERENCED_ROW_2`, `ER_ROW_IS_REFERENCED_2`,
    `ER_CHECK_CONSTRAINT_VIOLATED`, `ER_LOCK_DEADLOCK` → retryable.
 5. **Compiler expected output.** Add the dialect column to every SQL snapshot matrix from
-   steps 09 and 10. Where lowering needs a dialect branch (list expansion, `ILIKE`,
+   steps 09 and 10. Where the emitter needs a dialect branch (list expansion, `ILIKE`,
    json path syntax, array `append`/`remove` unsupported, boolean literals), implement it in the
-   lowering layer behind capabilities, not with `if (dialect === ...)` scattered through builders.
+   emitter behind the dialect table and capabilities, not with `if (dialect === ...)` scattered through builders.
 6. **Plan cache keys** include list lengths on these dialects (step 10); add a test that
    lists of different lengths do not share a plan and lists of equal length do.
 7. **Fixtures.** Port `fixtures/blog.sql` per dialect (uuid default, arrays replaced by
@@ -102,14 +106,14 @@ Dialect sections in `adapters.md`: install, options, type mapping table, caveats
 
 ## Out of scope
 
-MSSQL, CockroachDB, PlanetScale/serverless drivers (future work, together with
-`fromKyselyDialect`).
+MSSQL, CockroachDB, PlanetScale/serverless drivers (future work; each needs its own
+driver wrapper and dialect table, ADR 0003).
 
 ## Carried over from steps 01 and 02
 
 Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
 
-- The spike compiled the `?` placeholder path but never executed it. Run it against real MySQL and SQLite, and check what those Kysely drivers read from the query object (the Postgres driver reads only `sql`, `parameters` and `queryId`).
+- The `?` placeholder path has never been executed (the spike only compiled it, through Kysely). Run it against real MySQL and SQLite: one slot per `?`, a list expanded to `in (?, ?, …)`.
 - `QueryAst.listLengths` is the extra plan-cache key component on these dialects.
 - Add SQLite to `Dialect` / `withDatabase` in the test support, and MySQL and SQLite variants of the blog fixture.
 - The guide's dialect-support page states two things this file does not, which the owner confirmed as intended (2026-10-13). Implement and test them: MySQL has no `.returning(...)` on bulk writes, and SQLite has no joins in `updateAll` / `deleteAll`.

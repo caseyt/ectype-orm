@@ -75,8 +75,10 @@ egon db create | drop | reset     # dev conveniences; refuse when NODE_ENV=produ
 
 ## Behaviour
 
-1. **DDL generation** goes through Kysely's schema builder nodes and dialect compilers
-   (per ADR 0002), with raw fragments for anything missing. The `Adapter` contract has no
+1. **DDL generation** is our own emitter (ADR 0003): one function per migration operation
+   writing SQL text through the dialect tables of steps 10 and 17, under the same rules as
+   the query emitter (every identifier quoted; type names from the `DbType` tables or a
+   checked `custom.sql`). The `Adapter` contract has no
    DDL method yet: this step adds one (`compileFragment` covers `m.execute`). Capability-gated features
    (`concurrently`, exclusion constraints, partial indexes) throw `MigrationError` on dialects without them.
 2. **`change` reversal.** Record operations; `down` replays inverses in reverse order.

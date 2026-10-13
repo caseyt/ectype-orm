@@ -2,6 +2,10 @@
 
 > **Merged before the API review.** This file is edited to the names decided in plan
 > README §11, and PR #4 brought the merged code into line with them.
+>
+> **Part B's verdict is superseded.** ADR 0002 accepted Kysely; ADR 0003 (2026-10-13)
+> replaced it with our own SQL emitter and driver wrappers. Part B below is kept as the
+> record of what the spike was asked.
 
 **Depends on:** 01. **Blocks:** everything else.
 **Owns:** `packages/core/src/contracts/`, `packages/core/src/errors.ts`,
