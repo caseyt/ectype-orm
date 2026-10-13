@@ -83,7 +83,8 @@ await repo.all(adults, { minAge: 18 }, { timeoutMs: 500 });
 | `signal` | An `AbortSignal` that cancels the query. |
 | `context` | Any object. It is passed through to the query event, for request ids and the like. |
 
-A cancelled or timed-out query rejects with `DatabaseError` and the code `"aborted"`.
+A query that exceeds `timeoutMs` rejects with `DatabaseError` and the code `"timeout"`;
+one cancelled through `signal` rejects with the code `"aborted"`.
 
 ### Streaming
 

@@ -882,6 +882,89 @@ type LoadedAssoc<S extends AnySchema, K extends string, N> = K extends keyof S
  */
 export type Loaded<S extends AnySchema, P extends PreloadSpec<S>> = LoadedUnchecked<S, P>;
 
+type LoadedAssocAs<S extends AnySchema, K extends string, E> = K extends keyof S
+  ? S[K] extends Assoc<infer Kind, infer _T extends AnySchema, infer FK>
+    ? Kind extends "hasMany" | "manyToMany"
+      ? E[]
+      : Kind extends "belongsTo"
+        ? ForeignKeyIsNullable<S, K, FK> extends true
+          ? E | null
+          : E
+        : E | null
+    : never
+  : never;
+
+/**
+ * A row of schema `S` with association `K` loaded as elements of type `E`, whatever `E`
+ * is. {@link Loaded} looks the element type up (the target's row); `LoadedAs` is given it.
+ * It types a preload whose callback returns something other than whole rows:
+ * `preload("posts", (q) => q.select(...))` loads `posts` as the selected shape.
+ *
+ * `E` is wrapped by the association's kind exactly as in `Loaded`: an array for `hasMany`
+ * and `manyToMany`, `| null` for `hasOne`, and for `belongsTo` `| null` when the foreign
+ * key is nullable. Nesting needs nothing more: a callback that preloads further returns
+ * rows that are already `Loaded`, and that type is `E`.
+ *
+ * @example
+ * ```ts
+ * declare const Post: AnySchema;
+ * declare const User: AnySchema & { posts: Assoc<"hasMany", typeof Post, "authorId"> };
+ *
+ * declare const user: LoadedAs<typeof User, "posts", { authorId: number; title: string }>;
+ * user.posts[0]?.title; // string | undefined
+ * ```
+ */
+export type LoadedAs<S extends AnySchema, K extends AssocKeys<S>, E> = Row<S> & {
+  [A in K]: LoadedAssocAs<S, A, E>;
+};
+
+/**
+ * The field that a preload of association `K` of `S` matches children on, when the types
+ * know it: the literal `foreignKey` of a `hasOne` or `hasMany`. It is `never` otherwise
+ * (`belongsTo`, whose key is the target's primary key; `manyToMany`, whose key is in the
+ * join table; and a foreign key that was not captured as a literal).
+ *
+ * @example
+ * ```ts
+ * declare const Post: AnySchema;
+ * declare const User: AnySchema & { posts: Assoc<"hasMany", typeof Post, "authorId"> };
+ * type Key = PreloadKey<typeof User, "posts">; // "authorId"
+ * ```
+ */
+export type PreloadKey<S, K extends keyof S> =
+  S[K] extends Assoc<infer Kind, unknown, infer FK>
+    ? Kind extends "hasOne" | "hasMany"
+      ? FK extends string
+        ? string extends FK
+          ? never
+          : FK
+        : never
+      : never
+    : never;
+
+/**
+ * `E` if it can be attached to its parent by a preload of association `K` of `S`, else
+ * `never`: a selected shape must contain the association's key under its field name (the
+ * guide's "the select must include the association's key"). Where {@link PreloadKey} is
+ * `never` the types cannot check, `E` is accepted, and step 14's build-time check is the
+ * only one. `Query.preload(name, fn)` intersects the callback's result with this, so that
+ * a select without the key does not compile.
+ *
+ * @example
+ * ```ts
+ * declare const Post: AnySchema;
+ * declare const User: AnySchema & { posts: Assoc<"hasMany", typeof Post, "authorId"> };
+ *
+ * type Ok = PreloadElement<typeof User, "posts", { authorId: number; title: string }>; // unchanged
+ * type Bad = PreloadElement<typeof User, "posts", { title: string }>; // never
+ * ```
+ */
+export type PreloadElement<S, K extends keyof S, E> = [PreloadKey<S, K>] extends [never]
+  ? E
+  : E extends { readonly [P in PreloadKey<S, K>]: unknown }
+    ? E
+    : never;
+
 /**
  * `P` if it is a valid preload spec for schema `S`, with `never` in place of every part
  * that is not: an unknown association name, at any depth, in any of the forms.

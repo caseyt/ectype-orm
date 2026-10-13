@@ -36,10 +36,12 @@ try {
 
 | Code | Meaning | `retryable` |
 |---|---|---|
+| `"database"` | A driver error with no more specific code. | no |
 | `"connection"` | Could not connect, or the connection was lost. | no |
 | `"serializationFailure"` | The transaction conflicted with another. | yes |
 | `"deadlock"` | The database broke a deadlock by cancelling this transaction. | yes |
-| `"aborted"` | The query was cancelled by `timeoutMs` or an `AbortSignal`. | no |
+| `"aborted"` | The query was cancelled by the caller's `AbortSignal`. | no |
+| `"timeout"` | The statement ran longer than its `timeoutMs`. | no |
 
 [`retries`](/guide/transactions#options) on a transaction reruns it for the retryable
 codes.

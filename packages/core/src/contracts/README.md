@@ -20,7 +20,7 @@ Step 02 itself made public only `Result`, `success`, `failure` and the error cla
 |---|---|---|---|
 | `type.ts` | `FieldType`, `AnyFieldType`, `CastResult`, `DbType`, `CUSTOM_SQL_TYPE`, `Codec`, `IDENTITY` | 03 (`types/`); 11 and 17 supply `Codec`s through `Adapter.typeOverrides` | 04, 05, 06, 07, 08, 09, 10, 12, 13, 15, 18 |
 | `schema.ts` (runtime) | `META`, `ROW`, `FieldMeta`, `AssocMeta`, `EmbedMeta`, `SchemaMeta`, `RowMeta` | 04 (`schema/`) | 05, 06, 07, 08, 09, 10, 12, 13, 14, 15, 16, 18, and `@egon-orm/zod` (06) |
-| `schema.ts` (types) | `FieldBuilder`, `FieldFlags`, `SchemaClass`, `AnySchema`, `Row`, `InsertShape`, `PrimaryKeyOf`, `Assoc`, `AssocKeys`, `Target`, `PreloadSpec`, `ValidPreload`, `Loaded`, `LoadedUnchecked` | 04 (`Schema()`, `t`, `hasMany`, …) | 05, 06, 08, 09, 12, 13, 14, 15, 16 |
+| `schema.ts` (types) | `FieldBuilder`, `FieldFlags`, `SchemaClass`, `AnySchema`, `Row`, `InsertShape`, `PrimaryKeyOf`, `Assoc`, `AssocKeys`, `Target`, `PreloadSpec`, `ValidPreload`, `Loaded`, `LoadedUnchecked`, `LoadedAs`, `PreloadKey`, `PreloadElement` | 04 (`Schema()`, `t`, `hasMany`, …) | 05, 06, 08, 09, 12, 13, 14, 15, 16 |
 | `query.ts` | `QueryAst`, `ExprNode` and every other node, the node rules, parameter order, `shape` | 07 (expression nodes), 08 and 09 (queries) | 10 (compiler), 12, 13, 14 (`select`, `preloads`, `updates`) |
 | `adapter.ts` | `Adapter`, `Executor`, `Connection`, `CompiledQuery`, `ParamSlot`, `OutputPlan`, `RowDecoder`, `InsertSource`, `InsertCell`, `Capabilities`, events | 10 (`compile*`, plan cache), 11 (everything else, `@egon-orm/postgres`), 17 (SQLite, MySQL) | 12, 13, 14, 16, 18 |
 | `changeset.ts` | `ChangesetError`, `Constraint`, `Action`, `ChangesetLike`, `ValidatorFn`, `ValidationIssue`, `Validator` | 05 (changeset), 06 (validators), 15 (nested) | 13 (constraint matching), 16 (Multi), `errors.ts` |
@@ -104,11 +104,17 @@ ones a consumer is most likely to trip over:
 - A **generic function** that takes a spec declares it as
   `<S extends AnySchema, const P>(…, spec: P & ValidPreload<S, P>): LoadedUnchecked<S, P>`.
   A parameter typed `P extends PreloadSpec<S>` would accept a stray key beside a valid one.
-- Step 14's arguments have more forms than the canonical one (a custom query, a binding
-  alias such as `{ posts: "p" }`, `{ $from: "p", … }`). Step 14 defines the type that maps
-  its argument to a `PreloadSpec` (a query or an alias becomes `true`, `$from` is dropped)
-  and then uses `ValidPreload` and `LoadedUnchecked` on the result. The runtime form of
-  the same information is `PreloadNode`.
+- Step 14's arguments have more forms than the canonical one (a binding alias such as
+  `{ posts: "p" }`, `{ $from: "p", … }`). Step 14 defines the type that maps its argument
+  to a `PreloadSpec` (an alias becomes `true`, `$from` is dropped) and then uses
+  `ValidPreload` and `LoadedUnchecked` on the result. The runtime form of the same
+  information is `PreloadNode`.
+- The **callback form**, `preload("posts", (q) => …)`, does not go through `PreloadSpec`.
+  Its result is `LoadedAs<S, K, E>`, where `E` is the result type of the query the callback
+  returns: the target's row, a `Loaded` row when the callback preloads further, or a
+  selected shape. `PreloadElement<S, K, E>` makes a select without the association's key
+  a compile error where `PreloadKey<S, K>` is known, which needs `hasOne` and `hasMany` to
+  capture a literal `foreignKey` as the third parameter of `Assoc`, as `belongsTo` does.
 
 ## Where step files and the contracts differ
 
