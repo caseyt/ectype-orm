@@ -97,7 +97,7 @@ describe("hashString", () => {
   test("spreads typical identifiers without collisions", () => {
     const names = new Set<string>();
     for (const table of ["users", "posts", "comments", "tags", "orgs", "memberships", "profiles"]) {
-      for (const column of ["id", "name", "email", "age", "title", "body", "inserted_at", "updated_at"]) {
+      for (const column of ["id", "name", "email", "age", "title", "body", "created_at", "updated_at"]) {
         for (const alias of ["u", "p", "c", "t", "x0", "x1"]) names.add(`${alias}.${table}.${column}`);
       }
     }

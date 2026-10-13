@@ -17,29 +17,31 @@ export function isInsideOwnDist(entry: string, packageRoot: string): boolean {
 }
 
 /**
- * Resolves `ectype` the way the current process imports it and returns the file path,
+ * Resolves `egon-orm` the way the current process imports it and returns the file path,
  * throwing unless that file exists inside the package's own `dist/` directory.
  *
  * Benchmarks must measure the built packages, which is what users run. If this throws,
  * run `pnpm build` (the root `pnpm bench` does) and make sure the process was started
  * with `benchmarks/tsconfig.run.json`, which has no source `paths`.
  */
-export function resolveBuiltEctype(): string {
+export function resolveBuiltEgon(): string {
   let entry: string;
   let packageRoot: string;
   try {
-    entry = fileURLToPath(import.meta.resolve("ectype"));
-    packageRoot = dirname(realpathSync(createRequire(import.meta.url).resolve("ectype/package.json")));
+    entry = fileURLToPath(import.meta.resolve("egon-orm"));
+    packageRoot = dirname(realpathSync(createRequire(import.meta.url).resolve("egon-orm/package.json")));
   } catch (cause) {
-    throw new Error('Cannot resolve "ectype" to its built dist/ output. Run `pnpm build` first.', { cause });
+    throw new Error('Cannot resolve "egon-orm" to its built dist/ output. Run `pnpm build` first.', {
+      cause,
+    });
   }
   if (!existsSync(entry)) {
-    throw new Error(`"ectype" resolves to ${entry}, which does not exist. Run \`pnpm build\` first.`);
+    throw new Error(`"egon-orm" resolves to ${entry}, which does not exist. Run \`pnpm build\` first.`);
   }
   entry = realpathSync(entry);
   if (!isInsideOwnDist(entry, packageRoot)) {
     throw new Error(
-      `Benchmarks must run against the built dist/ output in ${join(packageRoot, "dist")}, but "ectype" ` +
+      `Benchmarks must run against the built dist/ output in ${join(packageRoot, "dist")}, but "egon-orm" ` +
         `resolved to ${entry}. Start benchmark processes with benchmarks/tsconfig.run.json (see src/run.ts).`,
     );
   }

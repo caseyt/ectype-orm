@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { cpus, tmpdir, totalmem } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type BenchmarkResult, RESULT_PATH_ENV, resolveBuiltEctype } from "./harness.js";
+import { type BenchmarkResult, RESULT_PATH_ENV, resolveBuiltEgon } from "./harness.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SUITES = ["micro"];
@@ -40,14 +40,14 @@ function git(...args: string[]): string {
 }
 
 // Refuse to measure anything but the built packages. Each benchmark process checks again.
-let ectypeEntry: string;
+let egonEntry: string;
 try {
-  ectypeEntry = resolveBuiltEctype();
+  egonEntry = resolveBuiltEgon();
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 }
-console.log(`ectype resolves to ${relative(join(ROOT, ".."), ectypeEntry)}`);
+console.log(`egon-orm resolves to ${relative(join(ROOT, ".."), egonEntry)}`);
 
 const filters = process.argv.slice(2);
 const files = SUITES.flatMap((suite) => findBenchFiles(join(ROOT, suite)))
@@ -59,7 +59,7 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const scratch = mkdtempSync(join(tmpdir(), "ectype-bench-"));
+const scratch = mkdtempSync(join(tmpdir(), "egon-bench-"));
 const benchmarks: BenchmarkResult[] = [];
 let failed = false;
 
@@ -100,8 +100,8 @@ const report = {
     cores: cpus().length,
     memoryBytes: totalmem(),
   },
-  /** The file `ectype` was loaded from, relative to the repository root. Always under dist/. */
-  ectypeEntry: relative(join(ROOT, ".."), ectypeEntry),
+  /** The file `egon-orm` was loaded from, relative to the repository root. Always under dist/. */
+  egonEntry: relative(join(ROOT, ".."), egonEntry),
   unit: "ns/iter",
   benchmarks,
 };

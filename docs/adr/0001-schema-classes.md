@@ -7,7 +7,7 @@
 
 ## Context
 
-Ectype infers row types, preloaded association types and `select` result types from the
+Egon infers row types, preloaded association types and `select` result types from the
 schema definition, with no code generation. Associations are routinely circular: a `User`
 has many `Post`s and each `Post` belongs to a `User`. The schema API therefore has to let
 two definitions refer to each other while TypeScript still infers both of their types.
@@ -50,8 +50,7 @@ thunks (`static posts = hasMany(() => Post)`). Rows are instances of the schema 
   define its foreign-key field; the field is declared in the fields object (D5).
 - `isolatedDeclarations` cannot be enabled for code that declares schemas: an `extends`
   clause containing a call is error TS9021 and an un-annotated static is TS9012 (16 errors
-  on the spike file). It is therefore off in `tsconfig.base.json`; see
-  `docs/plan/status/01.md`.
+  on the spike file). It is therefore off in `tsconfig.base.json`.
 - CI keeps the evidence honest. `pnpm typecheck` type-checks the accepted spike
   (`tsconfig.spikes.json`) and runs `scripts/check-rejected-spike.mjs`, which fails if the
   rejected file ever starts compiling or stops reporting TS7022 and TS2506. If a future

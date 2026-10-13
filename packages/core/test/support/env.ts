@@ -39,26 +39,26 @@ function readPort(env: Env, key: string, fallback: number): number {
  *
  * | Dialect  | Variables                                                                          |
  * |----------|------------------------------------------------------------------------------------|
- * | postgres | `ECTYPE_PG_HOST`, `ECTYPE_PG_PORT`, `ECTYPE_PG_USER`, `ECTYPE_PG_PASSWORD`, `ECTYPE_PG_DATABASE` |
- * | mysql    | `ECTYPE_MYSQL_HOST`, `ECTYPE_MYSQL_PORT`, `ECTYPE_MYSQL_USER`, `ECTYPE_MYSQL_PASSWORD`, `ECTYPE_MYSQL_DATABASE` |
+ * | postgres | `EGON_PG_HOST`, `EGON_PG_PORT`, `EGON_PG_USER`, `EGON_PG_PASSWORD`, `EGON_PG_DATABASE` |
+ * | mysql    | `EGON_MYSQL_HOST`, `EGON_MYSQL_PORT`, `EGON_MYSQL_USER`, `EGON_MYSQL_PASSWORD`, `EGON_MYSQL_DATABASE` |
  */
 export function connectionSettings(dialect: Dialect, env: Env = process.env): ConnectionSettings {
   switch (dialect) {
     case "postgres":
       return {
-        host: readString(env, "ECTYPE_PG_HOST", "127.0.0.1"),
-        port: readPort(env, "ECTYPE_PG_PORT", 54_329),
-        user: readString(env, "ECTYPE_PG_USER", "ectype"),
-        password: readString(env, "ECTYPE_PG_PASSWORD", "ectype"),
-        database: readString(env, "ECTYPE_PG_DATABASE", "ectype_dev"),
+        host: readString(env, "EGON_PG_HOST", "127.0.0.1"),
+        port: readPort(env, "EGON_PG_PORT", 54_329),
+        user: readString(env, "EGON_PG_USER", "egon"),
+        password: readString(env, "EGON_PG_PASSWORD", "egon"),
+        database: readString(env, "EGON_PG_DATABASE", "egon_dev"),
       };
     case "mysql":
       return {
-        host: readString(env, "ECTYPE_MYSQL_HOST", "127.0.0.1"),
-        port: readPort(env, "ECTYPE_MYSQL_PORT", 33_069),
-        user: readString(env, "ECTYPE_MYSQL_USER", "root"),
-        password: readString(env, "ECTYPE_MYSQL_PASSWORD", "ectype"),
-        database: readString(env, "ECTYPE_MYSQL_DATABASE", "ectype_dev"),
+        host: readString(env, "EGON_MYSQL_HOST", "127.0.0.1"),
+        port: readPort(env, "EGON_MYSQL_PORT", 33_069),
+        user: readString(env, "EGON_MYSQL_USER", "root"),
+        password: readString(env, "EGON_MYSQL_PASSWORD", "egon"),
+        database: readString(env, "EGON_MYSQL_DATABASE", "egon_dev"),
       };
   }
 }
@@ -70,7 +70,7 @@ export function connectionUrl(dialect: Dialect, settings: ConnectionSettings): s
   return `${dialect}://${auth}@${host}:${port}/${encodeURIComponent(database)}`;
 }
 
-/** True when the tier 2 databases (MySQL) are expected to be running: `ECTYPE_TEST_TIER2=1`. */
+/** True when the tier 2 databases (MySQL) are expected to be running: `EGON_TEST_TIER2=1`. */
 export function tier2Enabled(env: Env = process.env): boolean {
-  return env.ECTYPE_TEST_TIER2 === "1" || env.ECTYPE_TEST_TIER2 === "true";
+  return env.EGON_TEST_TIER2 === "1" || env.EGON_TEST_TIER2 === "true";
 }

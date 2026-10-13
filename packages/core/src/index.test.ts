@@ -11,12 +11,11 @@ test("VERSION matches the version in package.json", () => {
 test("the public entry point exports exactly these values", () => {
   // Adding a public export is a decision: update this list in the same change.
   expect(Object.keys(api).sort()).toEqual([
-    "AdapterError",
     "CastError",
     "ConstraintError",
-    "EctypeError",
+    "DatabaseError",
+    "EgonError",
     "InvalidChangesetError",
-    "MigrationError",
     "MultipleResultsError",
     "NoResultsError",
     "NotLoadedError",
@@ -24,9 +23,9 @@ test("the public entry point exports exactly these values", () => {
     "SchemaDefinitionError",
     "StaleEntryError",
     "VERSION",
-    "err",
-    "isEctypeError",
-    "ok",
+    "failure",
+    "isEgonError",
+    "success",
   ]);
 });
 

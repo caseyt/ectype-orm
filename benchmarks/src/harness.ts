@@ -1,12 +1,12 @@
 import { writeFileSync } from "node:fs";
 import { run } from "mitata";
-import { resolveBuiltEctype } from "./dist-guard.js";
+import { resolveBuiltEgon } from "./dist-guard.js";
 
 export { bench, do_not_optimize as doNotOptimize, group, summary } from "mitata";
-export { resolveBuiltEctype } from "./dist-guard.js";
+export { resolveBuiltEgon } from "./dist-guard.js";
 
 /** Environment variable through which the runner tells a benchmark file where to write its results. */
-export const RESULT_PATH_ENV = "ECTYPE_BENCH_RESULT_PATH";
+export const RESULT_PATH_ENV = "EGON_BENCH_RESULT_PATH";
 
 /** Timing statistics for one benchmark, in nanoseconds per iteration. */
 export interface BenchmarkStats {
@@ -34,7 +34,7 @@ export interface BenchmarkResult {
  * Call it once, at the end of each `*.bench.ts` file.
  */
 export async function runBenchmarks(): Promise<void> {
-  resolveBuiltEctype();
+  resolveBuiltEgon();
   const { benchmarks } = await run();
   const resultPath = process.env[RESULT_PATH_ENV];
   if (resultPath === undefined) return;

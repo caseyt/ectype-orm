@@ -27,7 +27,7 @@ await main("Question 3: execution", { users: 40, postsPerUser: 6 }, async (db) =
     console.log("cached plan, many executions, pooled connections");
     const expected = await observer.query(
       `SELECT u.id AS c0, count(p.id) AS c1 FROM users u JOIN posts p ON p.author_id = u.id
-       WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.inserted_at DESC LIMIT $2`,
+       WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.created_at DESC LIMIT $2`,
       [20, 10],
     );
     const results = await Promise.all(Array.from({ length: 25 }, () => bridge.execute(select, [20, 10])));

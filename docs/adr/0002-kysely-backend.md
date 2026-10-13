@@ -7,7 +7,7 @@
 
 ## Context
 
-Decision D12 says that Kysely is Ectype's hidden SQL back end: the query AST is lowered to
+Decision D12 says that Kysely is Egon's hidden SQL back end: the query AST is lowered to
 Kysely `OperationNode` trees, compiled by Kysely's dialect compilers and executed through
 Kysely's drivers, all behind our own `Adapter` interface. D12 was made on expectation.
 Step 02 had to prove or disprove it before steps 10, 11 and 17 depend on it, by answering
@@ -247,7 +247,7 @@ parameter has to be cast, which the lowering can do because it knows the paramet
 ### Other facts found on the way
 
 - **Kysely 0.29 is ESM-only** and declares `engines.node >= 22.0.0`. A CommonJS build of
-  Ectype would have to `require("kysely")`, which only works where Node loads ES modules
+  Egon would have to `require("kysely")`, which only works where Node loads ES modules
   with `require`. Checked with real binaries: Node 22.11.0 fails with `ERR_REQUIRE_ESM`;
   22.12.0 works, with an `ExperimentalWarning`; 22.23.1 and 24.14.1 work silently. See
   the decision on CommonJS below.
@@ -271,7 +271,7 @@ parameter has to be cast, which the lowering can do because it knows the paramet
 2. **Accept with raw-node escapes.** Use Kysely as D12 says; for the nine constructs above
    the lowering uses a `RawNode` (or rewrites the construct), under the rule that raw text
    is always a constant of the lowering code. Costs: the rule has to be enforced in step
-   10 (it is easy to state and to test), and Ectype depends on Kysely internals, pinned to
+   10 (it is easy to state and to test), and Egon depends on Kysely internals, pinned to
    one minor version.
 3. **Reject.** Step 10 writes its own Postgres compiler behind the same `Adapter`
    interface; steps 11 and 17 are re-scoped to own drivers, pooling, savepoints and two

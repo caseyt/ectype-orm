@@ -1,3 +1,3 @@
-import { VERSION } from "ectype";
+import { VERSION } from "egon-orm";
 
-export const banner: string = `Running Ectype ${VERSION}`;
+export const banner: string = `Running Egon ${VERSION}`;

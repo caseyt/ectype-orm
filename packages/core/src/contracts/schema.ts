@@ -10,7 +10,7 @@
  *
  * @module
  */
-import type { AnyEctoType } from "./type.js";
+import type { AnyFieldType } from "./type.js";
 
 // ---------------------------------------------------------------------------
 // Runtime metadata
@@ -36,14 +36,12 @@ import type { AnyEctoType } from "./type.js";
  * const source = User[META].source; // "users"
  * ```
  */
-export const META: unique symbol = Symbol.for("ectype.meta");
+export const META: unique symbol = Symbol.for("egon.meta");
 
 /**
  * The key under which a row holds its {@link RowMeta}: `user[ROW]`. It is the last own
  * property of every row and the only symbol-keyed one, so it never shows up in
  * `Object.keys`, `JSON.stringify` or `for…in`.
- *
- * Ecto equivalent: the `__meta__` field of a schema struct.
  *
  * @example
  * ```ts
@@ -53,16 +51,15 @@ export const META: unique symbol = Symbol.for("ectype.meta");
  * }
  * ```
  */
-export const ROW: unique symbol = Symbol.for("ectype.row");
+export const ROW: unique symbol = Symbol.for("egon.row");
 
 /**
  * Where a row stands relative to the database.
  *
- * - `"built"`: created in memory with `new User()`; never persisted.
+ * - `"built"`: made in memory by the library and never persisted. User code cannot
+ *   produce one: a schema class has no public constructor (decision D2).
  * - `"loaded"`: read from, or written to, the database.
  * - `"deleted"`: deleted through the repo.
- *
- * Ecto equivalent: `Ecto.Schema.Metadata` `:state`.
  *
  * @example
  * ```ts
@@ -73,13 +70,11 @@ export type RowState = "built" | "loaded" | "deleted";
 
 /**
  * Per-row metadata, stored under {@link ROW}. One frozen object is shared by every row
- * with the same state, source and prefix, so a row costs one property, not one object.
- *
- * Ecto equivalent: `Ecto.Schema.Metadata`.
+ * with the same state, source and database schema, so a row costs one property, not one object.
  *
  * @example
  * ```ts
- * const loadedUser: RowMeta = { state: "loaded", source: "users", prefix: undefined };
+ * const loadedUser: RowMeta = { state: "loaded", source: "users", schema: undefined };
  * ```
  */
 export interface RowMeta {
@@ -87,21 +82,19 @@ export interface RowMeta {
   /** The table the row belongs to; `null` for a row of an embedded schema. */
   readonly source: string | null;
   /**
-   * The schema (Postgres) or database (MySQL) prefix the row belongs to. For a loaded row
-   * it is the prefix the row was read from or written to. For a **built** row
-   * (`new User()`) it is the prefix the schema declares (`SchemaMeta.prefix`), `undefined`
-   * when it declares none. A write without a per-call prefix goes to this prefix when it
+   * The database schema (a Postgres schema, a MySQL database) the row belongs to. For a loaded row
+   * it is the database schema the row was read from or written to. For a **built** row
+   * it is the database schema the schema declares (`SchemaMeta.schema`), `undefined`
+   * when it declares none. A write without a per-call database schema goes to this database schema when it
    * is set (and to the repo default otherwise), so a row is inserted where a read of its
    * schema will look for it.
    */
-  readonly prefix: string | undefined;
+  readonly schema: string | undefined;
 }
 
 /**
  * When a field may be written. `"insert"` means on insert only (never updated);
  * `"never"` means the database owns it.
- *
- * Ecto equivalent: the `:writable` field option.
  *
  * @example
  * ```ts
@@ -114,21 +107,19 @@ export type Writable = "always" | "insert" | "never";
  * Everything known about one field of a schema. Built once, when the schema class is
  * created; never mutated.
  *
- * Ecto equivalent: what `Schema.__schema__(:type, field)` and its siblings return.
- *
  * @example
  * ```ts
- * declare const stringType: AnyEctoType;
- * const insertedAt: FieldMeta = {
- *   name: "insertedAt",
- *   column: "inserted_at",
+ * declare const stringType: AnyFieldType;
+ * const createdAt: FieldMeta = {
+ *   name: "createdAt",
+ *   column: "created_at",
  *   type: stringType,
  *   nullable: false,
  *   primaryKey: false,
  *   virtual: false,
  *   redact: false,
  *   writable: "always",
- *   readAfterWrites: false,
+ *   dbGenerated: false,
  *   default: undefined,
  *   autogenerate: undefined,
  *   index: 3,
@@ -136,11 +127,11 @@ export type Writable = "always" | "insert" | "never";
  * ```
  */
 export interface FieldMeta {
-  /** The property name on rows: `"insertedAt"`. */
+  /** The property name on rows: `"createdAt"`. */
   readonly name: string;
-  /** The column name in the database: `"inserted_at"`. Meaningless for a virtual field. */
+  /** The column name in the database: `"created_at"`. Meaningless for a virtual field. */
   readonly column: string;
-  readonly type: AnyEctoType;
+  readonly type: AnyFieldType;
   /** Whether `null` is a legal value. Fields are non-null unless declared `.nullable()` (decision D3). */
   readonly nullable: boolean;
   readonly primaryKey: boolean;
@@ -150,7 +141,7 @@ export interface FieldMeta {
   readonly redact: boolean;
   readonly writable: Writable;
   /** The database generates the value: include the column in `RETURNING` after a write. */
-  readonly readAfterWrites: boolean;
+  readonly dbGenerated: boolean;
   /**
    * The value a new row starts with: a constant, or a function called for every new row
    * (so that rows do not share one mutable default).
@@ -170,8 +161,6 @@ export interface FieldMeta {
 /**
  * The four association kinds.
  *
- * Ecto equivalent: `belongs_to`, `has_one`, `has_many`, `many_to_many`.
- *
  * @example
  * ```ts
  * const kind: AssocKind = "hasMany";
@@ -182,42 +171,27 @@ export type AssocKind = "belongsTo" | "hasOne" | "hasMany" | "manyToMany";
 /**
  * What happens to associated rows that a parent changeset no longer mentions (step 15).
  *
- * Ecto equivalent: the `:on_replace` association option.
- *
  * @example
  * ```ts
  * const onReplace: OnReplace = "delete";
  * ```
  */
-export type OnReplace = "raise" | "markAsInvalid" | "nilify" | "update" | "delete" | "deleteIfExists";
-
-/**
- * What the database is expected to do with associated rows when the owner is deleted.
- * Documentation only: Ectype never acts on it; the foreign key in a migration does.
- *
- * Ecto equivalent: the `:on_delete` association option.
- *
- * @example
- * ```ts
- * const onDelete: OnDelete = "deleteAll";
- * ```
- */
-export type OnDelete = "nothing" | "nilifyAll" | "deleteAll";
+export type OnReplace = "error" | "invalid" | "setNull" | "update" | "delete" | "deleteIfExists";
 
 /**
  * The join table of a `manyToMany` association.
  *
  * @example
  * ```ts
- * const postsTags: JoinThroughMeta = { source: "posts_tags", prefix: undefined, schema: undefined };
+ * const postsTags: JoinThroughMeta = { source: "posts_tags", schema: undefined, model: undefined };
  * ```
  */
 export interface JoinThroughMeta {
   /** The join table's name. */
   readonly source: string;
-  readonly prefix: string | undefined;
+  readonly schema: string | undefined;
   /** The join schema, when the association was declared with one instead of a table name. */
-  readonly schema: (() => AnySchema) | undefined;
+  readonly model: (() => AnySchema) | undefined;
 }
 
 /**
@@ -241,10 +215,10 @@ export interface JoinKeyMeta {
  *
  * @example
  * ```ts
- * const newestFirst: PreloadOrderMeta = { field: "insertedAt", direction: "desc" };
+ * const newestFirst: AssocOrderMeta = { field: "createdAt", direction: "desc" };
  * ```
  */
-export interface PreloadOrderMeta {
+export interface AssocOrderMeta {
   /** A field name of the target schema. */
   readonly field: string;
   readonly direction: "asc" | "desc";
@@ -267,8 +241,6 @@ export interface PreloadOrderMeta {
  * For a has-through association (`through` set) the keys are empty: the chain is resolved
  * through the named associations.
  *
- * Ecto equivalent: `Ecto.Association.BelongsTo`, `.Has`, `.ManyToMany`, `.HasThrough`.
- *
  * @example
  * ```ts
  * declare const Post: AnySchema;
@@ -283,11 +255,10 @@ export interface PreloadOrderMeta {
  *   joinThrough: undefined,
  *   joinKeys: undefined,
  *   through: undefined,
- *   onReplace: "raise",
- *   onDelete: "nothing",
+ *   onReplace: "error",
  *   where: undefined,
  *   joinWhere: undefined,
- *   preloadOrder: [],
+ *   orderBy: [],
  *   defaults: undefined,
  * };
  * ```
@@ -309,7 +280,6 @@ export interface AssocMeta {
   /** Has-through only: the association names to follow, starting from the owner. */
   readonly through: readonly string[] | undefined;
   readonly onReplace: OnReplace;
-  readonly onDelete: OnDelete;
   /**
    * A filter on the target that is always applied, as field name to value: a value means
    * equality, `null` means `IS NULL`, an array means `IN`. Values are bound parameters.
@@ -318,7 +288,7 @@ export interface AssocMeta {
   /** `manyToMany` only: the same kind of filter, on the join table's columns. */
   readonly joinWhere: Readonly<Record<string, unknown>> | undefined;
   /** The order preloaded rows come in when the preload has no query of its own. */
-  readonly preloadOrder: readonly PreloadOrderMeta[];
+  readonly orderBy: readonly AssocOrderMeta[];
   /** Field values given to a target row that is built through this association (step 15). */
   readonly defaults: Readonly<Record<string, unknown>> | undefined;
 }
@@ -326,8 +296,6 @@ export interface AssocMeta {
 /**
  * Everything known about one embed. An embed is also a field (stored as `jsonb`), so it
  * appears in {@link SchemaMeta.fields} as well; this record adds what a plain field lacks.
- *
- * Ecto equivalent: `Ecto.Embedded`.
  *
  * @example
  * ```ts
@@ -357,8 +325,6 @@ export interface EmbedMeta {
  * under {@link META}. Hot paths read these precomputed tables instead of deriving them
  * again per query or per row.
  *
- * Ecto equivalent: the `__schema__/1` and `__schema__/2` reflection functions.
- *
  * @example
  * ```ts
  * function columnsOf(meta: SchemaMeta): string[] {
@@ -371,8 +337,8 @@ export interface SchemaMeta {
   readonly name: string;
   /** The table name; `null` for an embedded schema. */
   readonly source: string | null;
-  /** The prefix the schema declares. In a query it wins over the query's, the call's and the repo's. */
-  readonly prefix: string | undefined;
+  /** The database schema the schema declares. In a query it wins over the query's, the call's and the repo's. */
+  readonly schema: string | undefined;
   /** Every field in declaration order. This order is the row shape: rows assign their properties in it. */
   readonly fields: readonly FieldMeta[];
   readonly fieldsByName: ReadonlyMap<string, FieldMeta>;
@@ -390,14 +356,14 @@ export interface SchemaMeta {
   assocs(): ReadonlyMap<string, AssocMeta>;
   /**
    * The shared, frozen {@link RowMeta} for rows of this schema in `state`, read from or
-   * written to `prefix`. The same object is returned for the same arguments, so every row
-   * of a result that comes from one table points at one object. `prefix` is the prefix the
-   * row's own table resolved to in the statement: for a decoded row, the `prefix` of its
-   * output-plan leaf; for the row returned by a row-level write, `CompiledQuery.prefix`.
-   * It may differ from {@link SchemaMeta.prefix} (a per-source, per-call, per-query or
-   * repo-level prefix). A built row is created with `rowMeta("built", meta.prefix)`.
+   * written to `schema`. The same object is returned for the same arguments, so every row
+   * of a result that comes from one table points at one object. `schema` is the database schema the
+   * row's own table resolved to in the statement: for a decoded row, the `schema` of its
+   * output-plan leaf; for the row returned by a row-level write, `CompiledQuery.schema`.
+   * It may differ from {@link SchemaMeta.schema} (a per-source, per-call, per-query or
+   * repo-level database schema). A built row is created with `rowMeta("built", meta.schema)`.
    */
-  rowMeta(state: RowState, prefix: string | undefined): RowMeta;
+  rowMeta(state: RowState, schema: string | undefined): RowMeta;
   /**
    * The generated row factory (decision D2): builds a row from the values of the
    * {@link SchemaMeta.persisted} fields, in that order, and stores `row` under {@link ROW}
@@ -426,7 +392,7 @@ export interface SchemaMeta {
  *
  * - `nullable`: declared `.nullable()`.
  * - `defaulted`: has a value without the caller supplying one, through `.default()`,
- *   `.autogenerate()` or `.readAfterWrites()`. Such a field is optional in {@link InsertShape}.
+ *   `.autogenerate()` or `.dbGenerated()`. Such a field is optional in {@link InsertShape}.
  * - `virtual`: declared `.virtual()`; excluded from {@link InsertShape}.
  * - `primaryKey`: declared `.primaryKey()`; drives {@link PrimaryKeyOf}.
  *
@@ -472,16 +438,14 @@ export type WithFlag<F extends FieldFlags, K extends keyof FieldFlags> = {
 };
 
 /**
- * A field declaration: what `t.string()`, `t.id()` and the rest return. `T` is the type
- * of the property on a row (it includes `null` once `.nullable()` was called) and `F`
+ * A field declaration: what `t.string()`, `t.integer()` and the rest return. `T` is the
+ * type of the property on a row (it includes `null` once `.nullable()` was called) and `F`
  * records which modifiers were applied.
  *
  * Every modifier returns a new builder and leaves the receiver untouched.
  *
  * `"~field"` exists only in the type system (it is never set at runtime). It is what
- * {@link FieldType} and {@link FieldFlagsOf} read.
- *
- * Ecto equivalent: the `field/3` macro and its options.
+ * {@link FieldValueOf} and {@link FieldFlagsOf} read.
  *
  * @example
  * ```ts
@@ -492,27 +456,37 @@ export type WithFlag<F extends FieldFlags, K extends keyof FieldFlags> = {
  *   name: t.string().nullable(),
  *   loginCount: t.integer().default(0),
  * };
- * type Name = FieldType<(typeof fields)["name"]>; // string | null
+ * type Name = FieldValueOf<(typeof fields)["name"]>; // string | null
  * ```
  */
 export interface FieldBuilder<T, F extends FieldFlags = DefaultFieldFlags> {
   readonly "~field"?: { readonly type: T; readonly flags: F };
   /** Allows `null`: adds `| null` to the row type, and makes `null` the default. */
   nullable(): FieldBuilder<T | null, WithFlag<F, "nullable">>;
-  /** The value of the field on `new S()`: a constant, or a function called per row. */
+  /** The value a new record takes when its changeset sets none: a constant, or a function called per record. */
   default(value: T | (() => T)): FieldBuilder<T, WithFlag<F, "defaulted">>;
-  /** Makes the field part of the primary key (several fields form a composite key). */
-  primaryKey(): FieldBuilder<T, WithFlag<F, "primaryKey">>;
+  /**
+   * Makes the field part of the primary key (several fields form a composite key). On an
+   * integer or bigint field the key is database-generated, as with `.dbGenerated()`,
+   * unless `{ dbGenerated: false }` is passed (a natural key).
+   */
+  primaryKey(): FieldBuilder<
+    T,
+    [T] extends [number | bigint]
+      ? WithFlag<WithFlag<F, "primaryKey">, "defaulted">
+      : WithFlag<F, "primaryKey">
+  >;
+  primaryKey(options: { readonly dbGenerated: false }): FieldBuilder<T, WithFlag<F, "primaryKey">>;
   /** Generates the value client-side at insert when it is unset. */
   autogenerate(fn?: () => T): FieldBuilder<T, WithFlag<F, "defaulted">>;
   /** Keeps the field out of the database: never selected, never written. */
   virtual(): FieldBuilder<T, WithFlag<F, "virtual">>;
   /** Overrides the column name (decision D4). */
-  source(column: string): FieldBuilder<T, F>;
+  column(name: string): FieldBuilder<T, F>;
   /** Hides the value from inspect output, `toJSON` and logs. */
   redact(): FieldBuilder<T, F>;
   /** Marks the value as generated by the database: it is read back after a write. */
-  readAfterWrites(): FieldBuilder<T, WithFlag<F, "defaulted">>;
+  dbGenerated(): FieldBuilder<T, WithFlag<F, "defaulted">>;
   /** Restricts when the field may be written. */
   writable(mode: Writable): FieldBuilder<T, F>;
 }
@@ -533,8 +507,8 @@ export type AnyFieldBuilder = FieldBuilder<unknown, FieldFlags>;
  *
  * @example
  * ```ts
- * declare const t: { id(): AnyFieldBuilder; string(): AnyFieldBuilder };
- * const fields: FieldsShape = { id: t.id(), email: t.string() };
+ * declare const t: { integer(): AnyFieldBuilder; string(): AnyFieldBuilder };
+ * const fields: FieldsShape = { id: t.integer().primaryKey(), email: t.string() };
  * ```
  */
 export type FieldsShape = Readonly<Record<string, AnyFieldBuilder>>;
@@ -545,10 +519,10 @@ export type FieldsShape = Readonly<Record<string, AnyFieldBuilder>>;
  * @example
  * ```ts
  * declare const name: FieldBuilder<string | null, WithFlag<DefaultFieldFlags, "nullable">>;
- * type Name = FieldType<typeof name>; // string | null
+ * type Name = FieldValueOf<typeof name>; // string | null
  * ```
  */
-export type FieldType<B> = B extends FieldBuilder<infer T, infer _F> ? T : never;
+export type FieldValueOf<B> = B extends FieldBuilder<infer T, infer _F> ? T : never;
 
 /**
  * The flags of a field builder.
@@ -571,7 +545,7 @@ export type FieldFlagsOf<B> = B extends FieldBuilder<infer _T, infer F> ? F : ne
  * type UserRow = RowOf<typeof fields>; // { id: number; name: string | null }
  * ```
  */
-export type RowOf<F> = { -readonly [K in keyof F]: FieldType<F[K]> };
+export type RowOf<F> = { -readonly [K in keyof F]: FieldValueOf<F[K]> };
 
 /**
  * The static side that every schema class has: its metadata and its field builders.
@@ -591,27 +565,31 @@ export interface SchemaStatic<F extends FieldsShape = FieldsShape> {
 }
 
 /**
- * What `Schema(source, fields)` returns: a base class to extend. Its instances are rows;
- * `new S({ … })` builds one in state `"built"` with defaults applied (decision D2).
+ * What `Schema(source, fields)` returns: a base class to extend. Its instances are rows.
  *
- * Ecto equivalent: a module that calls `use Ecto.Schema`; `new User({...})` is `%User{}`.
+ * There is **no public constructor** (decision D2): a row comes only from the database (a
+ * query, or a successful write), and a new record is described by a changeset
+ * (`cast(User, params, [...])`, `change(User, values)`). The construct signature exists so
+ * that the class can be extended and so that {@link Row} can read its instance type; its
+ * one parameter is `never`, which makes `new User()` and `new User({ … })` compile
+ * errors. Rows are created by {@link SchemaMeta.create}, which runs no constructor.
  *
  * @example
  * ```ts
  * declare function Schema<const F extends FieldsShape>(source: string, fields: F): SchemaClass<F>;
- * declare const t: { id(): FieldBuilder<number>; string(): FieldBuilder<string> };
+ * declare const t: { integer(): FieldBuilder<number>; string(): FieldBuilder<string> };
  *
- * class User extends Schema("users", { id: t.id(), email: t.string() }) {
+ * class User extends Schema("users", { id: t.integer().primaryKey(), email: t.string() }) {
  *   get domain(): string {
  *     return this.email.split("@")[1] ?? "";
  *   }
  * }
- * const user = new User({ email: "ada@example.com" });
+ * declare const user: User; // from a query; never `new User()`
  * ```
  */
 export type SchemaClass<F extends FieldsShape> = SchemaStatic<F> &
   (new (
-    init?: Partial<RowOf<F>>,
+    noPublicConstructor: never,
   ) => RowOf<F>);
 
 /**
@@ -652,9 +630,7 @@ export type FieldNames<S> = keyof FieldsOf<S> & string;
  * The type of a row of schema `S`: an instance of the class. It has every field
  * (virtual ones included) and whatever getters and methods the class adds. Associations
  * are **not** properties of a plain row: reading one that was not preloaded is a compile
- * error, where Ecto would hand back `%Ecto.Association.NotLoaded{}`. See {@link Loaded}.
- *
- * Ecto equivalent: the schema struct type, `%User{}` / `User.t()`.
+ * error. See {@link Loaded}.
  *
  * @example
  * ```ts
@@ -699,8 +675,8 @@ type InsertOptionalKeys<F> = {
  * ```
  */
 export type InsertShape<S extends AnySchema> = Simplify<
-  { -readonly [K in InsertRequiredKeys<FieldsOf<S>>]: FieldType<FieldsOf<S>[K]> } & {
-    -readonly [K in InsertOptionalKeys<FieldsOf<S>>]?: FieldType<FieldsOf<S>[K]>;
+  { -readonly [K in InsertRequiredKeys<FieldsOf<S>>]: FieldValueOf<FieldsOf<S>[K]> } & {
+    -readonly [K in InsertOptionalKeys<FieldsOf<S>>]?: FieldValueOf<FieldsOf<S>[K]>;
   }
 >;
 
@@ -728,8 +704,6 @@ type IsUnion<T, U = T> = [T] extends [never] ? false : T extends U ? ([U] extend
  * The value that identifies one row of schema `S`: the key's own type for a single-field
  * primary key, an object of the key fields for a composite key, `never` without a key.
  *
- * Ecto equivalent: the `id` argument of `Repo.get/3` (Ecto has no composite form).
- *
  * @example
  * ```ts
  * type Key = WithFlag<DefaultFieldFlags, "primaryKey">;
@@ -741,9 +715,9 @@ type IsUnion<T, U = T> = [T] extends [never] ? false : T extends U ? ([U] extend
  */
 export type PrimaryKeyOf<S> =
   IsUnion<PrimaryKeyNames<S>> extends true
-    ? { [K in PrimaryKeyNames<S>]: FieldType<FieldsOf<S>[K]> }
+    ? { [K in PrimaryKeyNames<S>]: FieldValueOf<FieldsOf<S>[K]> }
     : PrimaryKeyNames<S> extends infer K extends keyof FieldsOf<S>
-      ? FieldType<FieldsOf<S>[K]>
+      ? FieldValueOf<FieldsOf<S>[K]>
       : never;
 
 /**
@@ -752,8 +726,6 @@ export type PrimaryKeyOf<S> =
  * class. `FK` is the foreign-key field name (or names) when it was given as a literal,
  * and `undefined` when the default name applies; {@link Loaded} uses it to decide whether
  * a preloaded `belongsTo` can be `null`.
- *
- * Ecto equivalent: `has_many/3`, `has_one/3`, `belongs_to/3`, `many_to_many/3`.
  *
  * @example
  * ```ts
@@ -810,8 +782,6 @@ export type Target<S, K extends keyof S> =
  * - a union of these: `"profile" | { posts: "comments" }`.
  *
  * An unknown association name is a compile error at every depth.
- *
- * Ecto equivalent: the argument of `Ecto.Query.preload/3` and `Repo.preload/3`.
  *
  * @example
  * ```ts
@@ -899,9 +869,6 @@ type LoadedAssoc<S extends AnySchema, K extends string, N> = K extends keyof S
  * - `belongsTo` becomes the target's row, or `| null` when the foreign-key field is
  *   nullable. The foreign key is the `foreignKey` given to `belongsTo`, by default
  *   `<association name>Id`; when it cannot be determined the result is `| null`.
- *
- * Ecto equivalent: a struct whose association fields were filled by `Repo.preload/3`.
- * Unlike Ecto there is no `NotLoaded` placeholder: the property is simply absent from the type.
  *
  * @example
  * ```ts

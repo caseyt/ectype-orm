@@ -671,7 +671,7 @@ describe("redaction of rows, at any depth", () => {
     const orphan = {
       id: 1,
       passwordHash: "S3CRET",
-      [ROW]: { state: "loaded", source: "users", prefix: undefined },
+      [ROW]: { state: "loaded", source: "users", schema: undefined },
     };
     expect(formatValue(orphan)).toBe("{ id: **redacted**, passwordHash: **redacted** }");
     expect(formatStruct("Row", orphan, new Set())).toBe(

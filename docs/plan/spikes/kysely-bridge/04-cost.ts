@@ -11,7 +11,7 @@
 //           nothing by itself; it puts an absolute number on what part B can only bound.
 //           (It runs in the same mitata pass as part A, before part B.)
 //
-// Run with: pnpm --filter @ectype/spike-kysely-bridge run spike:cost
+// Run with: pnpm --filter @egon-orm/spike-kysely-bridge run spike:cost
 // Writes results/04-cost.local.json (git-ignored). The committed results/04-cost.json,
 // which ADR 0002 quotes, is replaced only with SPIKE_COST_RECORD=1.
 import { execFileSync } from "node:child_process";
@@ -96,7 +96,7 @@ const USER_COLUMNS = [
   "password_hash",
   "settings",
   "lock_version",
-  "inserted_at",
+  "created_at",
   "updated_at",
 ];
 const ONE_ROW: SelectAst = select({

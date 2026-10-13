@@ -1,7 +1,7 @@
 # Kysely bridge spike (step 02)
 
 The evidence for [ADR 0002](../../../adr/0002-kysely-backend.md), which decides plan
-decision D12: is Kysely usable as Ectype's hidden SQL back end?
+decision D12: is Kysely usable as Egon's hidden SQL back end?
 
 The spike is the smallest code that answers the five questions of
 [`02-core-contracts.md`](../../02-core-contracts.md), part B. It is not the compiler
@@ -23,14 +23,14 @@ Supporting files: `ast.ts` (a small AST in the shape of `packages/core/src/contr
 
 ```sh
 pnpm db:up                                              # Postgres 16 from docker-compose.yml
-pnpm --filter @ectype/spike-kysely-bridge run spike     # all five; stops at the first failure
-pnpm --filter @ectype/spike-kysely-bridge run spike:cost   # one of them (also :lowering, :slots, :execution, :gaps)
+pnpm --filter @egon-orm/spike-kysely-bridge run spike     # all five; stops at the first failure
+pnpm --filter @egon-orm/spike-kysely-bridge run spike:cost   # one of them (also :lowering, :slots, :execution, :gaps)
 ```
 
 Every script creates its own database (named so that the test-support sweep removes it if
 the script is killed), loads `packages/core/test/support/fixtures/blog.sql`, seeds it, and
 drops it afterwards. There is no fallback to any other database: without the Compose
-Postgres the scripts fail. Connection settings come from the same `ECTYPE_PG_*` variables
+Postgres the scripts fail. Connection settings come from the same `EGON_PG_*` variables
 as the integration tests.
 
 `spike:cost` takes about three minutes. `SPIKE_COST_QUICK=1` shortens it to a smoke run

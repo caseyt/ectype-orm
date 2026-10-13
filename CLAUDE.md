@@ -1,12 +1,14 @@
-# Ectype — notes for coding agents
+# Egon ORM — notes for coding agents
 
 **Read `docs/plan/README.md` first**, in full, then your step file `docs/plan/NN-*.md`.
 The README holds the settled decisions (§2), the target API (§4), the standards (§6–§8)
 and the worker protocol including the PR and review loop (§9). `CONTRIBUTING.md` explains
 the tooling in more detail.
 
-Ectype is a TypeScript ORM modelled on Elixir's Ecto: schemas, changesets, an Ecto-style
-query builder and a Repo. Kysely is the hidden SQL back end.
+Egon ORM is a TypeScript ORM: schemas, changesets, a composable query builder and a repo.
+Kysely is the hidden SQL back end. Ecto is the design reference for behaviour, but it is
+not how the library is presented: users come from Drizzle, Sequelize and Prisma (plan
+README §8, §11).
 
 ## Commands
 
@@ -32,11 +34,11 @@ pnpm vitest run --project core:unit path/to/file.test.ts     # one project / one
 ## Layout
 
 ```
-packages/core/src        "ectype": contracts/ types/ schema/ changeset/ query/ compiler/
-                         adapter/ repo/ multi/ errors.ts index.ts (the only public entry point)
-packages/core/test/support   test helpers: import from "@ectype/test-support"
-packages/postgres        "@ectype/postgres"
-packages/zod             "@ectype/zod"
+packages/core/src        "egon-orm": contracts/ types/ schema/ changeset/ query/ compiler/
+                         adapter/ repo/ batch/ errors.ts index.ts (the only public entry point)
+packages/core/test/support   test helpers: import from "@egon-orm/test-support"
+packages/postgres        "@egon-orm/postgres"
+packages/zod             "@egon-orm/zod"
 packages/{sqlite,mysql,cli}  private placeholders (steps 17, 18)
 benchmarks/micro         <area>.bench.ts, one per feature area; harness in benchmarks/src
 docs/plan                plan and step specs. Do not edit, except to add status/NN.md
@@ -54,7 +56,8 @@ examples/smoke           ESM consumer + CommonJS consumer that require()s the ES
 - No default exports, no `any`, no non-null assertions outside tests, no `console` in
   `packages/`, no `@ts-ignore`; `@ts-expect-error` only in type tests.
 - Relative imports use the `.js` extension; type-only imports use `import type`.
-- Every exported symbol has TSDoc with an `@example` and the Ecto equivalent where one exists.
+- Every exported symbol has TSDoc with an `@example`. No Ecto positioning: TSDoc, code
+  comments and guide pages never mention Ecto (plan README §8).
 - Every literal in generated SQL is a bound parameter. No user value ever reaches SQL text.
 - Never add `minimumReleaseAgeExclude` to `pnpm-workspace.yaml` or turn off
   `minimumReleaseAgeStrict`; pnpm adds exclusions by itself when strict mode is off. If a
@@ -70,7 +73,7 @@ Performance is a feature with tests. On anything that runs per query or per row:
 - No `Proxy`, no `Object.defineProperty` per row, no `delete`, no spread of row objects.
 - Keep object shapes monomorphic: assign every field in the same order, always.
 - No per-call closures or arrays where a precomputed table on schema metadata will do.
-- Identity `load`/`dump` functions are skipped by reference check, not called.
+- Identity `fromDb`/`toDb` functions are skipped by reference check, not called.
 - Anything derivable from a schema or a query shape is computed once and cached on it.
 - Do not optimise without a benchmark that shows the win; commit the benchmark under
   `benchmarks/micro/<area>.bench.ts`.
@@ -84,4 +87,4 @@ Budgets: build a 3-clause query < 1.5 µs; compile with plan-cache hit < 0.3 µs
 Node >= 22.12 (decision D14) and pnpm 12; use the versions pinned in `.nvmrc` and
 `"packageManager"`. TypeScript is held at 6 because tsup's declaration bundler does not
 work with TypeScript 7, and Kysely is pinned to one minor (`~0.29`) on purpose. See
-`docs/plan/status/01.md` before bumping either.
+"Dependency versions" in `CONTRIBUTING.md` before bumping either.

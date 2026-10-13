@@ -41,7 +41,7 @@ await main("Question 1: lowering", { users: 40, postsPerUser: 6 }, async (db) =>
       reference,
       [30, 5],
       `SELECT u.id AS c0, count(p.id) AS c1 FROM users u JOIN posts p ON p.author_id = u.id
-       WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.inserted_at DESC LIMIT $2`,
+       WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.created_at DESC LIMIT $2`,
       [30, 5],
     );
 

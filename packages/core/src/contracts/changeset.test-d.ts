@@ -156,7 +156,7 @@ describe("ChangesetError and Constraint", () => {
   test("an error needs a message and meta; validation and constraint are optional", () => {
     const plain: ChangesetError = { message: "is invalid", meta: {} };
     const full: ChangesetError = {
-      message: "x %{count}",
+      message: "x {count}",
       validation: "length",
       constraint: "unique",
       meta: { count: 3 },

@@ -8,14 +8,14 @@ const fromRoot = (path: string): string => fileURLToPath(new URL(path, import.me
 
 /** Tests run against package sources, so no build is needed before `pnpm test:*`. */
 const alias = {
-  ectype: fromRoot("./packages/core/src/index.ts"),
-  "@ectype/postgres": fromRoot("./packages/postgres/src/index.ts"),
-  "@ectype/sqlite": fromRoot("./packages/sqlite/src/index.ts"),
-  "@ectype/mysql": fromRoot("./packages/mysql/src/index.ts"),
-  "@ectype/zod": fromRoot("./packages/zod/src/index.ts"),
-  "@ectype/cli": fromRoot("./packages/cli/src/index.ts"),
+  "egon-orm": fromRoot("./packages/core/src/index.ts"),
+  "@egon-orm/postgres": fromRoot("./packages/postgres/src/index.ts"),
+  "@egon-orm/sqlite": fromRoot("./packages/sqlite/src/index.ts"),
+  "@egon-orm/mysql": fromRoot("./packages/mysql/src/index.ts"),
+  "@egon-orm/zod": fromRoot("./packages/zod/src/index.ts"),
+  "@egon-orm/cli": fromRoot("./packages/cli/src/index.ts"),
   // Shared test helpers (not a published package): packages/core/test/support.
-  "@ectype/test-support": fromRoot("./packages/core/test/support/index.ts"),
+  "@egon-orm/test-support": fromRoot("./packages/core/test/support/index.ts"),
 };
 
 function projectsFor(pkg: (typeof PACKAGES)[number]): TestProjectConfiguration[] {

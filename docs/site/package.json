@@ -1,8 +1,8 @@
 {
-  "name": "@ectype/docs-site",
+  "name": "@egon-orm/docs-site",
   "version": "0.0.0",
   "private": true,
-  "description": "Ectype documentation site (VitePress).",
+  "description": "Egon ORM documentation site (VitePress).",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "preview": "vitepress preview"
   },
   "dependencies": {
-    "ectype": "workspace:*"
+    "egon-orm": "workspace:*"
   },
   "devDependencies": {
     "vitepress": "1.6.4"

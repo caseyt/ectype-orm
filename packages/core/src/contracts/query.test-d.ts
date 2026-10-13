@@ -26,11 +26,11 @@ import type {
   TableSourceNode,
 } from "./query.js";
 import type { SchemaMeta } from "./schema.js";
-import type { AnyEctoType } from "./type.js";
+import type { AnyFieldType } from "./type.js";
 
 declare const userMeta: SchemaMeta;
 declare const postMeta: SchemaMeta;
-declare const integerType: AnyEctoType;
+declare const integerType: AnyFieldType;
 
 const EMPTY: Omit<QueryAst, "from"> = {
   kind: "query",
@@ -49,7 +49,7 @@ const EMPTY: Omit<QueryAst, "from"> = {
   windows: [],
   preloads: [],
   updates: [],
-  prefix: undefined,
+  schema: undefined,
   hints: [],
   params: [],
   listLengths: [],
@@ -62,7 +62,7 @@ const col = (binding: string, field: string, column: string): ColumnNode => ({
   field,
   column,
 });
-const param = (value: unknown, type?: AnyEctoType): ParamNode => ({
+const param = (value: unknown, type?: AnyFieldType): ParamNode => ({
   kind: "param",
   value,
   type,
@@ -72,19 +72,19 @@ const param = (value: unknown, type?: AnyEctoType): ParamNode => ({
 describe("QueryAst", () => {
   test("expresses the reference query of the plan as plain data", () => {
     // SELECT u.id AS c0, count(p.id) AS c1 FROM users u JOIN posts p ON p.author_id = u.id
-    // WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.inserted_at DESC LIMIT $2
+    // WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.created_at DESC LIMIT $2
     const users: TableSourceNode = {
       kind: "table",
       source: "users",
       meta: userMeta,
-      prefix: undefined,
+      schema: undefined,
       alias: "u",
     };
     const posts: TableSourceNode = {
       kind: "table",
       source: "posts",
       meta: postMeta,
-      prefix: undefined,
+      schema: undefined,
       alias: "p",
     };
     const count: AggregateNode = {
@@ -133,7 +133,7 @@ describe("QueryAst", () => {
       },
       groupBys: [col("u", "id", "id")],
       orderBys: [
-        { kind: "order", expr: col("u", "insertedAt", "inserted_at"), direction: "desc", nulls: undefined },
+        { kind: "order", expr: col("u", "createdAt", "created_at"), direction: "desc", nulls: undefined },
       ],
       limit: param(10, integerType),
       params: [18, 10],
@@ -149,7 +149,7 @@ describe("QueryAst", () => {
       kind: "table",
       source: "users",
       meta: undefined,
-      prefix: undefined,
+      schema: undefined,
       alias: "u",
     };
     // @ts-expect-error params and shape are missing
@@ -313,8 +313,8 @@ describe("clause nodes", () => {
     if (source.kind === "subquerySource") expectTypeOf(source.query).toEqualTypeOf<QueryAst>();
     if (source.kind === "cteSource") {
       expectTypeOf(source.name).toEqualTypeOf<string>();
-      // @ts-expect-error a CTE reference has no prefix: it is not a table in a schema
-      source.prefix;
+      // @ts-expect-error a CTE reference has no schema: it is not a table in a schema
+      source.schema;
     }
     if (source.kind === "values") expectTypeOf(source.rows).toEqualTypeOf<readonly (readonly ExprNode[])[]>();
   });

@@ -8,15 +8,15 @@
 # Host ports are fixed and deliberately non-default so they never collide with a database
 # already running on the machine. The defaults in packages/core/test/support/env.ts match.
 # Data directories are tmpfs: fast, and gone when the container stops.
-name: ectype
+name: egon
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ectype
-      POSTGRES_PASSWORD: ectype
-      POSTGRES_DB: ectype_dev
+      POSTGRES_USER: egon
+      POSTGRES_PASSWORD: egon
+      POSTGRES_DB: egon_dev
     # Durability is irrelevant for throwaway test data; these settings make DDL-heavy suites faster.
     command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off", "-c", "max_connections=200"]
     ports:
@@ -26,7 +26,7 @@ services:
       - /var/lib/postgresql/data
     healthcheck:
       # Checks over TCP: during initialisation a temporary server answers on the socket only.
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ectype -d ectype_dev"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U egon -d egon_dev"]
       interval: 1s
       timeout: 5s
       retries: 60
@@ -35,15 +35,15 @@ services:
     image: mysql:8.4
     profiles: ["tier2"]
     environment:
-      MYSQL_ROOT_PASSWORD: ectype
-      MYSQL_DATABASE: ectype_dev
+      MYSQL_ROOT_PASSWORD: egon
+      MYSQL_DATABASE: egon_dev
     ports:
       - "127.0.0.1:33069:3306"
     tmpfs:
       - /var/lib/mysql
     healthcheck:
       # Checks over TCP: the socket answers before the server is ready for network clients.
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pectype --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pegon --silent"]
       interval: 2s
       timeout: 5s
       retries: 60

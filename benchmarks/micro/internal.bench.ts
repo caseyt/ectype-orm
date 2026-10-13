@@ -1,18 +1,18 @@
 // Micro-benchmarks for packages/core/src/internal (step 02): the shape hash, the LRU that
 // backs the plan cache, name conversion and inspect formatting.
 //
-// These utilities are not public API, so they cannot be imported from "ectype". They are
+// These utilities are not public API, so they cannot be imported from "egon-orm". They are
 // loaded from the package's built `dist/internal.js` (an extra build entry that is not in
 // the package's `exports`), so that this file measures built code like every other
 // benchmark; only the types come from the sources.
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { bench, doNotOptimize, group, resolveBuiltEctype, runBenchmarks } from "../src/harness.js";
+import { bench, doNotOptimize, group, resolveBuiltEgon, runBenchmarks } from "../src/harness.js";
 
 type Internal = typeof import("../../packages/core/src/internal/index.js");
 
-const builtInternal = join(dirname(resolveBuiltEctype()), "internal.js");
+const builtInternal = join(dirname(resolveBuiltEgon()), "internal.js");
 if (!existsSync(builtInternal)) {
   throw new Error(`${builtInternal} does not exist. Run \`pnpm build\` first.`);
 }
@@ -30,16 +30,14 @@ const {
 
 // --- hash: what the shape of the reference 3-clause query costs to compute ---
 const KINDS = ["query", "table", "bool", "binary", "column", "param", "order", "column", "param"];
-const IDENTIFIERS = ["users", "u", "age", "inserted_at"];
+const IDENTIFIERS = ["users", "u", "age", "created_at"];
 
 // A changing input, so that the JIT cannot fold a call into a constant.
 let counter = 0;
 
 group("internal/hash", () => {
   bench("hashInt", () => doNotOptimize(hashInt(HASH_SEED, counter++)));
-  bench('hashString, 11 characters ("inserted_at")', () =>
-    doNotOptimize(hashString(counter++, "inserted_at")),
-  );
+  bench('hashString, 11 characters ("created_at")', () => doNotOptimize(hashString(counter++, "created_at")));
   bench("shape of a 3-clause query: 9 kinds, 4 identifiers, 3 ints", () => {
     let hash = HASH_SEED;
     for (let i = 0; i < KINDS.length; i++) hash = hashString(hash, KINDS[i] as string);
@@ -113,8 +111,8 @@ group("baseline, not used: insertion-order Map LRU (1,000 entries, full)", () =>
 let fresh = 0;
 
 group("internal/naming", () => {
-  bench('camelToSnake("insertedAt"), memo hit', () => doNotOptimize(camelToSnake("insertedAt")));
-  bench('snakeToCamel("inserted_at"), memo hit', () => doNotOptimize(snakeToCamel("inserted_at")));
+  bench('camelToSnake("createdAt"), memo hit', () => doNotOptimize(camelToSnake("createdAt")));
+  bench('snakeToCamel("created_at"), memo hit', () => doNotOptimize(snakeToCamel("created_at")));
   bench("camelToSnake, memo miss (a new 16-character name each call)", () =>
     doNotOptimize(camelToSnake(`fieldName${fresh++}Value`)),
   );
@@ -130,7 +128,7 @@ const row = {
   passwordHash: "$2b$12$abcdefghijklmnopqrstuv",
   settings: { theme: "dark", tags: ["a", "b"] },
   lockVersion: 1,
-  insertedAt: new Date(0),
+  createdAt: new Date(0),
   updatedAt: new Date(0),
 };
 const redacted = new Set(["passwordHash"]);

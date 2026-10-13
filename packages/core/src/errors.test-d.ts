@@ -1,14 +1,14 @@
 import { describe, expectTypeOf, test } from "vitest";
 import type { ChangesetLike } from "./contracts/changeset.js";
 import {
-  AdapterError,
-  type AdapterErrorCode,
   ConstraintError,
   type ConstraintViolationType,
-  type EctypeError,
+  DatabaseError,
+  type DatabaseErrorCode,
+  type EgonError,
   type ErrorCode,
   InvalidChangesetError,
-  isEctypeError,
+  isEgonError,
   MultipleResultsError,
   NoResultsError,
   NotLoadedError,
@@ -18,28 +18,28 @@ import {
 
 describe("error codes", () => {
   test("each class has its literal code", () => {
-    expectTypeOf(new NoResultsError().code).toEqualTypeOf<"no_results">();
+    expectTypeOf(new NoResultsError().code).toEqualTypeOf<"noResults">();
     expectTypeOf(new QueryError("x").code).toEqualTypeOf<"query">();
-    expectTypeOf(new AdapterError("x").code).toEqualTypeOf<AdapterErrorCode>();
-    expectTypeOf<EctypeError["code"]>().toEqualTypeOf<ErrorCode>();
-    expectTypeOf<AdapterErrorCode>().toExtend<ErrorCode>();
+    expectTypeOf(new DatabaseError("x").code).toEqualTypeOf<DatabaseErrorCode>();
+    expectTypeOf<EgonError["code"]>().toEqualTypeOf<ErrorCode>();
+    expectTypeOf<DatabaseErrorCode>().toExtend<ErrorCode>();
   });
 
   test("the code discriminates a union of errors", () => {
     const error = {} as NoResultsError | MultipleResultsError | StaleEntryError;
-    if (error.code === "multiple_results") expectTypeOf(error).toEqualTypeOf<MultipleResultsError>();
-    if (error.code === "stale_entry") expectTypeOf(error.schema).toEqualTypeOf<string>();
+    if (error.code === "multipleResults") expectTypeOf(error).toEqualTypeOf<MultipleResultsError>();
+    if (error.code === "staleEntry") expectTypeOf(error.schema).toEqualTypeOf<string>();
   });
 
-  test("isEctypeError narrows unknown and takes only real codes", () => {
+  test("isEgonError narrows unknown and takes only real codes", () => {
     const caught: unknown = undefined;
-    if (isEctypeError(caught)) {
-      expectTypeOf(caught).toEqualTypeOf<EctypeError>();
+    if (isEgonError(caught)) {
+      expectTypeOf(caught).toEqualTypeOf<EgonError>();
       expectTypeOf(caught.code).toEqualTypeOf<ErrorCode>();
     }
-    isEctypeError(caught, "deadlock");
+    isEgonError(caught, "deadlock");
     // @ts-expect-error not an error code
-    isEctypeError(caught, "nope");
+    isEgonError(caught, "nope");
   });
 });
 
@@ -70,16 +70,16 @@ describe("constructors", () => {
     new ConstraintError({ type: "unique", constraint: "x" });
   });
 
-  test("ConstraintError and AdapterError take only their own kinds", () => {
+  test("ConstraintError and DatabaseError take only their own kinds", () => {
     expectTypeOf<ConstraintError["type"]>().toEqualTypeOf<ConstraintViolationType>();
     const unreported = { constraint: undefined, table: undefined, column: undefined, detail: undefined };
     new ConstraintError({ type: "notNull", ...unreported });
     // @ts-expect-error noAssoc is a changeset declaration, not a database violation
     new ConstraintError({ type: "noAssoc", ...unreported });
     // @ts-expect-error not an adapter code
-    new AdapterError("x", { code: "query" });
-    expectTypeOf(new AdapterError("x").retryable).toEqualTypeOf<boolean>();
-    expectTypeOf(new AdapterError("x").sql).toEqualTypeOf<string | undefined>();
+    new DatabaseError("x", { code: "query" });
+    expectTypeOf(new DatabaseError("x").retryable).toEqualTypeOf<boolean>();
+    expectTypeOf(new DatabaseError("x").sql).toEqualTypeOf<string | undefined>();
   });
 
   test("the detail fields of every error are typed, never any", () => {
@@ -112,13 +112,13 @@ describe("constructors", () => {
     expectTypeOf({} as InvalidChangesetError)
       .toHaveProperty("action")
       .not.toBeAny();
-    expectTypeOf({} as AdapterError)
+    expectTypeOf({} as DatabaseError)
       .toHaveProperty("retryable")
       .not.toBeAny();
-    expectTypeOf({} as AdapterError)
+    expectTypeOf({} as DatabaseError)
       .toHaveProperty("sql")
       .not.toBeAny();
-    expectTypeOf({} as EctypeError)
+    expectTypeOf({} as EgonError)
       .toHaveProperty("cause")
       .toBeUnknown();
   });

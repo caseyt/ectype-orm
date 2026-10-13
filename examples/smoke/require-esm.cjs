@@ -6,26 +6,26 @@
 // ExperimentalWarning, 22.23.1 and 24.14.1 work silently). `engines.node` is `>=22.12`
 // for that reason. This script proves it on the Node that runs it.
 const assert = require("node:assert/strict");
-const { VERSION: postgresVersion } = require("@ectype/postgres");
-const { VERSION: zodVersion } = require("@ectype/zod");
-const { VERSION, QueryError, isEctypeError, ok } = require("ectype");
+const { VERSION: postgresVersion } = require("@egon-orm/postgres");
+const { VERSION: zodVersion } = require("@egon-orm/zod");
+const { VERSION, QueryError, isEgonError, success } = require("egon-orm");
 
 assert.match(VERSION, /^\d+\.\d+\.\d+/);
 assert.equal(postgresVersion, VERSION);
 assert.equal(zodVersion, VERSION);
 
 // What was loaded is the one ES module build, not a CommonJS copy of it.
-const resolved = require.resolve("ectype");
+const resolved = require.resolve("egon-orm");
 assert.ok(resolved.endsWith("/dist/index.js"), resolved);
 
 // The same module instance as an `import` gets, so classes and symbols are shared.
-import("ectype").then((esm) => {
+import("egon-orm").then((esm) => {
   assert.equal(esm.QueryError, QueryError);
   const error = new QueryError("x");
-  assert.ok(error instanceof esm.EctypeError);
-  assert.ok(isEctypeError(error, "query"));
-  assert.deepEqual(ok(1), { ok: true, value: 1 });
+  assert.ok(error instanceof esm.EgonError);
+  assert.ok(isEgonError(error, "query"));
+  assert.deepEqual(success(1), { success: true, data: 1 });
   console.log(
-    `cjs: require("ectype") loaded the ES module ${VERSION} on Node ${process.version} (${resolved})`,
+    `cjs: require("egon-orm") loaded the ES module ${VERSION} on Node ${process.version} (${resolved})`,
   );
 });

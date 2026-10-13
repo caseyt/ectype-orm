@@ -4,14 +4,14 @@
  * type appears here, so it can be replaced without touching the repo.
  *
  * Implemented by step 10 (the `compile*` methods and the plan cache), step 11 (execution,
- * connections, errors, `@ectype/postgres`) and step 17 (SQLite, MySQL). Consumed by the
+ * connections, errors, `@egon-orm/postgres`) and step 17 (SQLite, MySQL). Consumed by the
  * repo (12, 13, 14, 16) and by migrations (18).
  *
  * @module
  */
 import type { ExprNode, FragmentNode, QueryAst, QueryOperation } from "./query.js";
 import type { FieldMeta, SchemaMeta } from "./schema.js";
-import type { AnyEctoType, Codec } from "./type.js";
+import type { AnyFieldType, Codec } from "./type.js";
 
 /**
  * The SQL dialects.
@@ -40,8 +40,8 @@ export type Dialect = "postgres" | "mysql" | "sqlite";
  * {@link Adapter.compileUpdate}, {@link Adapter.compileDelete} and
  * {@link Adapter.compileFragment} for those.
  *
- * `dump` converts the application value to the driver value. `undefined` means "pass it
- * through" (the type's dump was the identity), so the hot path tests one property instead
+ * `toDb` converts the application value to the driver value. `undefined` means "pass it
+ * through" (the type's toDb was the identity), so the hot path tests one property instead
  * of calling a function. It is never called with `null`. For `list` it is applied to
  * every element.
  *
@@ -54,8 +54,8 @@ export type Dialect = "postgres" | "mysql" | "sqlite";
  * ```ts
  * // WHERE "u"."id" = ANY($1) AND "u"."age" >= $2
  * const slots: ParamSlot[] = [
- *   { kind: "list", index: 1, dump: undefined, redact: false },
- *   { kind: "named", name: "minAge", dump: undefined, redact: false },
+ *   { kind: "list", index: 1, toDb: undefined, redact: false },
+ *   { kind: "named", name: "minAge", toDb: undefined, redact: false },
  * ];
  * ```
  */
@@ -63,26 +63,26 @@ export type ParamSlot =
   | {
       readonly kind: "inline";
       readonly index: number;
-      readonly dump: Dump | undefined;
+      readonly toDb: ToDb | undefined;
       readonly redact: boolean;
     }
   | {
       readonly kind: "list";
       readonly index: number;
-      readonly dump: Dump | undefined;
+      readonly toDb: ToDb | undefined;
       readonly redact: boolean;
     }
   | {
       readonly kind: "element";
       readonly index: number;
       readonly element: number;
-      readonly dump: Dump | undefined;
+      readonly toDb: ToDb | undefined;
       readonly redact: boolean;
     }
   | {
       readonly kind: "named";
       readonly name: string;
-      readonly dump: Dump | undefined;
+      readonly toDb: ToDb | undefined;
       readonly redact: boolean;
     };
 
@@ -91,10 +91,10 @@ export type ParamSlot =
  *
  * @example
  * ```ts
- * const dumpDate: Dump = (value) => (value as Date).toISOString();
+ * const dumpDate: ToDb = (value) => (value as Date).toISOString();
  * ```
  */
-export type Dump = (value: unknown) => unknown;
+export type ToDb = (value: unknown) => unknown;
 
 /**
  * A preloaded association that a `row` leaf of an {@link OutputPlan} carries (step 14).
@@ -137,10 +137,10 @@ export interface OutputPreload {
  *   all `NULL` cannot be told from an absent one, which is a limit of keyless schemas).
  *   `key` holds the output columns of the primary key, in `meta.primaryKey` order
  *   (empty for a schema without one): what identifies the row in the result.
- *   `prefix` is the resolved prefix of the table source the rows originate from, or the
- *   schema's declared prefix when they have no single origin ("Prefixes" on
+ *   `schema` is the resolved database schema of the table source the rows originate from, or the
+ *   schema's declared database schema when they have no single origin ("Database schemas" on
  *   {@link Adapter}, rule 2). The decoder stamps each row from its own leaf:
- *   `leaf.meta.rowMeta("loaded", leaf.prefix)`.
+ *   `leaf.meta.rowMeta("loaded", leaf.schema)`.
  *   `preloads` lists the associations the row carries (empty for an ordinary row). A row
  *   with preloads is built with `meta.createWith(preloads.map((p) => p.assoc))`.
  * - `constant`: no column. The value is `constants[index]` of the query's `SelectNode`,
@@ -180,13 +180,13 @@ export interface OutputPreload {
  * ```
  */
 export type OutputPlan =
-  | { readonly kind: "value"; readonly alias: string; readonly type: AnyEctoType | undefined }
+  | { readonly kind: "value"; readonly alias: string; readonly type: AnyFieldType | undefined }
   | {
       readonly kind: "row";
       readonly meta: SchemaMeta;
       readonly aliases: readonly string[];
       readonly key: readonly string[];
-      readonly prefix: string | undefined;
+      readonly schema: string | undefined;
       readonly nullable: boolean;
       readonly preloads: readonly OutputPreload[];
     }
@@ -219,15 +219,13 @@ export type RowDecoder = (row: Readonly<Record<string, unknown>>, constants: rea
  * executed (the adapter always creates it as `undefined`), so that the decoder is built
  * once per plan and found without a lookup.
  *
- * Ecto equivalent: the prepared query that an adapter's `prepare/2` callback returns.
- *
  * @example
  * ```ts
  * const plan: CompiledQuery = {
  *   sql: 'select "u"."id" as "c0" from "users" as "u" where "u"."age" >= $1',
- *   slots: [{ kind: "inline", index: 0, dump: undefined, redact: false }],
+ *   slots: [{ kind: "inline", index: 0, toDb: undefined, redact: false }],
  *   output: { kind: "value", alias: "c0", type: undefined },
- *   prefix: undefined,
+ *   schema: undefined,
  *   decoder: undefined,
  * };
  * ```
@@ -239,20 +237,20 @@ export interface CompiledQuery {
   /** What the result rows hold; `undefined` when the rows are returned raw or there are none. */
   readonly output: OutputPlan | undefined;
   /**
-   * The prefix the statement's **target or root table** resolved to (see "Prefixes" on
+   * The database schema the statement's **target or root table** resolved to (see "Database schemas" on
    * {@link Adapter}): the table written by a row-level write, an `updateAll` or a
    * `deleteAll`; the root source of a query when that is a table; `undefined` otherwise
    * (a fragment, or a root that is a subquery, a CTE or a values list).
    *
    * It is what the repo stamps on the row it returns from a **row-level write**
-   * (`meta.rowMeta("loaded", plan.prefix)`), where there is one table and no output-plan
+   * (`meta.rowMeta("loaded", plan.schema)`), where there is one table and no output-plan
    * leaf to ask, and what telemetry reports. Rows decoded from a query's
-   * {@link OutputPlan} are **not** stamped with it: each takes the prefix of its own
-   * `row` leaf, because a joined table can resolve to another prefix than the root. For a
-   * query whose root is a table it equals the root leaf's `prefix`; it is kept, although
+   * {@link OutputPlan} are **not** stamped with it: each takes the database schema of its own
+   * `row` leaf, because a joined table can resolve to another database schema than the root. For a
+   * query whose root is a table it equals the root leaf's `schema`; it is kept, although
    * redundant there, so that writes and queries report their table the same way.
    */
-  readonly prefix: string | undefined;
+  readonly schema: string | undefined;
   /** Set by the repo, not by the adapter. */
   decoder: RowDecoder | undefined;
 }
@@ -369,7 +367,7 @@ export interface BeginOptions {
  * ```
  */
 export interface ExecuteOptions {
-  /** Aborting cancels the statement on the server; the call rejects with `AdapterError` (code `"aborted"`). */
+  /** Aborting cancels the statement on the server; the call rejects with `DatabaseError` (code `"aborted"`). */
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   /**
@@ -388,7 +386,7 @@ export interface ExecuteOptions {
   /**
    * Anything the caller wants back: it is handed, untouched, to the listeners as
    * {@link QueryEvent.context} of the event for this execution. This is how the repo
-   * attaches its own facts (operation, source schema, the caller's `telemetry` option) to
+   * attaches its own facts (operation, source schema, the caller's `context` option) to
    * the right event when executions overlap.
    */
   readonly context?: unknown;
@@ -482,46 +480,51 @@ export interface Connection extends Executor {
 }
 
 /**
- * The conflict handling of a compiled insert.
+ * What a compiled insert does when the row collides with an existing one. An insert with
+ * no conflict handling has none of this (`InsertPlanOptions.onConflict` is `undefined`)
+ * and a conflict is an error.
  *
- * - `"raise"`: no clause; a conflict is an error.
  * - `"nothing"`: `DO NOTHING`.
- * - `"replaceAll"`: update every inserted column.
- * - `{ replace }`: update these fields.
- * - `{ replaceAllExcept }`: update every inserted column except these fields.
- * - `{ query }`: update as this `updateAll`-style query says.
- *
- * Ecto equivalent: the `:on_conflict` option of `Repo.insert/2`.
+ * - `{ target, update }`: update the existing row; see {@link ConflictUpdate} and
+ *   {@link ConflictTarget}. `target` is `undefined` when none was given, which is the
+ *   only form MySQL accepts.
  *
  * @example
  * ```ts
+ * declare const email: FieldMeta;
  * declare const name: FieldMeta;
- * const onConflict: OnConflict = { replace: [name] };
+ * const onConflict: OnConflict = { target: [email], update: [name] };
  * ```
  */
 export type OnConflict =
-  | "raise"
   | "nothing"
-  | "replaceAll"
-  | { readonly replace: readonly FieldMeta[] }
-  | { readonly replaceAllExcept: readonly FieldMeta[] }
-  | { readonly query: QueryAst };
+  | { readonly target: ConflictTarget | undefined; readonly update: ConflictUpdate };
+
+/**
+ * Which columns a conflicting insert updates on the existing row.
+ *
+ * - `"all"`: every inserted column.
+ * - a list of fields: these fields.
+ * - `{ except }`: every inserted column except these fields.
+ *
+ * @example
+ * ```ts
+ * declare const createdAt: FieldMeta;
+ * const update: ConflictUpdate = { except: [createdAt] };
+ * ```
+ */
+export type ConflictUpdate = "all" | readonly FieldMeta[] | { readonly except: readonly FieldMeta[] };
 
 /**
  * Which conflict a compiled insert handles: the unique index on these fields, a named
  * constraint, or a fragment (an index expression, possibly with a predicate).
  *
- * Ecto equivalent: the `:conflict_target` option of `Repo.insert/2`.
- *
  * @example
  * ```ts
- * const target: ConflictTarget = { constraint: "users_email_index" };
+ * const target: ConflictTarget = { constraint: "users_email_key" };
  * ```
  */
-export type ConflictTarget =
-  | { readonly fields: readonly FieldMeta[] }
-  | { readonly constraint: string }
-  | { readonly fragment: FragmentNode };
+export type ConflictTarget = readonly FieldMeta[] | { readonly constraint: string } | FragmentNode;
 
 /**
  * One cell of an insert whose rows are not all plain values.
@@ -533,9 +536,6 @@ export type ConflictTarget =
  *   fragment. Its parameter nodes carry their values, as in a query.
  * - `placeholder`: a value supplied by name and shared by many cells; it compiles to a
  *   `named` slot.
- *
- * Ecto equivalent: the values `Repo.insert_all/3` accepts for a field (a value, a query,
- * `{:placeholder, key}`).
  *
  * @example
  * ```ts
@@ -584,8 +584,7 @@ export type InsertSource =
  * const options: InsertPlanOptions = {
  *   source: { kind: "values", rows: 1 },
  *   returning: [id],
- *   onConflict: "raise",
- *   conflictTarget: undefined,
+ *   onConflict: undefined,
  * };
  * ```
  */
@@ -593,8 +592,8 @@ export interface InsertPlanOptions {
   readonly source: InsertSource;
   /** The fields to return, in order; empty for none. */
   readonly returning: readonly FieldMeta[];
-  readonly onConflict: OnConflict;
-  readonly conflictTarget: ConflictTarget | undefined;
+  /** `undefined` when the insert handles no conflict: a conflict is then an error. */
+  readonly onConflict: OnConflict | undefined;
 }
 
 /**
@@ -677,86 +676,86 @@ export interface AdapterEvents {
  * A database, as the repo sees it: compile statements, run them, hand out connections.
  *
  * `compile*` methods are synchronous and cached per adapter instance: the same query
- * shape, or the same (schema, operation, column set, options), with the same prefix,
+ * shape, or the same (schema, operation, column set, options), with the same database schema,
  * returns the same {@link CompiledQuery}.
  *
- * ## Prefixes
+ * ## Database schemas
  *
- * A prefix is the schema (Postgres) or database (MySQL) a table lives in. Two rules
- * decide every prefix; everything after them is a consequence.
+ * A database schema is the Postgres schema or the MySQL database a table lives in. Two rules
+ * decide every database schema; everything after them is a consequence.
  *
- * **Rule 1, resolution.** A prefix is decided in exactly one place: where a table source
- * is lowered. It is the first that is set of, in Ecto's order,
+ * **Rule 1, resolution.** A database schema is decided in exactly one place: where a table source
+ * is lowered. It is the first that is set of
  *
- * `source.prefix ?? schemaMeta.prefix ?? query.prefix ?? argument`
+ * `source.schema ?? schemaMeta.schema ?? query.schema ?? argument`
  *
- * where `source.prefix` is the prefix given to that `from` or join, `schemaMeta.prefix`
- * the one the schema declares, `query.prefix` the prefix of the nearest enclosing query
+ * where `source.schema` is the database schema given to that `from` or join, `schemaMeta.schema`
+ * the one the schema declares, `query.schema` the database schema of the nearest enclosing query
  * that sets one (the query the source sits in, else the one around it, and so on
- * outward), and `argument` the `prefix` parameter of `compile` and `compileExplain`.
- * Nothing else in the compiler decides a prefix.
+ * outward), and `argument` the `schema` parameter of `compile` and `compileExplain`.
+ * Nothing else in the compiler decides a database schema.
  *
  * **Rule 2, provenance.** A `row` leaf of the {@link OutputPlan} carries the resolved
- * prefix of the table source its rows originate from. The value travels upward unchanged
+ * database schema of the table source its rows originate from. The value travels upward unchanged
  * through whatever wraps that source (a subquery, a CTE, a join preload, `RETURNING`),
  * because an outer leaf is built from the inner leaf and never resolved again. A row with
- * no single originating table source has no provenance, and its leaf takes the prefix
- * its schema declares: the value a newly built row holds (`RowMeta.prefix`).
+ * no single originating table source has no provenance, and its leaf takes the database schema
+ * its schema declares (`SchemaMeta.schema`).
  *
  * **To step 10:** implement this as one resolve function, called where a table source is
- * lowered, plus propagation of the leaf's value; there must be no prefix logic per node
- * kind. The enclosing query's prefix is just the value handed down when a nested query
+ * lowered, plus propagation of the leaf's value; there must be no database schema logic per node
+ * kind. The enclosing query's database schema is just the value handed down when a nested query
  * (a subquery, a CTE body, a set-operation branch) is lowered: its own if it sets one,
  * else the one it was handed.
  *
  * ### What the repo passes
  *
- * - **A query** (`compile`, `compileExplain`): `argument` is the per-call `prefix` option,
+ * - **A query** (`compile`, `compileExplain`): `argument` is the per-call `schema` option,
  *   else the repo default. It is the weakest position.
  * - **A row-level write** (`compileInsert`, `compileUpdate`, `compileDelete`): the
- *   statement has one table source and no query, and its `prefix` parameter is that
- *   source's `source.prefix`, the strongest position (there is no `argument`). The repo
- *   passes the per-call option, else the row's `RowMeta.prefix`, else its default.
- *   (`insertAll` has no row and uses the schema's declared prefix in the row's place,
- *   which is what a built row holds.)
- * - **`reload`:** the repo puts the row's `RowMeta.prefix` on the source of the query it
- *   builds (`source.prefix`), with rows of different prefixes in separate queries.
+ *   statement has one table source and no query, and its `schema` parameter is that
+ *   source's `source.schema`, the strongest position (there is no `argument`). The repo
+ *   passes the per-call option, else the row's `RowMeta.schema`, else its default.
+ *   An insert has no row (a new record is a changeset, decision D2), and neither has
+ *   `insertAll`: both use the schema's declared database schema in the row's place.
+ * - **`reload`:** the repo puts the row's `RowMeta.schema` on the source of the query it
+ *   builds (`source.schema`), with rows of different database schemas in separate queries.
  * - **A separate-query preload (step 14):** the repo passes the parents'
- *   `RowMeta.prefix` as `argument`, with parents of different prefixes in separate
+ *   `RowMeta.schema` as `argument`, with parents of different database schemas in separate
  *   queries.
  *
- * A decoded row is stamped from its leaf: `leaf.meta.rowMeta("loaded", leaf.prefix)`.
- * The repo never rewrites an AST to apply a prefix.
+ * A decoded row is stamped from its leaf: `leaf.meta.rowMeta("loaded", leaf.schema)`.
+ * The repo never rewrites an AST to apply a database schema.
  *
  * ### Consequences
  *
- * - A schema that declares a prefix keeps it whatever the query, the call or the repo
- *   say; a per-call prefix on a read does not override a query's own; a per-call prefix
+ * - A schema that declares a database schema keeps it whatever the query, the call or the repo
+ *   say; a per-call database schema on a read does not override a query's own; a per-call database schema
  *   on a write overrides everything.
  * - A row is written back, and reloaded, where it was read: both put the row's own
- *   prefix in the strongest position.
+ *   database schema in the strongest position.
  * - The tables of one statement can resolve differently, so rows of one result can carry
- *   different prefixes (second table below). Children of a join preload carry theirs.
- * - A row read through a subquery or a CTE carries the prefix of the inner table (third
+ *   different database schemas (second table below). Children of a join preload carry theirs.
+ * - A row read through a subquery or a CTE carries the database schema of the inner table (third
  *   table below). A CTE reference (`CteSourceNode`) is not a table source: rule 1 does
  *   not apply to it, and its leaf is the CTE's own, including inside a recursive CTE,
  *   where the self-reference adds nothing to the anchor's provenance.
- * - A set operation has provenance when all its branches agree on the prefix, and none
+ * - A set operation has provenance when all its branches agree on the database schema, and none
  *   when they differ. Rows built from expressions, from a values list or from a fragment
- *   have none. With no provenance the row holds its schema's declared prefix and is
- *   written back like a built row; select the prefix as a column to do otherwise.
+ *   have none. With no provenance the row holds its schema's declared database schema and is
+ *   written back to it; select the database schema as a column to do otherwise.
  * - A separate-query preload is a query of its own: its children are stamped from its
  *   own leaves.
- * - A nested query that sets no prefix reads where its enclosing query reads (fourth
+ * - A nested query that sets no database schema reads where its enclosing query reads (fourth
  *   table below), so the branches of a set operation normally agree.
  * - `updateAll` and `deleteAll` are queries: every table resolves by rule 1, `RETURNING`
- *   rows are stamped from their leaves, and {@link CompiledQuery.prefix} is the target's.
+ *   rows are stamped from their leaves, and {@link CompiledQuery.schema} is the target's.
  *   `compileExplain` resolves as `compile` does. Streams use the same decoder.
- * - The plan cache key is the top-level query's structure plus the `prefix` parameter.
- *   The per-source prefixes, the prefix of the query and of every query nested in it, and
- *   each schema (its name and declared prefix) are part of the structure; see "Shape" in
+ * - The plan cache key is the top-level query's structure plus the `schema` parameter.
+ *   The per-source database schemas, the database schema of the query and of every query nested in it, and
+ *   each schema (its name and declared database schema) are part of the structure; see "Shape" in
  *   `query.ts`. A nested query has no plan of its own: what it compiles to depends on the
- *   prefix it inherits.
+ *   database schema it inherits.
  *
  * ### Checks
  *
@@ -764,38 +763,34 @@ export interface AdapterEvents {
  *
  * | Schema declares | Repo default | insert | get / all | update | delete |
  * |---|---|---|---|---|---|
- * | `auth` | none | `auth` (built row) | `auth` (schema) | `auth` (the row's) | `auth` |
+ * | `auth` | none | `auth` (schema) | `auth` (schema) | `auth` (the row's) | `auth` |
  * | none | `tenant_1` | `tenant_1` (repo default) | `tenant_1` (argument) | `tenant_1` (the row's) | `tenant_1` |
- * | `auth` | `tenant_1` | `auth` (built row) | `auth` (schema before argument) | `auth` (the row's) | `auth` |
+ * | `auth` | `tenant_1` | `auth` (schema before repo default) | `auth` (schema before argument) | `auth` (the row's) | `auth` |
  *
  * Several tables. Repo default `tenant_1`; `User` declares none; `Org` declares `global`;
- * `Post` is joined with the per-source prefix `archive`; all three bindings selected:
+ * `Post` is joined with the per-source database schema `archive`; all three bindings selected:
  *
- * | Binding | Rule 1 stops at | Read from | Row's `RowMeta.prefix` | `update` / `delete` of that row |
+ * | Binding | Rule 1 stops at | Read from | Row's `RowMeta.schema` | `update` / `delete` of that row |
  * |---|---|---|---|---|
  * | `u` (`User`) | the argument | `tenant_1.users` | `tenant_1` | `tenant_1.users` |
  * | `o` (`Org`) | the schema | `global.orgs` | `global` | `global.orgs` |
  * | `p` (`Post`) | the source | `archive.posts` | `archive` | `archive.posts` |
  *
  * Through a subquery. Repo default `tenant_1`; `Post` declares none; a subquery over
- * `Post` whose source has the per-source prefix `archive` (or whose query prefix is
+ * `Post` whose source has the per-source database schema `archive` (or whose query database schema is
  * `archive`), used as the source of an outer binding `s` that is selected whole:
  *
- * | Binding | Rule 1, at the inner source | Rule 2 | Read from | Row's prefix | `update` / `delete` | `reload` |
+ * | Binding | Rule 1, at the inner source | Rule 2 | Read from | Row's database schema | `update` / `delete` | `reload` |
  * |---|---|---|---|---|---|---|
  * | `s` | `archive` | the outer leaf is the inner leaf's | `archive.posts` | `archive` | `archive.posts` | `archive.posts` |
  *
- * Inherited query prefix. Repo default `tenant_1`; `Post` declares none; no per-source
- * prefix anywhere:
+ * Inherited query database schema. Repo default `tenant_1`; `Post` declares none; no per-source
+ * database schema anywhere:
  *
- * | Query | `query.prefix` at the inner source | Read from | Row's prefix |
+ * | Query | `query.schema` at the inner source | Read from | Row's database schema |
  * |---|---|---|---|
- * | a subquery `from(Post, "p")` with no prefix, as the source of an outer query whose prefix is `archive` | `archive`, inherited from the outer query | `archive.posts` | `archive` |
- * | `from(Post, "p")` with prefix `archive`, `unionAll` a branch `from(Post, "p")` with none | `archive` in both: the branch inherits it | `archive.posts`, both branches | `archive` (the branches agree, so there is provenance) |
- *
- * Ecto equivalent of the order: "Query prefix" in the `Ecto.Query` documentation.
- *
- * Ecto equivalent: the `Ecto.Adapter` behaviours (`Queryable`, `Schema`, `Transaction`).
+ * | a subquery `from(Post, "p")` with no database schema, as the source of an outer query whose database schema is `archive` | `archive`, inherited from the outer query | `archive.posts` | `archive` |
+ * | `from(Post, "p")` with database schema `archive`, `unionAll` a branch `from(Post, "p")` with none | `archive` in both: the branch inherits it | `archive.posts`, both branches | `archive` (the branches agree, so there is provenance) |
  *
  * @example
  * ```ts
@@ -815,7 +810,7 @@ export interface Adapter extends Executor {
    *
    * @throws QueryError when the query is invalid or uses a feature the dialect lacks.
    */
-  compile(ast: QueryAst, operation: QueryOperation, prefix: string | undefined): CompiledQuery;
+  compile(ast: QueryAst, operation: QueryOperation, schema: string | undefined): CompiledQuery;
 
   /**
    * Compiles the statement that asks the database for the plan of a query: what
@@ -827,12 +822,12 @@ export interface Adapter extends Executor {
   compileExplain(
     ast: QueryAst,
     operation: QueryOperation,
-    prefix: string | undefined,
+    schema: string | undefined,
     options: ExplainOptions,
   ): CompiledQuery;
 
   /**
-   * Compiles a bare fragment as a whole statement: what `repo.query(fragment\`…\`)` runs.
+   * Compiles a bare fragment as a whole statement: what `repo.raw(fragment\`…\`)` runs.
    * The static strings are emitted as written, values are bound, and `fragment.ident`
    * names are quoted for the dialect. Slots refer to the values of the fragment's
    * parameter nodes in canonical order (`collectParams(fragment)`). `output` is
@@ -843,7 +838,7 @@ export interface Adapter extends Executor {
   /**
    * Compiles `INSERT INTO source (columns…) … [ON CONFLICT …] [RETURNING …]`.
    *
-   * Slots refer to one flat parameter array, which the repo builds in three sections:
+   * Slots refer to one flat parameter array, which the repo builds in two sections:
    *
    * 1. **The source.**
    *    - `values`: row by row; the value of `columns[c]` for row `r` is at index
@@ -854,7 +849,6 @@ export interface Adapter extends Executor {
    *    - `query`: `query.params`.
    * 2. **The conflict target**, when it is a fragment: the values of its parameter nodes
    *    in canonical order.
-   * 3. **The conflict action**, when it is `{ query }`: `query.params`.
    *
    * `placeholder` cells and named parameter nodes compile to `named` slots.
    *
@@ -864,7 +858,7 @@ export interface Adapter extends Executor {
     meta: SchemaMeta,
     columns: readonly FieldMeta[],
     options: InsertPlanOptions,
-    prefix: string | undefined,
+    schema: string | undefined,
   ): CompiledQuery;
 
   /**
@@ -877,7 +871,7 @@ export interface Adapter extends Executor {
     set: readonly FieldMeta[],
     where: readonly FieldMeta[],
     returning: readonly FieldMeta[],
-    prefix: string | undefined,
+    schema: string | undefined,
   ): CompiledQuery;
 
   /**
@@ -887,26 +881,26 @@ export interface Adapter extends Executor {
     meta: SchemaMeta,
     where: readonly FieldMeta[],
     returning: readonly FieldMeta[],
-    prefix: string | undefined,
+    schema: string | undefined,
   ): CompiledQuery;
 
   /** Checks a connection out of the pool. The caller must `release` it. */
   acquire(): Promise<Connection>;
 
   /**
-   * Maps a driver error to an Ectype error (`ConstraintError`, `AdapterError`, …), keeping
+   * Maps a driver error to an Egon error (`ConstraintError`, `DatabaseError`, …), keeping
    * the original as `cause`. Anything it does not recognise is returned unchanged.
    */
   normalizeError(error: unknown): unknown;
 
   /**
    * The driver conversions this adapter needs for `type`, replacing the type's own
-   * `load` and `dump`; `undefined` when the type's own are right. For example Postgres
+   * `fromDb` and `toDb`; `undefined` when the type's own are right. For example Postgres
    * sends `int8` and `numeric` as text. The answer depends on this adapter's options
-   * (two Postgres adapters may load `int8` differently), so `resolveCodec` (step 03)
+   * (two Postgres adapters may fromDb `int8` differently), so `resolveCodec` (step 03)
    * caches it per (type, adapter instance), not per dialect.
    */
-  readonly typeOverrides: (type: AnyEctoType) => Codec | undefined;
+  readonly typeOverrides: (type: AnyFieldType) => Codec | undefined;
 
   /** Subscribes to an event. Returns the function that unsubscribes. */
   on<E extends keyof AdapterEvents>(event: E, listener: (payload: AdapterEvents[E]) => void): () => void;

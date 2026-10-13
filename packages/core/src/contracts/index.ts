@@ -1,5 +1,5 @@
 /**
- * The frozen contracts: the interfaces that the rest of `ectype` is written against.
+ * The frozen contracts: the interfaces that the rest of `egon-orm` is written against.
  *
  * This barrel is internal. Other modules of the package import from it (or from the
  * individual files); what is public is decided by `src/index.ts`. See `README.md` in this
@@ -10,8 +10,8 @@
 export type * from "./adapter.js";
 export type * from "./changeset.js";
 export type * from "./query.js";
-export type { Err, Ok, Result } from "./result.js";
-export { err, ok } from "./result.js";
+export type { Failure, Result, Success } from "./result.js";
+export { failure, success } from "./result.js";
 export type * from "./schema.js";
 export { META, ROW } from "./schema.js";
 export type * from "./standard-schema.js";

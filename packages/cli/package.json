@@ -1,8 +1,8 @@
 {
-  "name": "@ectype/cli",
+  "name": "@egon-orm/cli",
   "version": "0.0.0",
   "private": true,
-  "description": "Ectype migration runner and generators (placeholder until step 18).",
+  "description": "Egon ORM migration runner and generators (placeholder until step 18).",
   "license": "MIT",
   "author": "Casey Tickes",
   "repository": {
@@ -14,7 +14,6 @@
   "bugs": "https://github.com/caseyt/ectype-orm/issues",
   "keywords": [
     "orm",
-    "ecto",
     "typescript",
     "sql",
     "changeset",
@@ -41,9 +40,9 @@
     "lint:package": "publint --strict && attw --pack . --profile esm-only"
   },
   "peerDependencies": {
-    "ectype": "workspace:^"
+    "egon-orm": "workspace:^"
   },
   "devDependencies": {
-    "ectype": "workspace:*"
+    "egon-orm": "workspace:*"
   }
 }

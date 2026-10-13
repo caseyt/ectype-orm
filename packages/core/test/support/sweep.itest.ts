@@ -16,9 +16,9 @@ const seconds = (date: Date): string => Math.floor(date.getTime() / 1000).toStri
 const fakeRunId = (): string => `x${hex(5)}`;
 /** A database name as `uniqueDatabaseName` would build it for `runId` at `createdAt`. */
 const fakeName = (runId: string, createdAt: Date): string =>
-  `ectype_sweep_${runId}_${seconds(createdAt)}_${hex(4)}`;
+  `egon_sweep_${runId}_${seconds(createdAt)}_${hex(4)}`;
 /** Restricts a sweep to the databases of the given made-up runs. */
-const onlyRuns = (...runIds: string[]): RegExp => new RegExp(`^ectype_sweep_(${runIds.join("|")})_`);
+const onlyRuns = (...runIds: string[]): RegExp => new RegExp(`^egon_sweep_(${runIds.join("|")})_`);
 
 async function exists(name: string): Promise<boolean> {
   return withDatabase("postgres", async (db) => {
@@ -96,10 +96,10 @@ describe("sweepTestDatabases (postgres)", () => {
 
   test("ignores databases that uniqueDatabaseName did not create", () =>
     withDatabase("postgres", async (db) => {
-      const name = `ectype_notatest_${hex(4)}`;
+      const name = `egon_notatest_${hex(4)}`;
       await db.query(`CREATE DATABASE ${name}`);
       try {
-        const only = /^ectype_(notatest_|dev$)/;
+        const only = /^egon_(notatest_|dev$)/;
         expect(
           await sweepTestDatabases("postgres", { olderThanMs: 0, runId: "notatest", settings, only }),
         ).toEqual([]);

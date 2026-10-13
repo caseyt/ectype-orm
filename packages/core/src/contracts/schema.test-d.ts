@@ -12,7 +12,7 @@ import type {
   FieldFlagsOf,
   FieldNames,
   FieldsShape,
-  FieldType,
+  FieldValueOf,
   InsertShape,
   Loaded,
   LoadedUnchecked,
@@ -23,15 +23,11 @@ import type {
   SchemaClass,
   Target,
   ValidPreload,
-  WithFlag,
 } from "./schema.js";
 
 // --- The fake schema API ---------------------------------------------------
 
-type IdFlags = WithFlag<WithFlag<DefaultFieldFlags, "primaryKey">, "defaulted">;
 declare const t: {
-  id(): FieldBuilder<number, IdFlags>;
-  ref(): FieldBuilder<number>;
   string(): FieldBuilder<string>;
   integer(): FieldBuilder<number>;
   boolean(): FieldBuilder<boolean>;
@@ -57,14 +53,14 @@ declare function belongsTo<T, const FK extends string | readonly string[]>(
 // --- Circular, self-referential and mutually recursive schemas (decision D1) ---
 
 class User extends Schema("users", {
-  id: t.id(),
+  id: t.integer().primaryKey(),
   email: t.string(),
   name: t.string().nullable(),
   age: t.integer().nullable(),
   role: t.enum(["admin", "member"]).default("member"),
   password: t.string().virtual(),
-  managerId: t.ref().nullable(),
-  insertedAt: t.string().autogenerate(),
+  managerId: t.integer().nullable(),
+  createdAt: t.string().autogenerate(),
 }) {
   static posts = hasMany(() => Post, { foreignKey: "authorId" });
   static profile = hasOne(() => Profile);
@@ -77,31 +73,39 @@ class User extends Schema("users", {
   }
 }
 
-class Profile extends Schema("profiles", { id: t.id(), userId: t.ref(), bio: t.string().nullable() }) {
+class Profile extends Schema("profiles", {
+  id: t.integer().primaryKey(),
+  userId: t.integer(),
+  bio: t.string().nullable(),
+}) {
   static user = belongsTo(() => User);
 }
 
 class Post extends Schema("posts", {
-  id: t.id(),
+  id: t.integer().primaryKey(),
   title: t.string(),
   published: t.boolean().default(false),
-  authorId: t.ref(),
-  editorId: t.ref().nullable(),
+  authorId: t.integer(),
+  editorId: t.integer().nullable(),
 }) {
   static author = belongsTo(() => User, { foreignKey: "authorId" });
   static editor = belongsTo(() => User, { foreignKey: "editorId" });
   static comments = hasMany(() => Comment);
 }
 
-class Comment extends Schema("comments", { id: t.id(), body: t.string(), postId: t.ref() }) {
+class Comment extends Schema("comments", {
+  id: t.integer().primaryKey(),
+  body: t.string(),
+  postId: t.integer(),
+}) {
   static post = belongsTo(() => Post);
 }
 
-class Tag extends Schema("tags", { id: t.id(), name: t.string().nullable() }) {}
+class Tag extends Schema("tags", { id: t.integer().primaryKey(), name: t.string().nullable() }) {}
 
 class Membership extends Schema("memberships", {
   orgId: t.uuid().primaryKey(),
-  userId: t.ref().primaryKey(),
+  userId: t.integer().primaryKey({ dbGenerated: false }),
   role: t.string().default("member"),
 }) {
   static user = belongsTo(() => User, { foreignKey: ["userId"] });
@@ -136,17 +140,19 @@ describe("assertions ported from spikes/schema-typing.ts", () => {
     expectTypeOf(p.comments).not.toBeAny();
   });
 
-  test("new S() takes a partial row and returns the row type", () => {
-    const nu = new User({ name: "a" });
-    expectTypeOf(nu.name).toEqualTypeOf<string | null>();
-    expectTypeOf(nu.display).toEqualTypeOf<string>();
-    expectTypeOf(nu).not.toBeAny();
-    // @ts-expect-error unknown init key
-    new User({ nope: 1 });
-    // @ts-expect-error wrong value type
-    new User({ email: 1 });
-    // @ts-expect-error an association is not an init key
-    new User({ posts: [] });
+  test("there is no public constructor, and the class still has its instance type (decision D2)", () => {
+    // @ts-expect-error a row comes from the database, never from `new`
+    new User();
+    // @ts-expect-error not with initial values either: a new record is a changeset
+    new User({ name: "a" });
+    // @ts-expect-error nor a class that adds nothing to the base
+    new Tag();
+    const row = {} as User;
+    expectTypeOf(row.name).toEqualTypeOf<string | null>();
+    expectTypeOf(row.display).toEqualTypeOf<string>();
+    expectTypeOf(row).not.toBeAny();
+    expectTypeOf<Row<typeof User>>().toEqualTypeOf<User>();
+    expectTypeOf(User).toExtend<AnySchema>();
   });
 
   test("Target resolves the association's schema class", () => {
@@ -181,7 +187,7 @@ describe("Row", () => {
   });
 
   test("fields are assignable (rows are plain mutable objects)", () => {
-    const u = new User();
+    const u = {} as User;
     u.name = null;
     // @ts-expect-error email is not nullable (decision D3)
     u.email = null;
@@ -197,7 +203,7 @@ describe("InsertShape", () => {
       age?: number | null;
       role?: "admin" | "member";
       managerId?: number | null;
-      insertedAt?: string;
+      createdAt?: string;
     }>();
     expectTypeOf<InsertShape<typeof User>>().not.toBeAny();
   });
@@ -241,7 +247,7 @@ describe("field builder flags", () => {
     const base = t.string();
     expectTypeOf<FieldFlagsOf<typeof base>>().toEqualTypeOf<DefaultFieldFlags>();
     const nullable = base.nullable();
-    expectTypeOf<FieldType<typeof nullable>>().toEqualTypeOf<string | null>();
+    expectTypeOf<FieldValueOf<typeof nullable>>().toEqualTypeOf<string | null>();
     expectTypeOf<FieldFlagsOf<typeof nullable>["nullable"]>().toEqualTypeOf<true>();
     expectTypeOf<FieldFlagsOf<typeof nullable>["defaulted"]>().toEqualTypeOf<false>();
 
@@ -251,7 +257,7 @@ describe("field builder flags", () => {
       .primaryKey()
       .virtual()
       .redact()
-      .source("col")
+      .column("col")
       .writable("insert");
     expectTypeOf<FieldFlagsOf<typeof chained>>().toEqualTypeOf<{
       readonly nullable: true;
@@ -259,10 +265,10 @@ describe("field builder flags", () => {
       readonly virtual: true;
       readonly primaryKey: true;
     }>();
-    expectTypeOf<FieldType<typeof chained>>().toEqualTypeOf<string | null>();
+    expectTypeOf<FieldValueOf<typeof chained>>().toEqualTypeOf<string | null>();
 
     expectTypeOf<FieldFlagsOf<ReturnType<typeof base.autogenerate>>["defaulted"]>().toEqualTypeOf<true>();
-    expectTypeOf<FieldFlagsOf<ReturnType<typeof base.readAfterWrites>>["defaulted"]>().toEqualTypeOf<true>();
+    expectTypeOf<FieldFlagsOf<ReturnType<typeof base.dbGenerated>>["defaulted"]>().toEqualTypeOf<true>();
   });
 
   test("default() takes the field's type, as a value or a function", () => {
@@ -278,7 +284,7 @@ describe("field builder flags", () => {
   });
 
   test("any builder is an AnyFieldBuilder, and a non-builder is not a field", () => {
-    expectTypeOf(t.id()).toExtend<AnyFieldBuilder>();
+    expectTypeOf(t.integer().primaryKey()).toExtend<AnyFieldBuilder>();
     expectTypeOf(t.string().nullable().default(null)).toExtend<AnyFieldBuilder>();
     // @ts-expect-error a plain value is not a field builder
     Schema("x", { id: 1 });
@@ -348,7 +354,7 @@ describe("Loaded", () => {
   });
 
   test("belongsTo is nullable when the foreign key cannot be determined", () => {
-    class Orphan extends Schema("orphans", { id: t.id() }) {
+    class Orphan extends Schema("orphans", { id: t.integer().primaryKey() }) {
       static owner = belongsTo(() => User);
       static widened = belongsTo(() => User, { foreignKey: "id" as string });
     }
@@ -502,7 +508,7 @@ describe("schema-derived types on AnySchema", () => {
     expectTypeOf<FieldNames<AnySchema>>().not.toBeAny();
     expectTypeOf<AssocKeys<AnySchema>>().not.toBeAny();
     expectTypeOf<Target<typeof User, AssocKeys<typeof User>>>().not.toBeAny();
-    expectTypeOf<FieldType<AnyFieldBuilder>>().not.toBeAny();
+    expectTypeOf<FieldValueOf<AnyFieldBuilder>>().not.toBeAny();
     expectTypeOf<PreloadSpec<AnySchema>>().not.toBeAny();
   });
 
@@ -511,6 +517,6 @@ describe("schema-derived types on AnySchema", () => {
     // @ts-expect-error an unknown row is an object, not any
     rows[0]!.anything;
     const generic = <S extends AnySchema>(row: Row<S>): Row<S> => row;
-    expectTypeOf(generic<typeof User>(new User())).toEqualTypeOf<User>();
+    expectTypeOf(generic<typeof User>({} as User)).toEqualTypeOf<User>();
   });
 });

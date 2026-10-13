@@ -1,6 +1,6 @@
 # Contributing
 
-Ectype is built step by step from a written plan. **Read
+Egon is built step by step from a written plan. **Read
 [`docs/plan/README.md`](docs/plan/README.md) first**: it holds the goals, the settled
 decisions, the testing, performance and documentation standards, and (§9) the worker
 protocol and the pull request and review loop that every change follows.
@@ -43,11 +43,11 @@ pnpm vitest run --project core:integration packages/core/test/support/db.itest.t
 ## Layout
 
 ```
-packages/core        "ectype"            the library
-packages/postgres    "@ectype/postgres"
-packages/zod         "@ectype/zod"
+packages/core        "egon-orm"            the library
+packages/postgres    "@egon-orm/postgres"
+packages/zod         "@egon-orm/zod"
 packages/sqlite, mysql, cli              private placeholders until steps 17 / 18
-packages/core/test/support               shared test helpers, importable as "@ectype/test-support"
+packages/core/test/support               shared test helpers, importable as "@egon-orm/test-support"
 benchmarks/          micro/<area>.bench.ts, harness in src/
 examples/smoke       an ESM consumer and a CommonJS consumer (require of the ES module)
 docs/plan            the plan (frozen; workers add only status/NN.md)
@@ -55,18 +55,18 @@ docs/adr             architecture decision records
 docs/site            VitePress site; docs/site/examples holds the type-checked example sources
 ```
 
-Inside the workspace, `ectype` and `@ectype/*` imports resolve to package **sources**
+Inside the workspace, `egon-orm` and `@egon-orm/*` imports resolve to package **sources**
 (TypeScript `paths` in `tsconfig.base.json`, aliases in `vitest.config.ts`), so type-checking
 and tests never need a build.
 
 `examples/smoke` and the benchmarks are the exceptions: they load the built `dist/`, because
 that is what users install. Benchmark processes are started with `benchmarks/tsconfig.run.json`,
 which has no source `paths`; the runner and every benchmark file refuse to run unless
-`ectype` resolves into the package's own `dist/` directory, and the report records the resolved file
-(`ectypeEntry`). `pnpm bench` builds first. `scripts/check-bench-dist-guard.mjs` (run by CI
+`egon-orm` resolves into the package's own `dist/` directory, and the report records the resolved file
+(`egonEntry`). `pnpm bench` builds first. `scripts/check-bench-dist-guard.mjs` (run by CI
 before the build) proves the refusal.
 
-Code that is not public API cannot be imported from `ectype`. `packages/core` therefore has
+Code that is not public API cannot be imported from `egon-orm`. `packages/core` therefore has
 a second build entry, `dist/internal.js` (the utilities of `src/internal`), which is not in
 the package's `exports` and is left out of the published files; `benchmarks/micro/internal.bench.ts` shows how a benchmark loads
 it from `dist/` while taking its types from the sources.
@@ -81,14 +81,14 @@ Each package has three Vitest projects, named `<package>:unit`, `<package>:types
   `expectTypeOf(x).not.toBeAny()` on inferred results.
 - **Integration**, `*.itest.ts`: real databases. Files run in parallel, tests inside a file
   run serially. Never share a database between files: take one with `withDatabase` or
-  `createTestDatabase` from `@ectype/test-support`, and reset it between tests with
+  `createTestDatabase` from `@egon-orm/test-support`, and reset it between tests with
   `truncateAll` (until the sandbox of step 16 exists).
 
-Test databases are named `ectype_<label>_<run id>_<creation time>_<random>` and are cleaned
+Test databases are named `egon_<label>_<run id>_<creation time>_<random>` and are cleaned
 up at three levels: `withDatabase` drops its database when the callback settles **and**
 through Vitest's `onTestFinished`, so a test that times out does not leak it; after the run
 `global-setup.ts` drops everything the run still owns; before the run it drops databases
-older than 30 minutes (`ECTYPE_TEST_STALE_MINUTES`) that a killed run left behind. Several
+older than 30 minutes (`EGON_TEST_STALE_MINUTES`) that a killed run left behind. Several
 runs can share one server: a run never drops a younger database of another run, nor one
 that has open connections (checked on Postgres and MySQL). A run that is interrupted
 (Ctrl-C) or killed skips its own cleanup, so its databases stay until the start-up sweep
@@ -113,12 +113,12 @@ Test support (`packages/core/test/support`):
 
 ### Databases
 
-`docker-compose.yml` starts Postgres 16 on **127.0.0.1:54329** (user `ectype`, password
-`ectype`, database `ectype_dev`) and, with the `tier2` profile, MySQL 8.4 on
-**127.0.0.1:33069** (user `root`, password `ectype`). Both ports are published on the
-loopback interface only. Data lives on tmpfs and is discarded when the containers stop. To point the tests elsewhere, set `ECTYPE_PG_HOST`,
-`ECTYPE_PG_PORT`, `ECTYPE_PG_USER`, `ECTYPE_PG_PASSWORD`, `ECTYPE_PG_DATABASE` (and the
-`ECTYPE_MYSQL_*` equivalents). MySQL tests run only with `ECTYPE_TEST_TIER2=1`.
+`docker-compose.yml` starts Postgres 16 on **127.0.0.1:54329** (user `egon`, password
+`egon`, database `egon_dev`) and, with the `tier2` profile, MySQL 8.4 on
+**127.0.0.1:33069** (user `root`, password `egon`). Both ports are published on the
+loopback interface only. Data lives on tmpfs and is discarded when the containers stop. To point the tests elsewhere, set `EGON_PG_HOST`,
+`EGON_PG_PORT`, `EGON_PG_USER`, `EGON_PG_PASSWORD`, `EGON_PG_DATABASE` (and the
+`EGON_MYSQL_*` equivalents). MySQL tests run only with `EGON_TEST_TIER2=1`.
 
 ## Code rules the tools enforce
 
@@ -127,7 +127,7 @@ loopback interface only. Data lives on tmpfs and is discarded when the container
   fail `pnpm lint` too (`--error-on-warnings`).
 - `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`,
   `verbatimModuleSyntax`. Relative imports carry the `.js` extension (`module: NodeNext`).
-- `packages/core/src/index.ts` is the only public entry point of `ectype`.
+- `packages/core/src/index.ts` is the only public entry point of `egon-orm`.
 - Hot-path rules (no `Proxy`, no per-row `defineProperty`, monomorphic shapes, …) are in
   plan README §7 and summarised in [`CLAUDE.md`](CLAUDE.md).
 
@@ -143,7 +143,7 @@ that it still fails with TS7022 and TS2506.
 end): five scripts that lower a hand-built query AST to Kysely nodes and run it against
 the Compose Postgres. It is a private workspace package, type-checked by `pnpm typecheck`
 but not run by CI. To run it: `pnpm db:up`, then
-`pnpm --filter @ectype/spike-kysely-bridge run spike` (see its `README.md`).
+`pnpm --filter @egon-orm/spike-kysely-bridge run spike` (see its `README.md`).
 
 ### Dependency versions
 
@@ -158,7 +158,7 @@ dependency change.
 
 Runtime support starts at Node 22.12 (decision D14) and every tool is on its current stable
 release, with one exception: TypeScript is held at `6` because tsup's declaration bundler
-does not work with TypeScript 7. `docs/plan/status/01.md` has the details. Kysely is
+does not work with TypeScript 7. Kysely is
 pinned to one minor (`~0.29`), because the compiler in step 10 depends on its internals;
 bump it deliberately, not as routine maintenance.
 
@@ -195,5 +195,5 @@ affected work waits until the ADR is accepted.
 
 ## Releases
 
-Versions and changelogs are managed with changesets (`.changeset/`); every `ectype` and
-`@ectype/*` package shares one version. Nothing is published yet (step 21).
+Versions and changelogs are managed with changesets (`.changeset/`); every `egon-orm` and
+`@egon-orm/*` package shares one version. Nothing is published yet (step 21).

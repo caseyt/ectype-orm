@@ -1,8 +1,7 @@
-# Ectype
+# Egon ORM
 
-A TypeScript ORM modelled on Elixir's [Ecto](https://hexdocs.pm/ecto): **schemas**,
-**changesets**, a composable **query builder** and a **Repo**, typed end to end with no
-code generation.
+A TypeScript ORM with **schemas**, **changesets**, a composable **query builder** and a
+**repo**, typed end to end with no code generation.
 
 > **Status: under construction.** Nothing is published and there is no usable API yet.
 > The design and build plan live in [`docs/plan/README.md`](docs/plan/README.md).
@@ -11,15 +10,15 @@ code generation.
 
 | Package | Purpose | State |
 |---|---|---|
-| `ectype` | Schemas, types, changesets, queries, Repo | placeholder |
-| `@ectype/postgres` | PostgreSQL adapter (tier 1) | placeholder |
-| `@ectype/zod` | Derive Zod schemas from Ectype schemas | placeholder |
-| `@ectype/sqlite`, `@ectype/mysql` | Tier 2 adapters | private placeholders |
-| `@ectype/cli` | Migrations and generators | private placeholder (follow-up) |
+| `egon-orm` | Schemas, types, changesets, queries, Repo | placeholder |
+| `@egon-orm/postgres` | PostgreSQL adapter (tier 1) | placeholder |
+| `@egon-orm/zod` | Derive Zod schemas from Egon ORM schemas | placeholder |
+| `@egon-orm/sqlite`, `@egon-orm/mysql` | Tier 2 adapters | private placeholders |
+| `@egon-orm/cli` | Migrations and generators | private placeholder (follow-up) |
 
 ## Development
 
-Requires Node.js 22 or newer, pnpm 12 and Docker.
+Requires Node.js 22.12 or newer, pnpm 12 and Docker.
 
 ```sh
 pnpm i

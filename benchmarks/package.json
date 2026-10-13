@@ -1,8 +1,8 @@
 {
-  "name": "@ectype/benchmarks",
+  "name": "@egon-orm/benchmarks",
   "version": "0.0.0",
   "private": true,
-  "description": "Micro and comparative benchmarks for Ectype.",
+  "description": "Micro and comparative benchmarks for Egon ORM.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "ectype": "workspace:*",
+    "egon-orm": "workspace:*",
     "mitata": "1.0.34"
   }
 }

@@ -10,13 +10,13 @@ describe("uniqueDatabaseName", () => {
   test("needs no quoting and fits every dialect's identifier limit", () => {
     for (const label of [undefined, "", "users", "Weird Label!! -- drop", "x".repeat(200), "___"]) {
       const name = uniqueDatabaseName(label);
-      expect(name).toMatch(/^ectype_[a-z0-9_]+_[a-z0-9]+_[0-9a-z]{6,8}_[0-9a-f]{8}$/);
+      expect(name).toMatch(/^egon_[a-z0-9_]+_[a-z0-9]+_[0-9a-z]{6,8}_[0-9a-f]{8}$/);
       expect(name.length).toBeLessThanOrEqual(63);
     }
   });
 
   test("includes the label and the run id", () => {
-    expect(uniqueDatabaseName("Repo Read")).toMatch(new RegExp(`^ectype_repo_read_${currentRunId()}_`));
+    expect(uniqueDatabaseName("Repo Read")).toMatch(new RegExp(`^egon_repo_read_${currentRunId()}_`));
   });
 
   test("round-trips the run id and the creation time through parseDatabaseName", () => {
@@ -32,12 +32,12 @@ describe("uniqueDatabaseName", () => {
 
 describe("parseDatabaseName", () => {
   test.each([
-    "ectype_dev",
-    "ectype",
+    "egon_dev",
+    "egon-orm",
     "postgres",
-    "ectype_t_1234",
+    "egon_t_1234",
     "other_t_r1_t3k9zq_9f2c61d0",
-    "ectype_t_R1_t3k9zq_9f2c61d0",
+    "egon_t_R1_t3k9zq_9f2c61d0",
   ])("does not recognise %j as a test database", (name) => {
     expect(parseDatabaseName(name)).toBeUndefined();
   });

@@ -3,7 +3,7 @@
  * exchange.
  *
  * Implemented by step 05 (`changeset/`), step 06 (validators) and step 15 (nested
- * changesets). Consumed by repo writes (13) and Multi (16).
+ * changesets). Consumed by repo writes (13) and Batch (16).
  *
  * @module
  */
@@ -12,18 +12,16 @@ import type { StandardSchemaV1 } from "./standard-schema.js";
 /**
  * One validation or constraint error on a field. Plain and serialisable.
  *
- * `message` may contain `%{key}` placeholders, filled from `meta` when the error is
+ * `message` may contain `{key}` placeholders, filled from `meta` when the error is
  * rendered (`traverseErrors`). Keeping the template and the values apart is what makes
- * translation and pluralisation possible, exactly as in Ecto.
+ * translation and pluralisation possible.
  *
  * `meta` never holds a value of a redacted field.
- *
- * Ecto equivalent: the `{message, keyword}` error tuple of `Ecto.Changeset`.
  *
  * @example
  * ```ts
  * const tooShort: ChangesetError = {
- *   message: "should be at least %{count} character(s)",
+ *   message: "should be at least {count} character(s)",
  *   validation: "length",
  *   meta: { count: 12, kind: "min", type: "string" },
  * };
@@ -42,9 +40,6 @@ export interface ChangesetError {
  * The kinds of constraint a changeset can declare. `"noAssoc"` is a foreign-key
  * violation seen from the referenced side ("is still associated with this entry").
  *
- * Ecto equivalent: `unique_constraint/3`, `foreign_key_constraint/3`,
- * `check_constraint/3`, `exclusion_constraint/3`, `no_assoc_constraint/3`.
- *
  * @example
  * ```ts
  * const type: ConstraintType = "unique";
@@ -58,8 +53,6 @@ export type ConstraintType = "unique" | "foreignKey" | "check" | "exclusion" | "
  *
  * `match` says how `name` is compared with the constraint name the database reports:
  * the whole name, or only its end or its start (for names generated per partition or tenant).
- *
- * Ecto equivalent: an entry of `changeset.constraints`.
  *
  * @example
  * ```ts
@@ -84,8 +77,6 @@ export interface Constraint {
 /**
  * What a changeset is being used for. Set by the repo, or by `applyAction`.
  *
- * Ecto equivalent: `Ecto.Changeset.action()`.
- *
  * @example
  * ```ts
  * const action: Action = "insert";
@@ -97,8 +88,6 @@ export type Action = "insert" | "update" | "delete" | "replace" | "ignore";
  * The part of a changeset that code outside `changeset/` may rely on: enough for the
  * repo to refuse an invalid changeset and for `InvalidChangesetError` to describe it.
  * The real `Changeset<S>` class (step 05) has much more.
- *
- * Ecto equivalent: the public fields of `%Ecto.Changeset{}`.
  *
  * @example
  * ```ts

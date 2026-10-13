@@ -32,7 +32,7 @@ const PRIME = 0x01000193;
  *
  * @example
  * ```ts
- * const hash = hashString(HASH_SEED, "inserted_at");
+ * const hash = hashString(HASH_SEED, "created_at");
  * ```
  */
 export function hashString(hash: number, value: string): number {

@@ -11,8 +11,6 @@ import { META, ROW } from "../contracts/schema.js";
 /**
  * What stands in for the value of a redacted field.
  *
- * Ecto equivalent: the `**redacted**` shown by `inspect/2` for `redact: true` fields.
- *
  * @example
  * ```ts
  * redactFields({ email: "a@b.c", passwordHash: "x" }, new Set(["passwordHash"]));
@@ -317,8 +315,6 @@ export function formatValue(value: unknown): string {
  *
  * When `values` is itself a row of a schema, its redacted fields are hidden whether or
  * not `redacted` names them.
- *
- * Ecto equivalent: `inspect/2` on a schema struct, which honours `redact: true`.
  *
  * @example
  * ```ts

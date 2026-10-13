@@ -43,7 +43,7 @@ async function sweepPostgres(server: ConnectionSettings, options: SweepOptions):
     const { rows } = await client.query<{ name: string; connections: number }>(
       `SELECT d.datname AS name, count(a.pid)::int AS connections
          FROM pg_database d LEFT JOIN pg_stat_activity a ON a.datid = d.oid
-        WHERE d.datname LIKE 'ectype\\_%' GROUP BY d.datname ORDER BY d.datname`,
+        WHERE d.datname LIKE 'egon\\_%' GROUP BY d.datname ORDER BY d.datname`,
     );
     const dropped: string[] = [];
     for (const { name, connections } of rows) {
@@ -72,7 +72,7 @@ async function sweepMysql(server: ConnectionSettings, options: SweepOptions): Pr
     const [rows] = await connection.query(
       `SELECT s.schema_name AS name, COUNT(p.id) AS connections
          FROM information_schema.schemata s LEFT JOIN information_schema.processlist p ON p.db = s.schema_name
-        WHERE s.schema_name LIKE 'ectype\\\\_%' GROUP BY s.schema_name ORDER BY s.schema_name`,
+        WHERE s.schema_name LIKE 'egon\\\\_%' GROUP BY s.schema_name ORDER BY s.schema_name`,
     );
     const dropped: string[] = [];
     for (const { name, connections } of rows as { name: string; connections: number | string }[]) {

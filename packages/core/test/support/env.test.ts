@@ -6,26 +6,26 @@ describe("connectionSettings", () => {
     expect(connectionSettings("postgres", {})).toEqual({
       host: "127.0.0.1",
       port: 54329,
-      user: "ectype",
-      password: "ectype",
-      database: "ectype_dev",
+      user: "egon",
+      password: "egon",
+      database: "egon_dev",
     });
     expect(connectionSettings("mysql", {})).toEqual({
       host: "127.0.0.1",
       port: 33069,
       user: "root",
-      password: "ectype",
-      database: "ectype_dev",
+      password: "egon",
+      database: "egon_dev",
     });
   });
 
   test("environment variables override the defaults", () => {
     const settings = connectionSettings("postgres", {
-      ECTYPE_PG_HOST: "db.internal",
-      ECTYPE_PG_PORT: "6543",
-      ECTYPE_PG_USER: "ci",
-      ECTYPE_PG_PASSWORD: "secret",
-      ECTYPE_PG_DATABASE: "maintenance",
+      EGON_PG_HOST: "db.internal",
+      EGON_PG_PORT: "6543",
+      EGON_PG_USER: "ci",
+      EGON_PG_PASSWORD: "secret",
+      EGON_PG_DATABASE: "maintenance",
     });
     expect(settings).toEqual({
       host: "db.internal",
@@ -34,19 +34,19 @@ describe("connectionSettings", () => {
       password: "secret",
       database: "maintenance",
     });
-    expect(connectionSettings("mysql", { ECTYPE_MYSQL_PORT: "3307" }).port).toBe(3307);
+    expect(connectionSettings("mysql", { EGON_MYSQL_PORT: "3307" }).port).toBe(3307);
   });
 
   test("an empty variable falls back to the default", () => {
-    expect(connectionSettings("postgres", { ECTYPE_PG_HOST: "", ECTYPE_PG_PORT: "" })).toMatchObject({
+    expect(connectionSettings("postgres", { EGON_PG_HOST: "", EGON_PG_PORT: "" })).toMatchObject({
       host: "127.0.0.1",
       port: 54329,
     });
   });
 
   test.each(["abc", "0", "65536", "5432.5", "-1"])("rejects %j as a port", (value) => {
-    expect(() => connectionSettings("postgres", { ECTYPE_PG_PORT: value })).toThrow(
-      /ECTYPE_PG_PORT must be a TCP port/,
+    expect(() => connectionSettings("postgres", { EGON_PG_PORT: value })).toThrow(
+      /EGON_PG_PORT must be a TCP port/,
     );
   });
 });
@@ -54,7 +54,7 @@ describe("connectionSettings", () => {
 describe("connectionUrl", () => {
   test("formats settings as a URL", () => {
     expect(connectionUrl("postgres", connectionSettings("postgres", {}))).toBe(
-      "postgres://ectype:ectype@127.0.0.1:54329/ectype_dev",
+      "postgres://egon:egon@127.0.0.1:54329/egon_dev",
     );
   });
 
@@ -73,7 +73,7 @@ describe("connectionUrl", () => {
 
 test("tier 2 databases are opt-in", () => {
   expect(tier2Enabled({})).toBe(false);
-  expect(tier2Enabled({ ECTYPE_TEST_TIER2: "0" })).toBe(false);
-  expect(tier2Enabled({ ECTYPE_TEST_TIER2: "1" })).toBe(true);
-  expect(tier2Enabled({ ECTYPE_TEST_TIER2: "true" })).toBe(true);
+  expect(tier2Enabled({ EGON_TEST_TIER2: "0" })).toBe(false);
+  expect(tier2Enabled({ EGON_TEST_TIER2: "1" })).toBe(true);
+  expect(tier2Enabled({ EGON_TEST_TIER2: "true" })).toBe(true);
 });
