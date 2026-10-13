@@ -509,26 +509,116 @@ describe("redaction of rows, at any depth", () => {
     expect(read).toBe(false);
   });
 
-  test("malformed metadata redacts nothing and does not throw", () => {
+  test("metadata that is not plain data redacts EVERYTHING: redaction fails closed", () => {
+    const meta = {
+      fields: [
+        { name: "id", redact: false },
+        { name: "passwordHash", redact: true },
+      ],
+    };
+    let ran = false;
+    // The reviewer's case: a lazily built meta behind a static getter.
+    const LazyBase = function LazyBase() {} as unknown as new () => object;
+    Object.defineProperty(LazyBase, META, {
+      get: () => {
+        ran = true;
+        return meta;
+      },
+    });
+    class LazyUser extends LazyBase {
+      id = 1;
+      passwordHash = "S3CRET";
+    }
+    class GetterFields {
+      static readonly [META] = {
+        get fields() {
+          ran = true;
+          return meta.fields;
+        },
+      };
+      id = 1;
+      passwordHash = "S3CRET";
+    }
+    class GetterMembers {
+      static readonly [META] = {
+        fields: [
+          { name: "id", redact: false },
+          {
+            name: "passwordHash",
+            get redact() {
+              ran = true;
+              return true;
+            },
+          },
+        ],
+      };
+      id = 1;
+      passwordHash = "S3CRET";
+    }
+    class GetterName {
+      static readonly [META] = {
+        fields: [
+          {
+            get name() {
+              ran = true;
+              return "passwordHash";
+            },
+            redact: true,
+          },
+        ],
+      };
+      passwordHash = "S3CRET";
+    }
+    const allHidden = "{ id: **redacted**, passwordHash: **redacted** }";
+    expect(formatValue(new LazyUser())).toBe(`LazyUser ${allHidden}`);
+    expect(formatValue(new GetterFields())).toBe(`GetterFields ${allHidden}`);
+    expect(formatValue(new GetterMembers())).toBe(`GetterMembers ${allHidden}`);
+    expect(formatValue(new GetterName())).toBe("GetterName { passwordHash: **redacted** }");
+    // Nested, and through formatStruct, and again (from the cache).
+    expect(formatValue({ post: 1, authors: [new LazyUser()] })).not.toContain("S3CRET");
+    expect(formatStruct("LazyUser", new LazyUser(), new Set())).toBe(`LazyUser ${allHidden}`);
+    expect(formatStruct("Row", { user: new GetterMembers() }, new Set())).not.toContain("S3CRET");
+    expect(formatValue(new GetterMembers())).toBe(`GetterMembers ${allHidden}`);
+    expect(ran).toBe(false);
+  });
+
+  test("malformed metadata also redacts everything, and does not throw", () => {
     class NoFields {
       static readonly [META] = {};
       x = 1;
-    }
-    class OddFields {
-      static readonly [META] = {
-        fields: [null, 3, { name: 5, redact: true }, { redact: true }, { name: "y", redact: "yes" }],
-      };
-      y = 2;
     }
     class NotAnObject {
       static readonly [META] = "meta";
       z = 3;
     }
-    expect(formatValue(new NoFields())).toBe("NoFields { x: 1 }");
-    expect(formatValue(new OddFields())).toBe("OddFields { y: 2 }");
-    expect(formatValue(new NotAnObject())).toBe("NotAnObject { z: 3 }");
-    // The same metadata object is looked up again from the cache.
-    expect(formatValue(new OddFields())).toBe("OddFields { y: 2 }");
+    class NullMeta {
+      static readonly [META] = null;
+      n = 4;
+    }
+    const odd = (fields: unknown): object => {
+      class Odd {
+        static readonly [META] = { fields };
+        y = 2;
+      }
+      return new Odd();
+    };
+    expect(formatValue(new NoFields())).toBe("NoFields { x: **redacted** }");
+    expect(formatValue(new NotAnObject())).toBe("NotAnObject { z: **redacted** }");
+    expect(formatValue(new NullMeta())).toBe("NullMeta { n: **redacted** }");
+    for (const fields of [
+      "fields",
+      [null],
+      [3],
+      [{ name: 5, redact: true }],
+      [{ redact: true }],
+      [{ name: "y", redact: "yes" }],
+      [{ name: "y" }],
+    ]) {
+      expect(formatValue(odd(fields))).toBe("Odd { y: **redacted** }");
+    }
+    // Well-formed metadata with nothing redacted prints everything.
+    expect(formatValue(odd([]))).toBe("Odd { y: 2 }");
+    expect(formatValue(odd([{ name: "y", redact: false }]))).toBe("Odd { y: 2 }");
   });
 
   test("a plain object holding field values is NOT recognised: the caller passes the names", () => {

@@ -111,36 +111,66 @@ function functionName(fn: unknown): string {
   return typeof name === "string" ? name : "";
 }
 
-/** The redacted field names per schema metadata object, computed once each. */
-const redactedByMeta = new WeakMap<object, ReadonlySet<string>>();
+/** Answers "is this key redacted?". A set of names, or {@link EVERYTHING_REDACTED}. */
+interface Redaction {
+  has(key: string): boolean;
+}
 
 /**
- * The names of the redacted fields of a row, found through its class: a schema class
- * holds its metadata under `META`, and the metadata lists the fields. Anything that is
- * not a row of a schema has none.
+ * Used when an object claims to be a row (its class chain has `META`) but its metadata
+ * cannot be read as plain data. Which fields are redacted is then unknown, so none of
+ * its values is printed: redaction fails closed.
  */
-function redactedFieldsOf(ctor: unknown): ReadonlySet<string> {
-  // A class extends the base that `Schema()` returned, so the metadata is an own static
-  // of an ancestor: walk the constructor chain, reading data properties only.
-  let meta: unknown;
-  for (let c: unknown = ctor; typeof c === "function" && meta === undefined; c = Object.getPrototypeOf(c)) {
-    meta = ownData(c, META);
-  }
-  if (typeof meta !== "object" || meta === null) return NOTHING_REDACTED;
-  const known = redactedByMeta.get(meta);
-  if (known !== undefined) return known;
+const EVERYTHING_REDACTED: Redaction = { has: () => true };
+
+/** The redaction per schema metadata object, computed once each. */
+const redactionByMeta = new WeakMap<object, Redaction>();
+
+/** The redacted names listed by a `fields` array, or `undefined` if any entry is not plain data. */
+function redactedNames(fields: unknown): Set<string> | undefined {
+  if (!Array.isArray(fields)) return undefined;
   const names = new Set<string>();
-  const fields = ownData(meta, "fields" satisfies keyof SchemaMeta);
-  if (Array.isArray(fields)) {
-    for (const field of fields as readonly unknown[]) {
-      if (typeof field !== "object" || field === null) continue;
-      const name = ownData(field, "name" satisfies keyof FieldMeta);
-      if (ownData(field, "redact" satisfies keyof FieldMeta) === true && typeof name === "string")
-        names.add(name);
-    }
+  for (let i = 0; i < fields.length; i++) {
+    const field = ownData(fields, i);
+    if (typeof field !== "object" || field === null) return undefined;
+    const name = ownData(field, "name" satisfies keyof FieldMeta);
+    const redact = ownData(field, "redact" satisfies keyof FieldMeta);
+    if (typeof name !== "string" || typeof redact !== "boolean") return undefined;
+    if (redact) names.add(name);
   }
-  redactedByMeta.set(meta, names);
   return names;
+}
+
+/**
+ * Which fields of a row are redacted, found through its class: a schema class holds its
+ * metadata under `META`, and the metadata lists the fields. Anything whose class chain
+ * has no `META` is not a row and has nothing redacted.
+ *
+ * The metadata is read as own data properties only, so that no code of the value runs
+ * (the contract requires `META`, `fields`, `name` and `redact` to be such properties).
+ * If `META` is there but is an accessor, or what it holds is not that plain shape, the
+ * answer is {@link EVERYTHING_REDACTED}.
+ */
+function redactionOf(ctor: unknown): Redaction {
+  // A class extends the base that `Schema()` returned, so the metadata is an own static
+  // of an ancestor: walk the constructor chain.
+  let descriptor: PropertyDescriptor | undefined;
+  for (
+    let c: unknown = ctor;
+    typeof c === "function" && descriptor === undefined;
+    c = Object.getPrototypeOf(c)
+  ) {
+    descriptor = Object.getOwnPropertyDescriptor(c, META);
+  }
+  if (descriptor === undefined) return NOTHING_REDACTED;
+  const meta: unknown = "value" in descriptor ? descriptor.value : undefined;
+  if (typeof meta !== "object" || meta === null) return EVERYTHING_REDACTED;
+  const known = redactionByMeta.get(meta);
+  if (known !== undefined) return known;
+  const redaction: Redaction =
+    redactedNames(ownData(meta, "fields" satisfies keyof SchemaMeta)) ?? EVERYTHING_REDACTED;
+  redactionByMeta.set(meta, redaction);
+  return redaction;
 }
 
 function formatPrimitive(value: string | number | bigint | boolean | symbol | undefined): string {
@@ -164,7 +194,7 @@ function formatPrimitive(value: string | number | bigint | boolean | symbol | un
 function formatEntry(
   target: object,
   key: string,
-  redacted: ReadonlySet<string>,
+  redacted: Redaction,
   depth: number,
   seen: Set<object>,
 ): string {
@@ -211,7 +241,7 @@ function format(value: unknown, depth: number, seen: Set<object>): string {
   const name = proto === null || proto === Object.prototype ? "" : `${functionName(ctor) || "Object"} `;
   if (depth >= MAX_DEPTH) return name === "" ? "[Object]" : `[${name.trimEnd()}]`;
   // A nested row hides its own redacted fields, wherever it sits.
-  const redacted = redactedFieldsOf(ctor);
+  const redacted = redactionOf(ctor);
   seen.add(value);
   const keys = Object.keys(value);
   const parts: string[] = [];
@@ -235,7 +265,8 @@ function format(value: unknown, depth: number, seen: Set<object>): string {
  *
  * **Redaction.** A row of a schema, at any depth, has the values of its redacted fields
  * replaced by `**redacted**`: the row's class leads to the schema metadata, which names
- * them. A value that is not a row is printed as it is, so a *plain object* holding
+ * them. If that metadata is not readable as plain data (an accessor where a data property
+ * is required), every value of the row is replaced: redaction fails closed. A value that is not a row is printed as it is, so a *plain object* holding
  * field values (a changeset's `changes`, a params object) is NOT redacted by this
  * function: format it with {@link formatStruct} and the schema's redacted names, or
  * redact it first with {@link redactFields}.
@@ -277,7 +308,7 @@ export function formatValue(value: unknown): string {
 export function formatStruct(name: string, values: object, redacted: ReadonlySet<string>): string {
   const parts: string[] = [];
   try {
-    const own = redactedFieldsOf(constructorOf(values));
+    const own = redactionOf(constructorOf(values));
     const seen = new Set<object>([values]);
     for (const key of Object.keys(values)) {
       // Hidden when either the caller or the row's own schema says so.
