@@ -185,7 +185,7 @@ describe("ChangesetError and Constraint", () => {
     expectTypeOf<Constraint["match"]>().toEqualTypeOf<"exact" | "suffix" | "prefix">();
     const constraint: Constraint = {
       type: "unique",
-      name: "users_email_index",
+      name: "users_email_key",
       match: "exact",
       field: "email",
       message: "has already been taken",

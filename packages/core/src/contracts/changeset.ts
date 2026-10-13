@@ -58,7 +58,7 @@ export type ConstraintType = "unique" | "foreignKey" | "check" | "exclusion" | "
  * ```ts
  * const uniqueEmail: Constraint = {
  *   type: "unique",
- *   name: "users_email_index",
+ *   name: "users_email_key",
  *   match: "exact",
  *   field: "email",
  *   message: "has already been taken",

@@ -61,7 +61,7 @@ const adapter = mysql({ connectionString: process.env.DATABASE_URL, pool: { max:
 4. **Error normalisation.** SQLite extended result codes (`SQLITE_CONSTRAINT_UNIQUE`,
    `_FOREIGNKEY`, `_CHECK`, `_NOTNULL`, `SQLITE_BUSY` → retryable). SQLite reports unique
    violations by **column list, not index name**: synthesise the conventional constraint
-   name (`<table>_<cols>_index`) so default `uniqueConstraint("email")` matching works, and
+   name (`<table>_<cols>_key`) so default `uniqueConstraint("email")` matching works, and
    document the limitation for custom-named indexes. MySQL `ER_DUP_ENTRY` (parse the key
    name from the message), `ER_NO_REFERENCED_ROW_2`, `ER_ROW_IS_REFERENCED_2`,
    `ER_CHECK_CONSTRAINT_VIOLATED`, `ER_LOCK_DEADLOCK` → retryable.

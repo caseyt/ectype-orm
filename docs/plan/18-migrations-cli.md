@@ -30,7 +30,7 @@ export default defineMigration({
       t.references("org_id", "orgs", { type: "uuid", onDelete: "cascade" });
       t.timestamps();
     });
-    m.createIndex("users", ["email"], { unique: true });       // users_email_index
+    m.createIndex("users", ["email"], { unique: true });       // users_email_key
   },
 });
 
@@ -49,7 +49,7 @@ Operations: `createTable` (options: `primaryKey: false`, `schema`, `ifNotExists`
 `concurrently`, `include`, `name`), `createConstraint`/`dropConstraint` (`check`,
 `exclude`), `execute(up, down?)`, `createSchema`/`dropSchema` (database schema),
 `createExtension`. Column builders mirror `DbType` from step 02, and names default to the
-conventions the changeset constraint functions expect (`<table>_<cols>_index`,
+conventions the changeset constraint functions expect (`<table>_<cols>_key` for a unique index,
 `<table>_<col>_fkey`) — test this pairing explicitly.
 
 Runner:
