@@ -140,7 +140,8 @@ excluded from every tsconfig and from Biome, and `scripts/check-rejected-spike.m
 that it still fails with TS7022 and TS2506.
 
 `docs/plan/spikes/kysely-bridge/` is the evidence for ADR 0002 (Kysely as the SQL back
-end): five scripts that lower a hand-built query AST to Kysely nodes and run it against
+end), which ADR 0003 superseded; it is kept as a record and as a checklist of statements
+for the emitter: five scripts that lower a hand-built query AST to Kysely nodes and run it against
 the Compose Postgres. It is a private workspace package, type-checked by `pnpm typecheck`
 but not run by CI. To run it: `pnpm db:up`, then
 `pnpm --filter @egon-orm/spike-kysely-bridge run spike` (see its `README.md`).
@@ -158,9 +159,8 @@ dependency change.
 
 Runtime support starts at Node 22.12 (decision D14) and every tool is on its current stable
 release, with one exception: TypeScript is held at `6` because tsup's declaration bundler
-does not work with TypeScript 7. Kysely is
-pinned to one minor (`~0.29`), because the compiler in step 10 depends on its internals;
-bump it deliberately, not as routine maintenance.
+does not work with TypeScript 7. `packages/core` has
+no runtime dependency (ADR 0003); Kysely is a dependency of the step 02 spike only.
 
 ## Pull requests
 

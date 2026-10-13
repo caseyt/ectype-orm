@@ -1,6 +1,6 @@
 # 0002 — Kysely as the SQL back end
 
-- **Status:** accepted (2026-10-12, by the owner, after review round 1 of PR #2): **accept with raw-node escapes**
+- **Status:** superseded by [0003](0003-own-sql-emitter.md) (2026-10-13). Was: accepted (2026-10-12, by the owner, after review round 1 of PR #2): **accept with raw-node escapes**
 - **Date:** 2026-10-12
 - **Step:** 02 (the Kysely bridge spike, part B of `docs/plan/02-core-contracts.md`)
 - **Affects:** decisions D12 and D14 (plan README §2); the `Adapter` contract; steps 09, 10, 11, 17 and 21

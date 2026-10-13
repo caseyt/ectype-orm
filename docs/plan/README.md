@@ -62,9 +62,9 @@ These are settled. Changing one requires an ADR (§9), not a unilateral edit.
 | D9 | Every literal in a query is a **bound parameter**. The only way to emit raw SQL text is the `fragment` tagged template, whose interpolations are also bound. | Injection safety by construction. |
 | D10 | Write operations return `Result<T, Changeset<T>>` (`{ success: true, data } \| { success: false, error }`); each has an `...OrThrow` twin. The word `ok` appears nowhere in the API: the helpers are `success(data)` and `failure(error)`. | A validation failure is an expected outcome, typed and impossible to confuse with a fault. Same shape as Zod's `safeParse`. |
 | D11 | Changesets are immutable and synchronous. Async validation is a separate, explicit `validateAsync`. | Keeps the common path allocation-light and predictable. |
-| D12 | **Kysely is the SQL back end**: our query AST is lowered to Kysely `OperationNode` trees, compiled by Kysely's dialect compilers, and executed through Kysely drivers. Kysely is never exposed in the public API and sits behind our own `Adapter` interface (so `fromKyselyDialect` is future work, §11). | Postgres, MySQL and SQLite support, pooling and DDL without writing three compilers. Hidden behind `Adapter` so it can be replaced if step 02's spike shows unacceptable overhead. |
+| D12 | **Egon emits its own SQL and wraps the database drivers directly.** One emitter in core turns our query AST into SQL text, with a dialect table for Postgres, MySQL and SQLite; each dialect package wraps its driver (`pg`, `mysql2`, `better-sqlite3`) behind our `Adapter` interface. Core has no runtime dependency. | ADR 0003, which supersedes ADR 0002 (Kysely as a hidden back end). Kysely would have saved about 1,500 lines of emitter and 500 of drivers, while we wrote a lowering of similar size on top of its undocumented node layer, pinned to one pre-1.0 minor. Owning the emitter keeps the injection rule (D9), byte-identical SQL and the full query feature set in our own code. |
 | D13 | Postgres is tier 1 (every feature, every test). SQLite and MySQL are tier 2 (conformance suite, documented capability gaps). | Scope control. |
-| D14 | Node >= 22.12, TypeScript >= 5.5, **ESM only: no CommonJS build**. pnpm workspace. Vitest. Biome. | Current baseline. Kysely (D12) is ESM-only, so a CommonJS build could not load it on every supported Node. Node 22.12 is the first release in which a CommonJS project can `require()` an ES module, which is how such projects use the packages (ADR 0002). |
+| D14 | Node >= 22.12, TypeScript >= 5.5, **ESM only: no CommonJS build**. pnpm workspace. Vitest. Biome. | Current baseline. Two builds of one package are two copies of every class and symbol. Node 22.12 is the first release in which a CommonJS project can `require()` an ES module, which is how such projects use the packages. (Kysely being ESM-only was the original reason, ADR 0002; that reason is gone with ADR 0003, and the decision stands until the owner revisits it.) |
 | D15 | Validators are consumed through the Standard Schema interface (types vendored, no dependency). Zod is a dev/peer dependency of `@egon-orm/zod` only. | "Zod by default, anything else allowed" with zero coupling in core. |
 
 ---
@@ -73,8 +73,8 @@ These are settled. Changing one requires an ADR (§9), not a unilateral edit.
 
 ```
 packages/
-  core/            -> "egon-orm"            schema, types, changeset, query, repo, adapter interface, Kysely bridge
-  postgres/        -> "@egon-orm/postgres"  Kysely PostgresDialect wiring, pg type mapping, error normalisation
+  core/            -> "egon-orm"            schema, types, changeset, query, repo, adapter interface, SQL emitter
+  postgres/        -> "@egon-orm/postgres"  pg driver wrapper, pg type mapping, error normalisation
   sqlite/          -> "@egon-orm/sqlite"    (step 17)
   mysql/           -> "@egon-orm/mysql"     (step 17)
   zod/             -> "@egon-orm/zod"       derive Zod schemas from Egon schemas (step 06)
@@ -95,8 +95,8 @@ types/         FieldType implementations (03)
 schema/        Schema(), field builder, associations, metadata (04)
 changeset/     changeset core (05), validators (06), nested (15)
 query/         ast.ts, expr.ts (07); builder.ts (08); advanced/ (09)
-compiler/      AST -> Kysely nodes, plan cache (10)
-adapter/       Adapter implementation over Kysely, telemetry (11)
+compiler/      AST -> SQL text, dialect tables, plan cache (10)
+adapter/       shared Adapter implementation over a driver wrapper, telemetry (11)
 repo/          read (12), write (13), preload (14), transaction + sandbox (16)
 batch/         Batch (16)
 errors.ts
@@ -195,7 +195,7 @@ Naming is camelCase throughout; a throwing twin is `funOrThrow`; a predicate is
 | Step | File | Depends on | Can run in parallel with |
 |---|---|---|---|
 | 01 Foundation | `01-foundation.md` | — | — |
-| 02 Core contracts and Kysely spike | `02-core-contracts.md` | 01 | — |
+| 02 Core contracts and back-end spike | `02-core-contracts.md` | 01 | — |
 | 03 Type system | `03-types.md` | 02 | 07, 11 |
 | 04 Schema | `04-schema.md` | 03 | 07, 11 |
 | 05 Changeset core | `05-changeset.md` | 04 | 08, 10, 11 |
@@ -460,7 +460,7 @@ your status note.
 - `parentAs` is replaced by `outerRef("u", User)`.
 - **Future work, not in the first release:** lateral joins, `VALUES` sources,
   table-valued fragments, index hints, data-modifying CTEs, named server-side prepared
-  statements, `fromKyselyDialect`, `sortParam` / `dropParam` / index-keyed form params.
+  statements, `sortParam` / `dropParam` / index-keyed form params.
 
 ### Repo reads (step 12)
 

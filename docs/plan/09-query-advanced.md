@@ -1,9 +1,9 @@
 # Step 09 — Advanced queries
 
 **Depends on:** 08, 10. **Parallel with:** 12, 13.
-**Owns:** `packages/core/src/query/advanced/`, the lowering of these features in
+**Owns:** `packages/core/src/query/advanced/`, the SQL emission of these features in
 `packages/core/src/compiler/advanced/` (coordinate with step 10's owner through the
-`lowerNode` extension point), `docs/site/guide/queries-advanced.md`.
+`emitNode` extension point), `docs/site/guide/queries-advanced.md`.
 
 ## Goal
 
@@ -138,7 +138,7 @@ conditional filters with `dynamic`.
 - [ ] Each feature has type tests, SQL snapshots, one integration test, and a docs section.
 - [ ] Inner-query params and named params merge correctly (test with params on both sides and plan-cache reuse across different values).
 - [ ] No feature bypasses parameter binding.
-- [ ] Features unsupported by Kysely's node set are lowered via raw nodes as recorded in ADR 0002, each with a snapshot test.
+- [ ] Every construct of the spike's gap list (`docs/plan/spikes/kysely-bridge/05-gaps.ts`) that this step owns is emitted natively, named windows as a real `WINDOW` clause (ADR 0003), each with a snapshot test.
 
 ## Out of scope
 

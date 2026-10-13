@@ -32,8 +32,9 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
 
 ## Rules that cut across the files
 
-- **No Kysely type appears here** (`contracts.test.ts` checks it). Kysely is the back end
-  behind `Adapter` (ADR 0002) and must stay replaceable.
+- **No back-end type appears here** (`contracts.test.ts` checks that nothing outside
+  `contracts/` is imported). Egon emits its own SQL and wraps the drivers behind `Adapter`
+  (ADR 0003), and a back end must stay replaceable.
 - **No value in SQL text** (decision D9). A caller's value exists in exactly two places: the
   `value` of a `ParamNode` or `ListNode`, and `QueryAst.params`. A compiled plan
   (`CompiledQuery`) holds no values at all, only `ParamSlot`s that say where each
@@ -58,7 +59,7 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
 - **Schema metadata is plain data.** `[META]`, `fields` and the members of a `FieldMeta`
   are own data properties, never getters. The redaction-aware formatter reads them
   without running code, and hides every value of a row whose metadata it cannot read.
-- **Raw SQL text has three sources and no others** (ADR 0002, rule 2): the compiler's own
+- **Raw SQL text has three sources and no others** (ADR 0003, rule 1): the compiler's own
   tables, the static strings of a `fragment`, and the `sql` of a `custom` `DbType`, which
   is trusted developer input and must match `CUSTOM_SQL_TYPE`.
 - **Identity conversions are the `IDENTITY` function itself**, never a look-alike, so that

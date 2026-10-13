@@ -6,7 +6,7 @@ and the worker protocol including the PR and review loop (§9). `CONTRIBUTING.md
 the tooling in more detail.
 
 Egon ORM is a TypeScript ORM: schemas, changesets, a composable query builder and a repo.
-Kysely is the hidden SQL back end. Ecto is the design reference for behaviour, but it is
+It emits its own SQL and wraps the database drivers directly (ADR 0003). Ecto is the design reference for behaviour, but it is
 not how the library is presented: users come from Drizzle, Sequelize and Prisma (plan
 README §8, §11).
 
@@ -86,5 +86,5 @@ Budgets: build a 3-clause query < 1.5 µs; compile with plan-cache hit < 0.3 µs
 
 Node >= 22.12 (decision D14) and pnpm 12; use the versions pinned in `.nvmrc` and
 `"packageManager"`. TypeScript is held at 6 because tsup's declaration bundler does not
-work with TypeScript 7, and Kysely is pinned to one minor (`~0.29`) on purpose. See
-"Dependency versions" in `CONTRIBUTING.md` before bumping either.
+work with TypeScript 7. See "Dependency versions" in `CONTRIBUTING.md` before bumping it.
+`packages/core` has no runtime dependency; do not add one (ADR 0003).

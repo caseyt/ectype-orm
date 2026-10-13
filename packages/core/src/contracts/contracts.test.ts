@@ -25,23 +25,20 @@ describe("contract files", () => {
     ]);
   });
 
-  test.each(sourceFiles)(
-    "%s does not mention a Kysely type or import anything outside contracts/",
-    (file) => {
-      const source = readFileSync(`${here}${file}`, "utf8");
-      // Prose may say that Kysely is the back end; code may not name anything of it.
-      const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-      const specifiers = [...code.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map(
-        (match) => match[1],
-      );
-      for (const specifier of specifiers) expect(specifier).toMatch(/^\.\/[a-z-]+\.js$/);
-      // Guards the scan itself: these two are known to import, so an empty list means the pattern broke.
-      if (file === "schema.ts") expect(specifiers).toEqual(["./type.js"]);
-      if (file === "adapter.ts") expect(specifiers).toEqual(["./query.js", "./schema.js", "./type.js"]);
-      expect(code).not.toMatch(/kysely/i);
-      expect(code).not.toMatch(/OperationNode|QueryCompiler|DatabaseConnection|\bDriver\b/);
-    },
-  );
+  test.each(sourceFiles)("%s does not name a back-end type or import anything outside contracts/", (file) => {
+    const source = readFileSync(`${here}${file}`, "utf8");
+    // Prose may name a driver or a query library; code may not name anything of one.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const specifiers = [...code.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map(
+      (match) => match[1],
+    );
+    for (const specifier of specifiers) expect(specifier).toMatch(/^\.\/[a-z-]+\.js$/);
+    // Guards the scan itself: these two are known to import, so an empty list means the pattern broke.
+    if (file === "schema.ts") expect(specifiers).toEqual(["./type.js"]);
+    if (file === "adapter.ts") expect(specifiers).toEqual(["./query.js", "./schema.js", "./type.js"]);
+    expect(code).not.toMatch(/kysely/i);
+    expect(code).not.toMatch(/OperationNode|QueryCompiler|DatabaseConnection|\bDriver\b/);
+  });
 
   test.each(sourceFiles.filter((file) => file !== "index.ts"))("%s is re-exported by the barrel", (file) => {
     const barrel = readFileSync(`${here}index.ts`, "utf8");

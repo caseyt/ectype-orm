@@ -5,11 +5,11 @@
 `packages/core/test/conformance/adapter/`, `docs/site/guide/getting-started.md` (connection part),
 `docs/site/guide/adapters.md`.
 
-Read ADR 0002 first; this spec assumes Kysely is the back end (D12).
+Read ADR 0003 first: Egon wraps the database drivers directly (D12).
 
 ## Goal
 
-Implement the `Adapter` contract on top of Kysely's dialect/driver layer, and ship
+Implement the `Adapter` contract on top of a thin driver wrapper, and ship
 `@egon-orm/postgres`: connection pooling, execution, streaming, transactions primitives,
 type overrides, error normalisation, telemetry.
 
@@ -28,21 +28,25 @@ const adapter = postgres({
 });
 
 // There is no `types` option: the schema field decides the runtime type (t.bigint() vs
-// t.bigint({ mode: "number" })). `fromKyselyDialect` is future work (plan README §11):
-// Kysely does not appear in the public API, and there is no "egon-orm/adapter" entry point.
+// t.bigint({ mode: "number" })). There is no "egon-orm/adapter" entry point.
 ```
 
 `createRepo({ adapter, ... })` is step 12; this step delivers everything beneath it.
 
 ## Behaviour
 
-1. **Core adapter (`core/src/adapter/kysely-adapter.ts`).** A generic implementation
-   parameterised by: a Kysely `Dialect`, a `Capabilities` table, type overrides, an error
-   normaliser, and lock-mode/identifier specifics. It owns the driver lifecycle
-   (`init`, `acquireConnection`, `releaseConnection`, `destroy`), calls the dialect's query
-   compiler for step 10, and executes `{ sql, params }` through the driver connection
-   without constructing Kysely builders. Lazy init on first use; `close()` is idempotent
-   and waits for checked-out connections.
+1. **Core adapter (`core/src/adapter/adapter.ts`).** A generic implementation of the
+   `Adapter` contract, parameterised by: a `DriverWrapper`, the dialect table of step 10
+   (quoting, placeholders, capabilities, lock modes), type overrides and an error
+   normaliser. `DriverWrapper` is a small internal interface, not exported from
+   `index.ts`: `init`, `acquire`, `release`, `destroy`, and on a connection `query(sql,
+   params)` and `stream(sql, params, batchSize)`. The Postgres wrapper in
+   `packages/postgres` implements it over `pg.Pool` (step 17 adds two more).
+   Transactions and savepoints are statements the core adapter sends (`begin`, `commit`,
+   `rollback`, `savepoint "name"`, …), with the savepoint name quoted by the dialect; the
+   wrapper knows nothing about them. The core adapter calls step 10's emitter for the
+   `compile*` methods and passes `{ sql, params }` to the wrapper. Lazy init on first use;
+   `close()` is idempotent and waits for checked-out connections.
 2. **Connections.** `acquire()` returns a `Connection` with `execute`, `stream`, `begin(opts)`,
    `commit`, `rollback`, `savepoint(name)`, `rollbackTo(name)`, `releaseSavepoint(name)`, `release()`,
    `destroy()`. `execute` options also carry `slots`, `context` and `statementName` (`contracts/adapter.ts`).
@@ -51,7 +55,7 @@ const adapter = postgres({
    error) is destroyed, not returned to the pool.
 3. **`execute` without a connection** checks one out, runs, and releases in `finally`.
 4. **Streaming.** `stream(sql, params, { batchSize })` yields rows using a server-side
-   cursor (`pg-cursor` through Kysely's stream support or directly). Early `break`/`return`
+   cursor (`pg-cursor`, an optional peer dependency used directly). Early `break`/`return`
    closes the cursor and releases the connection; tested.
 5. **Type overrides (Postgres).** Supply codecs for logical types where `pg` does not
    already return the app representation: `bigint` (int8 text → `bigint`, or → `number` for
@@ -78,8 +82,8 @@ const adapter = postgres({
 9. **Timeouts and cancellation.** `execute(..., { signal?: AbortSignal, timeoutMs? })`:
    abort issues a Postgres cancel request and rejects with `DatabaseError { code: "aborted" }`.
 10. **Health.** `adapter.ping()`; pool stats (`size`, `idle`, `waiting`).
-11. **Driver choice.** Use `pg` (peer dependency) via Kysely's `PostgresDialect`. Check
-    whether a maintained postgres.js dialect is viable and, if so, expose
+11. **Driver choice.** Use `pg` (peer dependency) directly. Check
+    whether a second wrapper over postgres.js is worth its upkeep and, if so, expose
     `postgres({ driver: "postgres.js" })` behind the same options; otherwise note it as future work.
 
 ## Adapter conformance suite
@@ -110,7 +114,7 @@ cancellation, bring-your-own pool).
 
 ## Acceptance
 
-- [ ] `Adapter` contract fully implemented with no Kysely types in its public signatures.
+- [ ] `Adapter` contract fully implemented with no driver type (`pg`'s or any other) in core's public signatures; `packages/core` has no runtime dependency.
 - [ ] Conformance suite passes on Postgres 14 and 16.
 - [ ] Execution overhead target met; numbers in the status note.
 - [ ] Every normalised error keeps `cause` and carries constraint name/table where the driver provides them.
@@ -126,5 +130,5 @@ Requests that the (now removed) status notes of steps 01 and 02 addressed to thi
 
 - In the contract already: `Executor` / `Connection` (with `destroy`), `typeOverrides`, `on(event)`, `ExecuteOptions.slots` / `context` / `statementName`, `RawResult.insertId`, the `DatabaseError` codes and the `ConstraintError` fields.
 - Not in the contract: `ping()` and pool statistics. Add them to the concrete adapter.
-- The spike did not exercise streaming or cancellation through Kysely's Postgres driver (streaming needs `pg-cursor`).
+- Streaming (`pg-cursor`) and cancellation have never been exercised; the spike covered pooling, transactions, savepoints and error pass-through, through Kysely's driver, whose Postgres part is a thin layer over `pg.Pool` (`03-execution.ts` lists the cases to reproduce).
 - `@egon-orm/postgres` builds ESM only.
