@@ -478,7 +478,8 @@ your status note.
 - `cast` adds `can't be blank` when a non-nullable field is set to `null`, and
   `repo.insert` returns the same error for a required field with no value.
 - `unsafeValidateUnique` is renamed `validateUniqueAsync`.
-- Default unique-constraint names accepted: `<table>_<cols>_key`, `_unique` and `_index`.
+- The default unique-constraint name is `<table>_<cols>_key` (Postgres's own convention),
+  and only that. `Constraint.name` is a single string; other names are passed with `{ name }`.
 - Placeholders are `{count}`; meta keys are camelCase (`constraintName`).
 - The default messages are unchanged (`can't be blank`, `has already been taken`, ...).
 

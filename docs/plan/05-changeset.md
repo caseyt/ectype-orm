@@ -73,10 +73,11 @@ changesets, interpolates `{key}` via `fn`), `cs.errorMessages()` (convenience: i
 Constraints (declarations only; step 13 enforces them): `uniqueConstraint(field | fields, { name?, match?, message?, errorKey? })`,
 `foreignKeyConstraint(field, opts)`, `assocConstraint(assoc, opts)`, `noAssocConstraint(assoc, opts)`,
 `checkConstraint(field, { name, ... })`, `exclusionConstraint(field, opts)`.
-Default names: a unique constraint with no `name` matches any of `<source>_<column(s)>_key`
-(Postgres and Prisma), `<source>_<column(s)>_unique` (Drizzle) and
-`<source>_<column(s)>_index`; a foreign key matches `<source>_<column>_fkey`. So the
-`Constraint` contract carries a list of candidate names (a contract refinement; record it).
+Default names (owner decision, 2026-10-13): one convention, Postgres's own. A unique
+constraint with no `name` is `<source>_<column(s)>_key` and a foreign key is
+`<source>_<column>_fkey`. `Constraint.name` stays a single string (no list, no regular
+expression); any other name, such as Drizzle's `_unique` or an index named `_index`, is
+passed with `{ name }`.
 Messages: `has already been taken`, `does not exist`, `is still associated with this entry`, `is invalid`, `violates an exclusion constraint`.
 
 Repo integration hooks (stored, used by step 13): `optimisticLock(field, incrementer?)`,

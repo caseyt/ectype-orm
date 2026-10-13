@@ -260,7 +260,7 @@ const CONSTRAINT_HELP: Record<ConstraintViolationType, string> = {
  * ```ts
  * throw new ConstraintError({
  *   type: "unique",
- *   constraint: "users_email_index",
+ *   constraint: "users_email_key",
  *   table: "users",
  *   column: undefined,
  *   detail: undefined,

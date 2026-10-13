@@ -85,16 +85,15 @@ By primary key; zero rows → `StaleEntryError` (same options). Returned row has
 When the adapter raises `ConstraintError`, look for a matching declaration on the changeset:
 type matching (a declared `foreignKey` or `noAssoc` constraint matches a database
 `foreignKey` violation; the other types match their own; `notNull` matches nothing), and
-name matched per `match` (`exact` | `suffix` | `prefix`; a unique constraint declared without a
-name matches any of its default names, `_key`, `_unique`, `_index`, step 05). If found, return
+name matched per `match` (`exact` | `suffix` | `prefix`; the default name is in step 05). If found, return
 `failure(cs)` with the declared message on the declared field (`errorKey`), plus
 `constraint: type` and `constraintName` in meta. If not found, **rethrow**
 `ConstraintError` with a message that tells the user exactly which call to add, e.g.:
 
 ```
-unique constraint "users_email_index" violated on insert into "users".
+unique constraint "users_email_key" violated on insert into "users".
 The changeset has not defined this constraint. Add: .uniqueConstraint("email")
-(or .uniqueConstraint("email", { name: "users_email_index" }))
+(or .uniqueConstraint("email", { name: "users_email_key" }))
 ```
 
 Only one constraint error is reported per attempt (that is all the database reports);

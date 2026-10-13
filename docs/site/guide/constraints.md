@@ -34,15 +34,17 @@ Options: `name`, `match` (`"exact"`, `"suffix"` or `"prefix"`), `message`, and `
 The database reports the **name** of the constraint that failed. The declaration must
 match that name.
 
-With no `name`, these defaults are tried:
+With no `name`, one default is used:
 
-| Declaration | Names matched |
+| Declaration | Name matched |
 |---|---|
-| `uniqueConstraint("email")` on `users` | `users_email_key`, `users_email_unique`, `users_email_index` |
-| `uniqueConstraint(["orgId", "slug"])` on `projects` | `projects_org_id_slug_key`, `..._unique`, `..._index` |
+| `uniqueConstraint("email")` on `users` | `users_email_key` |
+| `uniqueConstraint(["orgId", "slug"])` on `projects` | `projects_org_id_slug_key` |
 | `foreignKeyConstraint("orgId")` on `users` | `users_org_id_fkey` |
 
-Those cover what Postgres, Prisma and Drizzle generate. For any other name, pass it:
+These are the names Postgres gives a constraint when you do not name it, and the ones
+Prisma generates. Drizzle names unique constraints `users_email_unique`, and a unique
+*index* is often named `users_email_index`. For any other name, pass it:
 
 ```ts
 .uniqueConstraint("email", { name: "uq_users_email" })

@@ -283,7 +283,7 @@ describe("ConstraintError", () => {
   test("keeps the database's detail line, which may quote row values, out of the message", () => {
     const error = new ConstraintError({
       type: "unique",
-      constraint: "users_email_index",
+      constraint: "users_email_key",
       table: "users",
       column: undefined,
       detail: "Key (email)=(secret@example.com) already exists.",
@@ -340,14 +340,14 @@ describe("ConstraintError", () => {
   test("accepts a message that replaces the default", () => {
     const error = new ConstraintError({
       type: "unique",
-      constraint: "users_email_index",
+      constraint: "users_email_key",
       table: "users",
       column: undefined,
       detail: undefined,
       message: 'Add .uniqueConstraint("email") to User.changeset.',
     });
     expect(error.message).toBe('Add .uniqueConstraint("email") to User.changeset.');
-    expect(error.constraint).toBe("users_email_index");
+    expect(error.constraint).toBe("users_email_key");
   });
 });
 
