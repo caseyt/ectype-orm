@@ -1,7 +1,7 @@
 {
-  "name": "@ectype/zod",
+  "name": "@egon-orm/zod",
   "version": "0.0.0",
-  "description": "Derive Zod schemas from Ectype schemas.",
+  "description": "Derive Zod schemas from Egon ORM schemas.",
   "license": "MIT",
   "author": "Casey Tickes",
   "repository": {
@@ -13,7 +13,6 @@
   "bugs": "https://github.com/caseyt/ectype-orm/issues",
   "keywords": [
     "orm",
-    "ecto",
     "typescript",
     "sql",
     "changeset",
@@ -40,11 +39,11 @@
     "lint:package": "publint --strict && attw --pack . --profile esm-only"
   },
   "peerDependencies": {
-    "ectype": "workspace:^",
+    "egon-orm": "workspace:^",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "ectype": "workspace:*",
+    "egon-orm": "workspace:*",
     "zod": "4.6.5"
   },
   "publishConfig": {

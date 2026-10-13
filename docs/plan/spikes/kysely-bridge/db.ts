@@ -19,11 +19,11 @@ import { bindParams, type Plan } from "./bridge.js";
 // Same variables and defaults as packages/core/test/support/env.ts.
 const env = process.env;
 export const SERVER = {
-  host: env.ECTYPE_PG_HOST || "127.0.0.1",
-  port: Number(env.ECTYPE_PG_PORT || 54_329),
-  user: env.ECTYPE_PG_USER || "ectype",
-  password: env.ECTYPE_PG_PASSWORD || "ectype",
-  database: env.ECTYPE_PG_DATABASE || "ectype_dev",
+  host: env.EGON_PG_HOST || "127.0.0.1",
+  port: Number(env.EGON_PG_PORT || 54_329),
+  user: env.EGON_PG_USER || "egon",
+  password: env.EGON_PG_PASSWORD || "egon",
+  database: env.EGON_PG_DATABASE || "egon_dev",
 };
 
 const BLOG_FIXTURE = new URL("../../../../packages/core/test/support/fixtures/blog.sql", import.meta.url);
@@ -40,7 +40,7 @@ export interface SpikeDatabase {
 /**
  * Creates a throwaway database loaded with the blog fixture and seeds it.
  *
- * The name follows the test-support convention (`ectype_<label>_<run>_<time>_<random>`),
+ * The name follows the test-support convention (`egon_<label>_<run>_<time>_<random>`),
  * so a database leaked by a crashed script is removed by the next integration run's sweep.
  */
 export async function createSpikeDatabase(seed: {
@@ -48,7 +48,7 @@ export async function createSpikeDatabase(seed: {
   postsPerUser: number;
 }): Promise<SpikeDatabase> {
   const seconds = Math.floor(Date.now() / 1000).toString(36);
-  const name = `ectype_spike_p${process.pid}_${seconds}_${randomBytes(4).toString("hex")}`;
+  const name = `egon_spike_p${process.pid}_${seconds}_${randomBytes(4).toString("hex")}`;
   const admin = new pg.Client(SERVER);
   await admin.connect();
   await admin.query(`CREATE DATABASE ${name}`);
@@ -60,7 +60,7 @@ export async function createSpikeDatabase(seed: {
   try {
     await client.query(readFileSync(BLOG_FIXTURE, "utf8"));
     await client.query(
-      `INSERT INTO users (email, name, age, inserted_at)
+      `INSERT INTO users (email, name, age, created_at)
        SELECT 'user' || i || '@example.com', 'User ' || i, 15 + (i % 50), now() - make_interval(mins => i)
        FROM generate_series(1, $1::int) AS i`,
       [seed.users],

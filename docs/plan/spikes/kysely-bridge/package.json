@@ -1,8 +1,8 @@
 {
-  "name": "@ectype/spike-kysely-bridge",
+  "name": "@egon-orm/spike-kysely-bridge",
   "version": "0.0.0",
   "private": true,
-  "description": "Step 02 spike: can Ectype's query AST be lowered to Kysely operation nodes? Evidence for ADR 0002.",
+  "description": "Step 02 spike: can Egon's query AST be lowered to Kysely operation nodes? Evidence for ADR 0002.",
   "license": "MIT",
   "type": "module",
   "scripts": {

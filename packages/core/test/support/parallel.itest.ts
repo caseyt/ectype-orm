@@ -88,7 +88,7 @@ function runPair(reportPath: string): Promise<{ code: number | null; stdout: str
 }
 
 test("two integration test files run in parallel without interfering", { timeout: 90_000 }, async () => {
-  const scratch = mkdtempSync(join(tmpdir(), "ectype-parallel-"));
+  const scratch = mkdtempSync(join(tmpdir(), "egon-parallel-"));
   let report: JsonReport | undefined;
   let outcome: Awaited<ReturnType<typeof runPair>>;
   try {

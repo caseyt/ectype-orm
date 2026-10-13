@@ -22,7 +22,7 @@ describe("withDatabase (postgres)", () => {
       return "returned";
     });
     expect(result).toBe("returned");
-    expect(inner).toMatch(/^ectype_lifecycle_/);
+    expect(inner).toMatch(/^egon_lifecycle_/);
 
     await withDatabase("postgres", async (other) => {
       expect(other.name).not.toBe(inner);
@@ -57,7 +57,7 @@ describe("withDatabase (postgres)", () => {
       expect(await databaseExists(other, name)).toBe(false);
       const leftovers = await other.query(
         "SELECT datname FROM pg_database WHERE datname LIKE $1 AND datname <> $2",
-        [`ectype\\_dropcheck\\_${currentRunId()}\\_%`, other.name],
+        [`egon\\_dropcheck\\_${currentRunId()}\\_%`, other.name],
       );
       expect(leftovers).toEqual([]);
     });
@@ -93,7 +93,7 @@ describe("cleanup when a test times out (postgres)", () => {
 
   test("the database of the timed-out test was created, outlived the timeout, and is gone", async () => {
     // The previous test got as far as holding a database (not, say, a refused connection)...
-    expect(observed.database).toMatch(new RegExp(`^ectype_leak_timeout_${currentRunId()}_`));
+    expect(observed.database).toMatch(new RegExp(`^egon_leak_timeout_${currentRunId()}_`));
     // ...and its query did not end by itself before the timeout: it was cut off by the drop.
     // (`undefined`: the driver never settled the abandoned query, which is fine too.)
     // The margin absorbs scheduling jitter: this clock starts a moment after Vitest's timer.
@@ -103,7 +103,7 @@ describe("cleanup when a test times out (postgres)", () => {
     await withDatabase("postgres", async (other) => {
       expect(await databaseExists(other, observed.database ?? "")).toBe(false);
       const leaked = await other.query("SELECT datname FROM pg_database WHERE datname LIKE $1", [
-        `ectype\\_leak\\_timeout\\_${currentRunId()}\\_%`,
+        `egon\\_leak\\_timeout\\_${currentRunId()}\\_%`,
       ]);
       expect(leaked).toEqual([]);
     });
@@ -118,12 +118,12 @@ describe("blog fixture (postgres)", () => {
       );
       expect(tables.map((row) => row.tablename)).toEqual(BLOG_TABLES);
 
-      const [user] = await db.query<{ id: string; role: string; lock_version: number; inserted_at: Date }>(
-        "INSERT INTO users (email) VALUES ($1) RETURNING id, role, lock_version, inserted_at",
+      const [user] = await db.query<{ id: string; role: string; lock_version: number; created_at: Date }>(
+        "INSERT INTO users (email) VALUES ($1) RETURNING id, role, lock_version, created_at",
         ["ada@example.com"],
       );
       expect(user).toMatchObject({ id: "1", role: "member", lock_version: 1 });
-      expect(user?.inserted_at).toBeInstanceOf(Date);
+      expect(user?.created_at).toBeInstanceOf(Date);
       await expect(db.query("INSERT INTO users (email) VALUES ($1)", ["ada@example.com"])).rejects.toThrow(
         /users_email_key/,
       );

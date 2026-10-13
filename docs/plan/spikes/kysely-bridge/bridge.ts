@@ -385,7 +385,7 @@ export function compileNode(
 }
 
 /** Compilation needs a query id only to copy it onto the result; one frozen object will do. */
-const SHARED_QUERY_ID = Object.freeze({ queryId: "ectype-spike-compile" });
+const SHARED_QUERY_ID = Object.freeze({ queryId: "egon-spike-compile" });
 
 /**
  * Cold path: lower + compile + slot recovery. The slots index `collectParams(ast)`, and

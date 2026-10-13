@@ -44,11 +44,9 @@ const isDigit = (code: number): boolean => code >= 48 && code <= 57;
  * run of upper-case letters when a lower-case letter follows it. Everything is then
  * lower-cased. Only ASCII letters are treated as having case.
  *
- * Ecto equivalent: none (Elixir fields are already snake_case); the rules are those of `Macro.underscore/1`.
- *
  * @example
  * ```ts
- * camelToSnake("insertedAt"); // "inserted_at"
+ * camelToSnake("createdAt"); // "created_at"
  * camelToSnake("userID"); // "user_id"
  * camelToSnake("HTMLParser"); // "html_parser"
  * camelToSnake("address2Line"); // "address2_line"
@@ -88,7 +86,7 @@ export const camelToSnake: (name: string) => string = memoizeBounded((name) => {
  *
  * @example
  * ```ts
- * snakeToCamel("inserted_at"); // "insertedAt"
+ * snakeToCamel("created_at"); // "createdAt"
  * snakeToCamel("user_id"); // "userId"
  * snakeToCamel("_private_flag"); // "_privateFlag"
  * snakeToCamel("alreadyCamel"); // "alreadyCamel"

@@ -14,7 +14,7 @@ if (existsSync(new URL("../packages/core/dist", import.meta.url))) {
   process.exit(2);
 }
 
-const { status, stdout, stderr } = spawnSync("pnpm", ["--filter", "@ectype/benchmarks", "run", "bench"], {
+const { status, stdout, stderr } = spawnSync("pnpm", ["--filter", "@egon-orm/benchmarks", "run", "bench"], {
   cwd: root,
   encoding: "utf8",
   shell: process.platform === "win32",

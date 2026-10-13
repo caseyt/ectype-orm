@@ -17,14 +17,14 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * `parallel.itest.ts` arranges exactly that, whatever the surrounding run looks like.
  */
 /** Set by `parallel.itest.ts` for each nested run of the pair. */
-export const PARALLEL_TOKEN_ENV = "ECTYPE_PARALLEL_TOKEN";
+export const PARALLEL_TOKEN_ENV = "EGON_PARALLEL_TOKEN";
 
 export async function runParallelPeer(self: "a" | "b", rowCount: number): Promise<void> {
   const peer = self === "a" ? "b" : "a";
   // Unique per invocation of the pair, so that pairs of different runs sharing one server
   // cannot satisfy each other's rendezvous.
   const token = process.env[PARALLEL_TOKEN_ENV] ?? "direct";
-  const signal = (who: string): string => `ectype-parallel-${token}-${who}`;
+  const signal = (who: string): string => `egon-parallel-${token}-${who}`;
   await withDatabase("postgres", { label: `parallel_${self}`, fixtures: ["blog"] }, async (db) => {
     // application_name is visible server-wide in pg_stat_activity: this is the rendezvous signal.
     await db.query("SELECT set_config('application_name', $1, false)", [signal(self)]);
@@ -58,7 +58,7 @@ export async function runParallelPeer(self: "a" | "b", rowCount: number): Promis
     // Stay visible long enough for the peer to see this connection too.
     await sleep(500);
 
-    expect(peerDatabase).toMatch(new RegExp(`^ectype_parallel_${peer}_`));
+    expect(peerDatabase).toMatch(new RegExp(`^egon_parallel_${peer}_`));
     expect(peerDatabase).not.toBe(db.name);
     const rows = await db.query<{ name: string }>("SELECT name FROM users ORDER BY id");
     expect(rows).toEqual(Array.from({ length: rowCount }, () => ({ name: self })));

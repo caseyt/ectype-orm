@@ -6,7 +6,7 @@ import { connectionSettings, tier2Enabled } from "./env.js";
 import { sweepTestDatabases } from "./sweep.js";
 import { truncateAll } from "./truncate.js";
 
-// Tier 2: runs only with ECTYPE_TEST_TIER2=1 and `pnpm db:up:tier2`.
+// Tier 2: runs only with EGON_TEST_TIER2=1 and `pnpm db:up:tier2`.
 describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
   test("creates a uniquely named database and drops it afterwards", async () => {
     let inner = "";
@@ -39,7 +39,7 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
   });
 
   test("the database of the timed-out test was created, outlived the timeout, and is gone", async () => {
-    expect(observed.database).toMatch(new RegExp(`^ectype_leak_timeout_${currentRunId()}_`));
+    expect(observed.database).toMatch(new RegExp(`^egon_leak_timeout_${currentRunId()}_`));
     // (`undefined`: the driver never settled the abandoned query, which is fine too.)
     // The margin absorbs scheduling jitter: this clock starts a moment after Vitest's timer.
     expect(observed.settledAfterMs ?? TIMEOUT_MS).toBeGreaterThanOrEqual(TIMEOUT_MS * 0.8);
@@ -48,7 +48,7 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
     await withDatabase("mysql", async (other) => {
       const leaked = await other.query(
         "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE ?",
-        [`ectype\\_leak\\_timeout\\_${currentRunId()}\\_%`],
+        [`egon\\_leak\\_timeout\\_${currentRunId()}\\_%`],
       );
       expect(leaked).toEqual([]);
     });
@@ -62,10 +62,10 @@ describe.skipIf(!tier2Enabled())("withDatabase and truncateAll (mysql)", () => {
         `x${randomBytes(5).toString("hex")}`,
         `x${randomBytes(5).toString("hex")}`,
       ];
-      const stale = `ectype_sweep_${staleRun}_1a2b3c_00000001`;
-      const fresh = `ectype_sweep_${freshRun}_${Math.floor(Date.now() / 1000).toString(36)}_00000002`;
-      const other = `ectype_notatest_${randomBytes(4).toString("hex")}`;
-      const only = new RegExp(`^ectype_(sweep_(${staleRun}|${freshRun})|notatest)_`);
+      const stale = `egon_sweep_${staleRun}_1a2b3c_00000001`;
+      const fresh = `egon_sweep_${freshRun}_${Math.floor(Date.now() / 1000).toString(36)}_00000002`;
+      const other = `egon_notatest_${randomBytes(4).toString("hex")}`;
+      const only = new RegExp(`^egon_(sweep_(${staleRun}|${freshRun})|notatest)_`);
       await db.exec(`CREATE DATABASE ${stale}; CREATE DATABASE ${fresh}; CREATE DATABASE ${other};`);
       try {
         // Another run's database with an ancient name, but somebody is connected to it.

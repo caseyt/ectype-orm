@@ -1,7 +1,7 @@
 // Runs the five spike scripts in order and stops at the first failure.
 //
 //   pnpm db:up
-//   pnpm --filter @ectype/spike-kysely-bridge run spike
+//   pnpm --filter @egon-orm/spike-kysely-bridge run spike
 //
 // Set SPIKE_COST_QUICK=1 to shorten the benchmark of question 4 (for a smoke run only: the
 // numbers in ADR 0002 come from the full run).

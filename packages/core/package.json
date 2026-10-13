@@ -1,7 +1,7 @@
 {
-  "name": "ectype",
+  "name": "egon-orm",
   "version": "0.0.0",
-  "description": "A TypeScript ORM modelled on Elixir's Ecto: schemas, changesets, queries and a Repo.",
+  "description": "A TypeScript ORM with schemas, changesets, composable queries and a repo, typed end to end.",
   "license": "MIT",
   "author": "Casey Tickes",
   "repository": {
@@ -13,7 +13,6 @@
   "bugs": "https://github.com/caseyt/ectype-orm/issues",
   "keywords": [
     "orm",
-    "ecto",
     "typescript",
     "sql",
     "changeset",

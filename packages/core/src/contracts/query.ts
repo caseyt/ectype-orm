@@ -72,9 +72,9 @@
  * plan, which is what the plan cache of step 10 assumes.
  *
  * What contributes: every node's kind, operators, function names, identifiers (source,
- * alias, column, the prefix of every source and of every query, nested ones included;
+ * alias, column, the database schema of every source and of every query, nested ones included;
  * wherever a node holds a schema's `meta` (a table or CTE source, a whole-binding
- * select) also that schema's `name` and the prefix it declares),
+ * select) also that schema's `name` and the database schema it declares),
  * boolean and enumerated properties (`distinct`, `direction`, `asText`, `recursive`, …),
  * the `value` of a {@link LiteralNode} (it becomes SQL text),
  * the **type** and the **`redact`** flag of a parameter (both end up in the slots of the
@@ -95,7 +95,7 @@
  * The plan cache uses `shape` as a key and confirms a hit structurally, because hashes
  * can collide. In that comparison two sources are the same only if they have the **same
  * `meta` object**: a plan holds the schema metadata of the rows it builds (and each
- * table's resolved prefix), so it can be shared only by queries over the same schemas.
+ * table's resolved database schema), so it can be shared only by queries over the same schemas.
  * The schema's name is in the hash so that this is rare and not routine: two schema
  * classes over one table (a read model next to a write model) would otherwise hash alike
  * and keep evicting each other from one cache entry, each time counted as a collision.
@@ -106,18 +106,18 @@
  * @module
  */
 import type { SchemaMeta } from "./schema.js";
-import type { AnyEctoType } from "./type.js";
+import type { AnyFieldType } from "./type.js";
 
 // ---------------------------------------------------------------------------
 // Expression nodes
 // ---------------------------------------------------------------------------
 
 /**
- * A column of a binding: `"u"."inserted_at"`.
+ * A column of a binding: `"u"."created_at"`.
  *
  * @example
  * ```ts
- * const node: ColumnNode = { kind: "column", binding: "u", field: "insertedAt", column: "inserted_at" };
+ * const node: ColumnNode = { kind: "column", binding: "u", field: "createdAt", column: "created_at" };
  * ```
  */
 export interface ColumnNode {
@@ -147,7 +147,7 @@ export interface ParamNode {
   readonly kind: "param";
   /** The caller's value. Never part of the shape; never SQL text. */
   readonly value: unknown;
-  readonly type: AnyEctoType | undefined;
+  readonly type: AnyFieldType | undefined;
   readonly redact: boolean;
 }
 
@@ -162,7 +162,7 @@ export interface ParamNode {
 export interface NamedParamNode {
   readonly kind: "namedParam";
   readonly name: string;
-  readonly type: AnyEctoType | undefined;
+  readonly type: AnyFieldType | undefined;
   readonly redact: boolean;
 }
 
@@ -178,7 +178,7 @@ export interface NamedParamNode {
 export interface ListNode {
   readonly kind: "list";
   readonly value: readonly unknown[];
-  readonly type: AnyEctoType | undefined;
+  readonly type: AnyFieldType | undefined;
   readonly redact: boolean;
 }
 
@@ -383,19 +383,17 @@ export interface FragmentNode {
 /**
  * A type cast: `CAST(x AS type)`. The SQL type is derived from `type.db`.
  *
- * Ecto equivalent: `type/2`.
- *
  * @example
  * ```ts
  * declare const age: ColumnNode;
- * declare const stringType: AnyEctoType;
+ * declare const stringType: AnyFieldType;
  * const node: CastNode = { kind: "cast", expr: age, type: stringType };
  * ```
  */
 export interface CastNode {
   readonly kind: "cast";
   readonly expr: ExprNode;
-  readonly type: AnyEctoType;
+  readonly type: AnyFieldType;
 }
 
 /**
@@ -480,8 +478,6 @@ export interface TupleNode {
  * A name for a selected expression, or a reference to one. With `expr` it defines the
  * alias in the select list; without, it refers to it from `GROUP BY` or `ORDER BY`.
  *
- * Ecto equivalent: `selected_as/2` and `selected_as/1`.
- *
  * @example
  * ```ts
  * const reference: SelectedAsNode = { kind: "selectedAs", name: "total", expr: undefined };
@@ -552,12 +548,12 @@ export type ExprKind = ExprNode["kind"];
 // ---------------------------------------------------------------------------
 
 /**
- * One `ORDER BY` item: `"u"."inserted_at" DESC NULLS LAST`.
+ * One `ORDER BY` item: `"u"."created_at" DESC NULLS LAST`.
  *
  * @example
  * ```ts
- * declare const insertedAt: ColumnNode;
- * const node: OrderNode = { kind: "order", expr: insertedAt, direction: "desc", nulls: "last" };
+ * declare const createdAt: ColumnNode;
+ * const node: OrderNode = { kind: "order", expr: createdAt, direction: "desc", nulls: "last" };
  * ```
  */
 export interface OrderNode {
@@ -573,7 +569,7 @@ export interface OrderNode {
  * @example
  * ```ts
  * declare const meta: SchemaMeta;
- * const node: TableSourceNode = { kind: "table", source: "users", meta, prefix: undefined, alias: "u" };
+ * const node: TableSourceNode = { kind: "table", source: "users", meta, schema: undefined, alias: "u" };
  * ```
  */
 export interface TableSourceNode {
@@ -582,15 +578,15 @@ export interface TableSourceNode {
   readonly source: string;
   /** The schema the binding was created from; `undefined` for a schemaless table. */
   readonly meta: SchemaMeta | undefined;
-  /** A prefix for this source alone; it wins over every other (see "Prefixes" on `Adapter`). */
-  readonly prefix: string | undefined;
+  /** A database schema for this source alone; it wins over every other (see "Database schemas" on `Adapter`). */
+  readonly schema: string | undefined;
   /** The binding alias. */
   readonly alias: string;
 }
 
 /**
  * A reference to a common table expression of the query as a source: `"tree" AS "t"`.
- * It is a separate kind from a table because no prefix applies to it: the name is the
+ * It is a separate kind from a table because no database schema applies to it: the name is the
  * CTE's, not a table's in some schema.
  *
  * @example
@@ -626,8 +622,6 @@ export interface SubquerySourceNode {
 /**
  * An inline `VALUES` list as a source: `(VALUES ($1, $2), ($3, $4)) AS "v" ("id", "name")`.
  * Every cell is a bound parameter.
- *
- * Ecto equivalent: `values/2`.
  *
  * @example
  * ```ts
@@ -707,7 +701,7 @@ export interface JoinNode {
 
 /**
  * One `where` or `having` call. `op` says how it combines with everything before it,
- * with Ecto's precedence: `where(a).where(b).orWhere(c)` is `(a AND b) OR c`. The `op` of
+ * with this precedence: `where(a).where(b).orWhere(c)` is `(a AND b) OR c`. The `op` of
  * the first entry is ignored.
  *
  * @example
@@ -753,7 +747,7 @@ export interface BoolNode {
  * ```
  */
 export type SelectShape =
-  | { readonly kind: "expr"; readonly expr: ExprNode; readonly type: AnyEctoType | undefined }
+  | { readonly kind: "expr"; readonly expr: ExprNode; readonly type: AnyFieldType | undefined }
   | { readonly kind: "binding"; readonly binding: string; readonly meta: SchemaMeta }
   | { readonly kind: "constant"; readonly index: number }
   | { readonly kind: "object"; readonly keys: readonly string[]; readonly values: readonly SelectShape[] }
@@ -885,19 +879,18 @@ export interface PreloadNode {
 }
 
 /**
- * One assignment of an `updateAll`: `SET "views" = "views" + $1`.
- *
- * Ecto equivalent: the `:set`, `:inc`, `:push` and `:pull` keys of `update/3`.
+ * One assignment of an `updateAll`, as declared with `.set(...)`: `SET "views" = "views" + $1`.
+ * `value` is the whole right-hand side. There is no increment or array operation of its
+ * own: `p.views.add(1)` and `p.tags.append("x")` are ordinary expressions.
  *
  * @example
  * ```ts
- * declare const one: ParamNode;
- * const node: UpdateNode = { kind: "update", op: "inc", field: "views", column: "views", value: one };
+ * declare const viewsPlusOne: ExprNode;
+ * const node: UpdateNode = { kind: "update", field: "views", column: "views", value: viewsPlusOne };
  * ```
  */
 export interface UpdateNode {
   readonly kind: "update";
-  readonly op: "set" | "inc" | "push" | "pull";
   readonly field: string;
   readonly column: string;
   readonly value: ExprNode;
@@ -906,8 +899,6 @@ export interface UpdateNode {
 /**
  * What a `QueryAst` is compiled as: a `SELECT`, an `UPDATE` or a `DELETE`. The AST does
  * not record it; the caller says so (`Adapter.compile`, {@link CteNode.operation}).
- *
- * Ecto equivalent: the `:all`, `:update_all` and `:delete_all` operations of an adapter's `prepare/2`.
  *
  * @example
  * ```ts
@@ -919,8 +910,6 @@ export type QueryOperation = "all" | "updateAll" | "deleteAll";
 /**
  * A query, as data. See the module documentation for the rules, for the order of
  * `params` and for `shape`.
- *
- * Ecto equivalent: the `%Ecto.Query{}` struct.
  *
  * @example
  * ```ts
@@ -944,7 +933,7 @@ export type QueryOperation = "all" | "updateAll" | "deleteAll";
  *   windows: [],
  *   preloads: [],
  *   updates: [],
- *   prefix: undefined,
+ *   schema: undefined,
  *   hints: [],
  *   params: [],
  *   listLengths: [],
@@ -974,11 +963,11 @@ export interface QueryAst {
   /** The assignments of an `updateAll`; empty for every other operation. */
   readonly updates: readonly UpdateNode[];
   /**
-   * The query-level prefix (Postgres schema, MySQL database). It does not override a
-   * prefix that a schema declares. A query nested in this one (a subquery, a CTE body, a
-   * set-operation branch) that sets none inherits it ("Prefixes" on `Adapter`, rule 1).
+   * The query-level database schema (a Postgres schema, a MySQL database). It does not override a
+   * database schema that a schema declares. A query nested in this one (a subquery, a CTE body, a
+   * set-operation branch) that sets none inherits it ("Database schemas" on `Adapter`, rule 1).
    */
-  readonly prefix: string | undefined;
+  readonly schema: string | undefined;
   /** Table hints, each a fragment. */
   readonly hints: readonly FragmentNode[];
   /** The bound values in canonical order. See "Parameter order" in the module documentation. */

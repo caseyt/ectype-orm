@@ -1,11 +1,11 @@
 /**
- * The version of the `@ectype/zod` package.
+ * The version of the `@egon-orm/zod` package.
  *
  * Placeholder export from step 01 (foundation); the public API arrives in later steps.
  *
  * @example
  * ```ts
- * import { VERSION } from "@ectype/zod";
+ * import { VERSION } from "@egon-orm/zod";
  *
  * console.log(VERSION); // "0.0.0"
  * ```

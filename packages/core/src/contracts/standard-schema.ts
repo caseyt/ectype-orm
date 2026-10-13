@@ -6,7 +6,7 @@
  * on the package. Do not edit the shapes: they are defined by the specification. Zod,
  * Valibot, ArkType and recent Yup schemas all satisfy {@link StandardSchemaV1}.
  *
- * Consumed by step 06 (`changeset/validators/`) and by `@ectype/zod`.
+ * Consumed by step 06 (`changeset/validators/`) and by `@egon-orm/zod`.
  *
  * @module
  */

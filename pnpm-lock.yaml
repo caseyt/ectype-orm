@@ -205,7 +205,7 @@ importers:
 
   benchmarks:
     dependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../packages/core
       mitata:
@@ -230,7 +230,7 @@ importers:
 
   docs/site:
     dependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../../packages/core
     devDependencies:
@@ -240,19 +240,19 @@ importers:
 
   examples/smoke:
     dependencies:
-      '@ectype/postgres':
+      '@egon-orm/postgres':
         specifier: workspace:*
         version: link:../../packages/postgres
-      '@ectype/zod':
+      '@egon-orm/zod':
         specifier: workspace:*
         version: link:../../packages/zod
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../../packages/core
 
   packages/cli:
     devDependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../core
 
@@ -274,25 +274,25 @@ importers:
 
   packages/mysql:
     devDependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../core
 
   packages/postgres:
     devDependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../core
 
   packages/sqlite:
     devDependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../core
 
   packages/zod:
     devDependencies:
-      ectype:
+      egon-orm:
         specifier: workspace:*
         version: link:../core
       zod:

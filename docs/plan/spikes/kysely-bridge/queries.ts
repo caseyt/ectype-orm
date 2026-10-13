@@ -20,9 +20,9 @@ import {
  * The reference query of question 1:
  *
  *   SELECT u.id AS c0, count(p.id) AS c1 FROM users u JOIN posts p ON p.author_id = u.id
- *   WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.inserted_at DESC LIMIT $2
+ *   WHERE u.age >= $1 AND p.published GROUP BY u.id ORDER BY u.created_at DESC LIMIT $2
  *
- * (`u.inserted_at` is functionally dependent on the grouped primary key, so Postgres accepts it.)
+ * (`u.created_at` is functionally dependent on the grouped primary key, so Postgres accepts it.)
  */
 export const reference = (minAge: number, limit: number): SelectAst =>
   select({
@@ -33,11 +33,11 @@ export const reference = (minAge: number, limit: number): SelectAst =>
     wheres: [bin(col("u", "age"), ">=", param(minAge)), col("p", "published")],
     select: [col("u", "id"), agg("count", col("p", "id"))],
     groupBys: [col("u", "id")],
-    orderBys: [{ expr: col("u", "inserted_at"), direction: "desc" }],
+    orderBys: [{ expr: col("u", "created_at"), direction: "desc" }],
     limit: param(limit),
   });
 export const REFERENCE_SQL =
-  'select "u"."id" as "c0", count("p"."id") as "c1" from "users" as "u" inner join "posts" as "p" on "p"."author_id" = "u"."id" where "u"."age" >= $1 and "p"."published" group by "u"."id" order by "u"."inserted_at" desc limit $2';
+  'select "u"."id" as "c0", count("p"."id") as "c1" from "users" as "u" inner join "posts" as "p" on "p"."author_id" = "u"."id" where "u"."age" >= $1 and "p"."published" group by "u"."id" order by "u"."created_at" desc limit $2';
 
 /** INSERT ... ON CONFLICT ... RETURNING. */
 export const upsert = (email: string | null, name: string, age: number, bump: number): InsertAst => ({

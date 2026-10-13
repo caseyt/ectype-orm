@@ -14,7 +14,7 @@ CREATE TABLE users (
   password_hash text,
   settings      jsonb,
   lock_version  integer NOT NULL DEFAULT 1,
-  inserted_at   timestamptz NOT NULL DEFAULT now(),
+  created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
@@ -36,7 +36,7 @@ CREATE TABLE posts (
   views        integer DEFAULT 0,
   tags         text[],
   published_at timestamptz,
-  inserted_at  timestamptz NOT NULL DEFAULT now(),
+  created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX posts_author_id_index ON posts (author_id);
@@ -46,7 +46,7 @@ CREATE TABLE comments (
   post_id     bigint NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
   author_id   bigint REFERENCES users (id),
   body        text NOT NULL,
-  inserted_at timestamptz NOT NULL DEFAULT now()
+  created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX comments_post_id_index ON comments (post_id);
 CREATE INDEX comments_author_id_index ON comments (author_id);

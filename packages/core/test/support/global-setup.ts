@@ -10,28 +10,28 @@ import { RUN_ID_ENV } from "./db.js";
 import { type Dialect, tier2Enabled } from "./env.js";
 import { sweepTestDatabases } from "./sweep.js";
 
-/** A database older than this cannot belong to a live run. Override with ECTYPE_TEST_STALE_MINUTES. */
+/** A database older than this cannot belong to a live run. Override with EGON_TEST_STALE_MINUTES. */
 const DEFAULT_STALE_MINUTES = 30;
 
 // Several projects share this file in one process; set up on the first, tear down on the last.
-const state = globalThis as typeof globalThis & { __ectypeIntegrationProjects?: number };
+const state = globalThis as typeof globalThis & { __egonIntegrationProjects?: number };
 
 function dialects(): Dialect[] {
   return tier2Enabled() ? ["postgres", "mysql"] : ["postgres"];
 }
 
 function staleMs(): number {
-  const raw = process.env.ECTYPE_TEST_STALE_MINUTES;
+  const raw = process.env.EGON_TEST_STALE_MINUTES;
   const minutes = raw === undefined || raw === "" ? DEFAULT_STALE_MINUTES : Number(raw);
   if (!Number.isFinite(minutes) || minutes < 0) {
-    throw new Error(`ECTYPE_TEST_STALE_MINUTES must be a non-negative number, got ${JSON.stringify(raw)}`);
+    throw new Error(`EGON_TEST_STALE_MINUTES must be a non-negative number, got ${JSON.stringify(raw)}`);
   }
   return minutes * 60_000;
 }
 
 export async function setup(): Promise<void> {
-  state.__ectypeIntegrationProjects = (state.__ectypeIntegrationProjects ?? 0) + 1;
-  if (state.__ectypeIntegrationProjects > 1) return;
+  state.__egonIntegrationProjects = (state.__egonIntegrationProjects ?? 0) + 1;
+  if (state.__egonIntegrationProjects > 1) return;
 
   // A nested run (parallel.itest.ts) keeps the id of the run that started it.
   process.env[RUN_ID_ENV] ??= `r${randomBytes(4).toString("hex")}`;
@@ -41,8 +41,8 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
-  state.__ectypeIntegrationProjects = (state.__ectypeIntegrationProjects ?? 1) - 1;
-  if (state.__ectypeIntegrationProjects > 0) return;
+  state.__egonIntegrationProjects = (state.__egonIntegrationProjects ?? 1) - 1;
+  if (state.__egonIntegrationProjects > 0) return;
 
   const runId = process.env[RUN_ID_ENV];
   if (runId === undefined) return;

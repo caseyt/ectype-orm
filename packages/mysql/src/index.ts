@@ -1,11 +1,11 @@
 /**
- * The version of the `@ectype/mysql` package.
+ * The version of the `@egon-orm/mysql` package.
  *
  * Placeholder export from step 01 (foundation); the public API arrives in later steps.
  *
  * @example
  * ```ts
- * import { VERSION } from "@ectype/mysql";
+ * import { VERSION } from "@egon-orm/mysql";
  *
  * console.log(VERSION); // "0.0.0"
  * ```

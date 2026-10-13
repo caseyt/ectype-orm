@@ -4,7 +4,7 @@ import { camelToSnake, memoizeBounded, snakeToCamel } from "./naming.js";
 
 describe("camelToSnake", () => {
   test.each([
-    ["insertedAt", "inserted_at"],
+    ["createdAt", "created_at"],
     ["id", "id"],
     ["authorId", "author_id"],
     ["passwordHash", "password_hash"],
@@ -59,13 +59,13 @@ describe("camelToSnake", () => {
   test("the memo is emptied when it is full, and keeps answering correctly", () => {
     for (let i = 0; i < 5000; i++) expect(camelToSnake(`fieldNumber${i}X`)).toBe(`field_number${i}_x`);
     expect(camelToSnake("fieldNumber0X")).toBe("field_number0_x");
-    expect(camelToSnake("insertedAt")).toBe("inserted_at");
+    expect(camelToSnake("createdAt")).toBe("created_at");
   });
 });
 
 describe("snakeToCamel", () => {
   test.each([
-    ["inserted_at", "insertedAt"],
+    ["created_at", "createdAt"],
     ["id", "id"],
     ["author_id", "authorId"],
     ["lock_version", "lockVersion"],
@@ -103,7 +103,7 @@ describe("snakeToCamel", () => {
 
   test("the memo is emptied when it is full, and keeps answering correctly", () => {
     for (let i = 0; i < 5000; i++) expect(snakeToCamel(`field_number_${i}_x`)).toBe(`fieldNumber${i}X`);
-    expect(snakeToCamel("inserted_at")).toBe("insertedAt");
+    expect(snakeToCamel("created_at")).toBe("createdAt");
   });
 });
 

@@ -75,7 +75,7 @@ jobs:
       - run: pnpm db:up:tier2
       - run: pnpm test:integration
         env:
-          ECTYPE_TEST_TIER2: "1"
+          EGON_TEST_TIER2: "1"
       - if: failure()
         run: docker compose --profile tier2 logs --no-color
 

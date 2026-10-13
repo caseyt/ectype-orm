@@ -1,6 +1,6 @@
 {
   // Used by tsx when benchmarks RUN (see package.json "bench" and src/run.ts). It drops the
-  // workspace `paths`, so `ectype` and `@ectype/*` resolve through node_modules to the built
+  // workspace `paths`, so `egon-orm` and `@egon-orm/*` resolve through node_modules to the built
   // dist/ output: benchmarks measure what users install, not the TypeScript sources.
   // Type-checking still uses tsconfig.json.
   "extends": "./tsconfig.json",

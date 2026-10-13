@@ -1,5 +1,5 @@
 /**
- * The type contract (Ecto.Type): how one kind of value is cast from untrusted input,
+ * The type contract: how one kind of value is cast from untrusted input,
  * loaded from the driver, dumped to the driver, and compared.
  *
  * Implemented by step 03 (`types/`). Consumed by schemas (04), changesets (05), query
@@ -9,30 +9,28 @@
  */
 
 /**
- * The outcome of {@link EctoType.cast}: the cast value, or a failure with an optional
+ * The outcome of {@link FieldType.cast}: the cast value, or a failure with an optional
  * message and metadata. A failure never throws and never carries the offending value.
  *
- * `message` may contain `%{key}` placeholders that are filled from `meta`, like every
+ * `message` may contain `{key}` placeholders that are filled from `meta`, like every
  * changeset error message. When `message` is omitted the changeset uses `"is invalid"`.
- *
- * Ecto equivalent: the `{:ok, value} | :error | {:error, keyword}` return of `c:Ecto.Type.cast/1`.
  *
  * @example
  * ```ts
- * const good: CastResult<number> = { ok: true, value: 42 };
- * const bad: CastResult<number> = { ok: false, message: "must be a whole number", meta: { kind: "integer" } };
+ * const good: CastResult<number> = { success: true, data: 42 };
+ * const bad: CastResult<number> = { success: false, message: "must be a whole number", meta: { kind: "integer" } };
  * ```
  */
 export type CastResult<T> =
-  | { readonly ok: true; readonly value: T }
+  | { readonly success: true; readonly data: T }
   | {
-      readonly ok: false;
+      readonly success: false;
       readonly message?: string;
       readonly meta?: Readonly<Record<string, unknown>>;
     };
 
 /**
- * The logical column type of an {@link EctoType}. Adapters map it to a concrete SQL type
+ * The logical column type of a {@link FieldType}. Adapters map it to a concrete SQL type
  * (for `CAST` and for migrations) and use it to choose driver-level conversions.
  *
  * `custom.sql` is a SQL type name, and it is **trusted input**: the one place besides the
@@ -104,88 +102,86 @@ export type DbTypeKind = DbType["kind"];
  *
  * Rules every implementation follows:
  *
- * - `null` and `undefined` never reach `cast`, `load`, `dump` or `equal`; the caller
+ * - `null` and `undefined` never reach `cast`, `fromDb`, `toDb` or `equal`; the caller
  *   handles nullability.
- * - `cast` never throws, whatever it is given; it returns `{ ok: false }` instead.
- * - `load` and `dump` are on the hot path. When the driver already produces or accepts
+ * - `cast` never throws, whatever it is given; it returns `{ success: false }` instead.
+ * - `fromDb` and `toDb` are on the hot path. When the driver already produces or accepts
  *   the application representation they must be the {@link IDENTITY} function itself, so
- *   that callers can skip the call with a reference check (`type.load !== IDENTITY`).
+ *   that callers can skip the call with a reference check (`type.fromDb !== IDENTITY`).
  * - A type is immutable and shared: it holds no per-value state.
  *
  * The members are declared with method syntax on purpose: it makes a specific type such
- * as `EctoType<Date, string>` assignable to {@link AnyEctoType}, which is how metadata
+ * as `FieldType<Date, string>` assignable to {@link AnyFieldType}, which is how metadata
  * stores types whose parameters are not known statically.
- *
- * Ecto equivalent: the `Ecto.Type` behaviour (`cast/1`, `load/1`, `dump/1`, `equal?/2`).
  *
  * @example
  * ```ts
- * const upperString: EctoType<string, string> = {
+ * const upperString: FieldType<string, string> = {
  *   name: "upperString",
  *   db: { kind: "text" },
  *   cast: (input) =>
- *     typeof input === "string" ? { ok: true, value: input.toUpperCase() } : { ok: false },
- *   load: IDENTITY,
- *   dump: IDENTITY,
+ *     typeof input === "string" ? { success: true, data: input.toUpperCase() } : { success: false },
+ *   fromDb: IDENTITY,
+ *   toDb: IDENTITY,
  *   equal: Object.is,
  * };
  * ```
  */
-export interface EctoType<TApp, TDb = unknown> {
-  /** A stable name for error messages and adapter overrides: `"string"`, `"integer"`, `"utcDatetime"`, … */
+export interface FieldType<TApp, TDb = unknown> {
+  /** A stable name for error messages and adapter overrides: `"string"`, `"integer"`, `"timestamp"`, … */
   readonly name: string;
   /** The logical column type; used for `CAST`, for migrations and by adapter type overrides. */
   readonly db: DbType;
   /** Converts untrusted external input (JSON, form data) to an application value. Used by changesets. */
   cast(input: unknown): CastResult<TApp>;
   /** Converts a non-null driver value to an application value. Hot path: once per column per row. */
-  load(value: TDb): TApp;
+  fromDb(value: TDb): TApp;
   /** Converts a non-null application value to a driver parameter. */
-  dump(value: TApp): TDb;
+  toDb(value: TApp): TDb;
   /** Whether two non-null application values are the same value. Drives change detection in changesets. */
   equal(a: TApp, b: TApp): boolean;
 }
 
 /**
- * An {@link EctoType} whose type parameters are not known statically. This is the type
+ * A {@link FieldType} whose type parameters are not known statically. This is the type
  * that schema metadata, AST nodes and plans store.
  *
- * Every `EctoType<A, D>` is assignable to it. Values read through it are `unknown`, and
- * the caller is responsible for passing `dump` and `equal` values of the right type.
+ * Every `FieldType<A, D>` is assignable to it. Values read through it are `unknown`, and
+ * the caller is responsible for passing `toDb` and `equal` values of the right type.
  *
  * @example
  * ```ts
- * declare const dateType: EctoType<Date, string>;
- * const stored: AnyEctoType = dateType;
- * const loaded: unknown = stored.load("2026-01-01");
+ * declare const dateType: FieldType<Date, string>;
+ * const stored: AnyFieldType = dateType;
+ * const loaded: unknown = stored.fromDb("2026-01-01");
  * ```
  */
-export type AnyEctoType = EctoType<unknown, unknown>;
+export type AnyFieldType = FieldType<unknown, unknown>;
 
 /**
- * The application type of an {@link EctoType}.
+ * The application type of a {@link FieldType}.
  *
  * @example
  * ```ts
- * declare const dateType: EctoType<Date, string>;
+ * declare const dateType: FieldType<Date, string>;
  * type App = AppTypeOf<typeof dateType>; // Date
  * ```
  */
-export type AppTypeOf<T> = T extends EctoType<infer TApp, infer _TDb> ? TApp : never;
+export type AppTypeOf<T> = T extends FieldType<infer TApp, infer _TDb> ? TApp : never;
 
 /**
- * The driver type of an {@link EctoType}.
+ * The driver type of a {@link FieldType}.
  *
  * @example
  * ```ts
- * declare const dateType: EctoType<Date, string>;
+ * declare const dateType: FieldType<Date, string>;
  * type Db = DbTypeOf<typeof dateType>; // string
  * ```
  */
-export type DbTypeOf<T> = T extends EctoType<infer _TApp, infer TDb> ? TDb : never;
+export type DbTypeOf<T> = T extends FieldType<infer _TApp, infer TDb> ? TDb : never;
 
 /**
- * The identity function, and a marker: a `load` or `dump` that is this exact function
+ * The identity function, and a marker: a `fromDb` or `toDb` that is this exact function
  * converts nothing, so hot paths compare by reference and skip the call.
  *
  * Always use this export for an identity conversion. Another function that happens to
@@ -196,9 +192,9 @@ export type DbTypeOf<T> = T extends EctoType<infer _TApp, infer TDb> ? TDb : nev
  *
  * @example
  * ```ts
- * function loadColumn(type: AnyEctoType, value: unknown): unknown {
+ * function loadColumn(type: AnyFieldType, value: unknown): unknown {
  *   if (value === null) return null;
- *   return type.load === IDENTITY ? value : type.load(value);
+ *   return type.fromDb === IDENTITY ? value : type.fromDb(value);
  * }
  * ```
  */
@@ -206,18 +202,18 @@ export const IDENTITY = <T>(value: T): T => value;
 
 /**
  * A pair of driver conversions: what an adapter supplies to override a type's own
- * `load`/`dump` for its dialect, and what `resolveCodec` (step 03) returns. Either member
+ * `fromDb`/`toDb` for its dialect, and what `resolveCodec` (step 03) returns. Either member
  * may be {@link IDENTITY}.
  *
  * @example
  * ```ts
- * // Postgres sends int8 as text; load it as a bigint.
- * const int8: Codec = { load: (text) => BigInt(text as string), dump: IDENTITY };
+ * // Postgres sends int8 as text; read it as a bigint.
+ * const int8: Codec = { fromDb: (text) => BigInt(text as string), toDb: IDENTITY };
  * ```
  */
 export interface Codec {
   /** Driver value to application value. Never called with `null`. */
-  readonly load: (value: unknown) => unknown;
+  readonly fromDb: (value: unknown) => unknown;
   /** Application value to driver parameter. Never called with `null`. */
-  readonly dump: (value: unknown) => unknown;
+  readonly toDb: (value: unknown) => unknown;
 }

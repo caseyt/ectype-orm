@@ -1,5 +1,5 @@
 {
-  "name": "@ectype/example-smoke",
+  "name": "@egon-orm/example-smoke",
   "version": "0.0.0",
   "private": true,
   "description": "Smoke test: the built ESM-only packages load from an ES module and, through require(), from a CommonJS script.",
@@ -8,8 +8,8 @@
     "smoke": "node esm.mjs && node require-esm.cjs"
   },
   "dependencies": {
-    "@ectype/postgres": "workspace:*",
-    "@ectype/zod": "workspace:*",
-    "ectype": "workspace:*"
+    "@egon-orm/postgres": "workspace:*",
+    "@egon-orm/zod": "workspace:*",
+    "egon-orm": "workspace:*"
   }
 }

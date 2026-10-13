@@ -1,15 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { ChangesetLike } from "./contracts/changeset.js";
 import {
-  AdapterError,
   CastError,
   ConstraintError,
   type ConstraintViolationType,
-  EctypeError,
+  DatabaseError,
+  EgonError,
   type ErrorCode,
   InvalidChangesetError,
-  isEctypeError,
-  MigrationError,
+  isEgonError,
   MultipleResultsError,
   NoResultsError,
   NotLoadedError,
@@ -31,21 +30,21 @@ const changeset: ChangesetLike = {
     email: [{ message: "has already been taken", constraint: "unique", meta: {} }],
     password: [
       {
-        message: "should be at least %{count} character(s)",
+        message: "should be at least {count} character(s)",
         validation: "length",
         meta: { count: 12, kind: "min" },
       },
-      { message: "needs %{missing} filled in", meta: {} },
+      { message: "needs {missing} filled in", meta: {} },
     ],
   },
 };
 
 /** One instance of every error class, with the code and name it must have. */
-const EVERY_ERROR: [error: EctypeError, name: string, code: ErrorCode][] = [
-  [new NoResultsError(), "NoResultsError", "no_results"],
-  [new MultipleResultsError({ count: 2 }), "MultipleResultsError", "multiple_results"],
-  [new InvalidChangesetError({ action: "insert", changeset }), "InvalidChangesetError", "invalid_changeset"],
-  [new StaleEntryError({ action: "update", schema: "User" }), "StaleEntryError", "stale_entry"],
+const EVERY_ERROR: [error: EgonError, name: string, code: ErrorCode][] = [
+  [new NoResultsError(), "NoResultsError", "noResults"],
+  [new MultipleResultsError({ count: 2 }), "MultipleResultsError", "multipleResults"],
+  [new InvalidChangesetError({ action: "insert", changeset }), "InvalidChangesetError", "invalidChangeset"],
+  [new StaleEntryError({ action: "update", schema: "User" }), "StaleEntryError", "staleEntry"],
   [
     new ConstraintError({
       type: "unique",
@@ -59,10 +58,9 @@ const EVERY_ERROR: [error: EctypeError, name: string, code: ErrorCode][] = [
   ],
   [new QueryError("bad query"), "QueryError", "query"],
   [new CastError("bad cast"), "CastError", "cast"],
-  [new NotLoadedError({ schema: "User", association: "posts" }), "NotLoadedError", "not_loaded"],
-  [new AdapterError("driver failed"), "AdapterError", "adapter"],
-  [new MigrationError("bad migration"), "MigrationError", "migration"],
-  [new SchemaDefinitionError("bad schema"), "SchemaDefinitionError", "schema_definition"],
+  [new NotLoadedError({ schema: "User", association: "posts" }), "NotLoadedError", "notLoaded"],
+  [new DatabaseError("driver failed"), "DatabaseError", "database"],
+  [new SchemaDefinitionError("bad schema"), "SchemaDefinitionError", "schemaDefinition"],
 ];
 
 describe("every error class", () => {
@@ -77,9 +75,9 @@ describe("every error class", () => {
     expect(new Set(codes).size).toBe(codes.length);
   });
 
-  test.each(EVERY_ERROR)("%o is an Error and an EctypeError with a stack and a message", (error) => {
+  test.each(EVERY_ERROR)("%o is an Error and an EgonError with a stack and a message", (error) => {
     expect(error).toBeInstanceOf(Error);
-    expect(error).toBeInstanceOf(EctypeError);
+    expect(error).toBeInstanceOf(EgonError);
     expect(error.message.length).toBeGreaterThan(0);
     expect(error.stack).toContain(error.name);
     expect(String(error)).toBe(`${error.name}: ${error.message}`);
@@ -93,7 +91,7 @@ describe("every error class", () => {
   });
 
   test("keeps the cause it is given, by identity", () => {
-    const withCause: EctypeError[] = [
+    const withCause: EgonError[] = [
       new NoResultsError({ cause: driverError }),
       new MultipleResultsError({ count: 2, cause: driverError }),
       new InvalidChangesetError({ action: "insert", changeset, cause: driverError }),
@@ -109,8 +107,7 @@ describe("every error class", () => {
       new QueryError("bad query", driverError),
       new CastError("bad cast", driverError),
       new NotLoadedError({ schema: "User", association: "posts", cause: driverError }),
-      new AdapterError("driver failed", { cause: driverError }),
-      new MigrationError("bad migration", driverError),
+      new DatabaseError("driver failed", { cause: driverError }),
       new SchemaDefinitionError("bad schema", driverError),
     ];
     expect(withCause).toHaveLength(EVERY_ERROR.length);
@@ -118,10 +115,10 @@ describe("every error class", () => {
   });
 
   test("a cause chain survives several levels", () => {
-    const adapter = new AdapterError("Lost the connection.", { code: "connection", cause: driverError });
+    const adapter = new DatabaseError("Lost the connection.", { code: "connection", cause: driverError });
     const query = new QueryError("Could not run the query.", adapter);
     expect(query.cause).toBe(adapter);
-    expect((query.cause as AdapterError).cause).toBe(driverError);
+    expect((query.cause as DatabaseError).cause).toBe(driverError);
   });
 
   test("a falsy cause other than undefined is kept", () => {
@@ -130,9 +127,9 @@ describe("every error class", () => {
   });
 });
 
-describe("isEctypeError", () => {
-  test("recognises every Ectype error and nothing else", () => {
-    for (const [error] of EVERY_ERROR) expect(isEctypeError(error)).toBe(true);
+describe("isEgonError", () => {
+  test("recognises every Egon error and nothing else", () => {
+    for (const [error] of EVERY_ERROR) expect(isEgonError(error)).toBe(true);
     for (const other of [
       new Error("x"),
       driverError,
@@ -143,16 +140,16 @@ describe("isEctypeError", () => {
       {},
       { code: "query" },
     ]) {
-      expect(isEctypeError(other)).toBe(false);
+      expect(isEgonError(other)).toBe(false);
     }
   });
 
   test("matches on the code when one is given", () => {
     const error = new QueryError("bad query");
-    expect(isEctypeError(error, "query")).toBe(true);
-    expect(isEctypeError(error, "cast")).toBe(false);
-    expect(isEctypeError(new AdapterError("x", { code: "deadlock" }), "deadlock")).toBe(true);
-    expect(isEctypeError(new AdapterError("x", { code: "deadlock" }), "adapter")).toBe(false);
+    expect(isEgonError(error, "query")).toBe(true);
+    expect(isEgonError(error, "cast")).toBe(false);
+    expect(isEgonError(new DatabaseError("x", { code: "deadlock" }), "deadlock")).toBe(true);
+    expect(isEgonError(new DatabaseError("x", { code: "deadlock" }), "database")).toBe(false);
   });
 
   test("recognises an error from another copy of the package, where instanceof fails", () => {
@@ -160,11 +157,11 @@ describe("isEctypeError", () => {
     // class, the same process-wide brand.
     const foreign = Object.assign(new Error("from another copy"), {
       code: "query",
-      [Symbol.for("ectype.error")]: true,
+      [Symbol.for("egon.error")]: true,
     });
-    expect(foreign).not.toBeInstanceOf(EctypeError);
-    expect(isEctypeError(foreign)).toBe(true);
-    expect(isEctypeError(foreign, "query")).toBe(true);
+    expect(foreign).not.toBeInstanceOf(EgonError);
+    expect(isEgonError(foreign)).toBe(true);
+    expect(isEgonError(foreign, "query")).toBe(true);
   });
 });
 
@@ -213,7 +210,7 @@ describe("InvalidChangesetError", () => {
       Errors:
         email: has already been taken
         password: should be at least 12 character(s)
-        password: needs %{missing} filled in
+        password: needs {missing} filled in
 
       Fix the input, or call the variant without "OrThrow" to get the changeset back as a Result instead of an exception."
     `);
@@ -228,10 +225,10 @@ describe("InvalidChangesetError", () => {
   test("does not read placeholders from the prototype chain", () => {
     const tricky: ChangesetLike = {
       ...changeset,
-      errors: { name: [{ message: "is %{toString} and %{constructor}", meta: {} }] },
+      errors: { name: [{ message: "is {toString} and {constructor}", meta: {} }] },
     };
     expect(new InvalidChangesetError({ action: "update", changeset: tricky }).message).toContain(
-      "name: is %{toString} and %{constructor}",
+      "name: is {toString} and {constructor}",
     );
   });
 
@@ -364,33 +361,33 @@ describe("NotLoadedError", () => {
   });
 });
 
-describe("AdapterError", () => {
+describe("DatabaseError", () => {
   test("defaults to the generic code, not retryable, no sql", () => {
-    const error = new AdapterError("The driver reported an error.");
-    expect([error.code, error.retryable, error.sql]).toEqual(["adapter", false, undefined]);
+    const error = new DatabaseError("The driver reported an error.");
+    expect([error.code, error.retryable, error.sql]).toEqual(["database", false, undefined]);
     expect(error.message).toBe("The driver reported an error.");
   });
 
   test.each([
-    ["serialization_failure", true],
+    ["serializationFailure", true],
     ["deadlock", true],
     ["connection", false],
     ["aborted", false],
     ["timeout", false],
-    ["adapter", false],
+    ["database", false],
   ] as const)("code %s is retryable by default: %s", (code, retryable) => {
-    const error = new AdapterError("x", { code });
+    const error = new DatabaseError("x", { code });
     expect(error.code).toBe(code);
     expect(error.retryable).toBe(retryable);
   });
 
   test("an explicit retryable wins over the default", () => {
-    expect(new AdapterError("x", { code: "connection", retryable: true }).retryable).toBe(true);
-    expect(new AdapterError("x", { code: "deadlock", retryable: false }).retryable).toBe(false);
+    expect(new DatabaseError("x", { code: "connection", retryable: true }).retryable).toBe(true);
+    expect(new DatabaseError("x", { code: "deadlock", retryable: false }).retryable).toBe(false);
   });
 
   test("keeps the sql and the driver error", () => {
-    const error = new AdapterError("Lost the connection.", {
+    const error = new DatabaseError("Lost the connection.", {
       code: "connection",
       sql: 'select "u"."id" from "users" as "u" where "u"."id" = $1',
       cause: driverError,
@@ -405,7 +402,6 @@ describe("message-only errors", () => {
   test.each([
     [QueryError, "FULL JOIN is not supported by sqlite. Use a LEFT JOIN, or UNION two LEFT JOINs."],
     [CastError, 'Cannot cast params of type "string" to a changeset: expected a plain object.'],
-    [MigrationError, "Cannot roll back 20261012_add_users: dropColumn has no automatic reverse."],
     [SchemaDefinitionError, 'Post.author: belongsTo expects the foreign key field "authorId" on Post.'],
   ] as const)("%o keeps the message it is given, unchanged", (ErrorClass, message) => {
     expect(new ErrorClass(message).message).toBe(message);

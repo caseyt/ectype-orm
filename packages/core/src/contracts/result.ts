@@ -2,7 +2,7 @@
  * `Result`: the return type of every write operation (decision D10).
  *
  * Implemented here (it is two tiny functions). Consumed by the changeset (05), repo
- * writes (13), nested writes (15) and transactions and Multi (16).
+ * writes (13), nested writes (15) and transactions and Batch (16).
  *
  * @module
  */
@@ -12,12 +12,12 @@
  *
  * @example
  * ```ts
- * const done: Ok<number> = { ok: true, value: 1 };
+ * const done: Success<number> = { success: true, data: 1 };
  * ```
  */
-export interface Ok<T> {
-  readonly ok: true;
-  readonly value: T;
+export interface Success<T> {
+  readonly success: true;
+  readonly data: T;
 }
 
 /**
@@ -25,57 +25,52 @@ export interface Ok<T> {
  *
  * @example
  * ```ts
- * const failed: Err<string> = { ok: false, error: "nope" };
+ * const failed: Failure<string> = { success: false, error: "nope" };
  * ```
  */
-export interface Err<E> {
-  readonly ok: false;
+export interface Failure<E> {
+  readonly success: false;
   readonly error: E;
 }
 
 /**
- * Either a value or an error, discriminated by `ok`. Narrow it with `if (result.ok)`.
- *
- * Ecto equivalent: `{:ok, value} | {:error, reason}`.
+ * Either data or an error, discriminated by `success`. Narrow it with
+ * `if (result.success)`. The shape is the one Zod's `safeParse` returns.
  *
  * @example
  * ```ts
  * function parsePort(text: string): Result<number, string> {
  *   const port = Number(text);
- *   return Number.isInteger(port) ? ok(port) : err(`not a port: ${text}`);
+ *   return Number.isInteger(port) ? success(port) : failure(`not a port: ${text}`);
  * }
  *
  * const result = parsePort("5432");
- * if (result.ok) result.value; // number
+ * if (result.success) result.data; // number
  * else result.error; // string
  * ```
  */
-export type Result<T, E> = Ok<T> | Err<E>;
+export type Result<T, E> = Success<T> | Failure<E>;
 
 /**
  * Builds a successful {@link Result}.
  *
- * Ecto equivalent: `{:ok, value}`.
- *
  * @example
  * ```ts
- * const result = ok(42); // { ok: true, value: 42 }
+ * const result = success(42); // { success: true, data: 42 }
  * ```
  */
-export function ok<T>(value: T): Ok<T> {
-  return { ok: true, value };
+export function success<T>(data: T): Success<T> {
+  return { success: true, data };
 }
 
 /**
  * Builds a failed {@link Result}.
  *
- * Ecto equivalent: `{:error, reason}`.
- *
  * @example
  * ```ts
- * const result = err("not found"); // { ok: false, error: "not found" }
+ * const result = failure("not found"); // { success: false, error: "not found" }
  * ```
  */
-export function err<E>(error: E): Err<E> {
-  return { ok: false, error };
+export function failure<E>(error: E): Failure<E> {
+  return { success: false, error };
 }

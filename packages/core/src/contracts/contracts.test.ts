@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import * as contracts from "./index.js";
-import { err, ok } from "./result.js";
+import { failure, success } from "./result.js";
 import { META, ROW } from "./schema.js";
 import { CUSTOM_SQL_TYPE, IDENTITY } from "./type.js";
 
@@ -54,34 +54,34 @@ describe("contract files", () => {
       "IDENTITY",
       "META",
       "ROW",
-      "err",
-      "ok",
+      "failure",
+      "success",
     ]);
   });
 });
 
-describe("ok and err", () => {
+describe("success and failure", () => {
   test("build the two halves of a Result", () => {
-    expect(ok(42)).toEqual({ ok: true, value: 42 });
-    expect(err("nope")).toEqual({ ok: false, error: "nope" });
+    expect(success(42)).toEqual({ success: true, data: 42 });
+    expect(failure("nope")).toEqual({ success: false, error: "nope" });
   });
 
-  test("keep the value and the error by identity", () => {
+  test("keep the data and the error by identity", () => {
     const value = { id: 1 };
     const error = new Error("boom");
-    expect(ok(value).value).toBe(value);
-    expect(err(error).error).toBe(error);
+    expect(success(value).data).toBe(value);
+    expect(failure(error).error).toBe(error);
   });
 
   test("accept undefined and null", () => {
-    expect(ok(undefined)).toEqual({ ok: true, value: undefined });
-    expect(Object.hasOwn(ok(undefined), "value")).toBe(true);
-    expect(err(null)).toEqual({ ok: false, error: null });
+    expect(success(undefined)).toEqual({ success: true, data: undefined });
+    expect(Object.hasOwn(success(undefined), "data")).toBe(true);
+    expect(failure(null)).toEqual({ success: false, error: null });
   });
 
   test("give every result of a kind the same keys in the same order", () => {
-    expect(Object.keys(ok(1))).toEqual(["ok", "value"]);
-    expect(Object.keys(err(1))).toEqual(["ok", "error"]);
+    expect(Object.keys(success(1))).toEqual(["success", "data"]);
+    expect(Object.keys(failure(1))).toEqual(["success", "error"]);
   });
 });
 
@@ -95,21 +95,21 @@ describe("IDENTITY", () => {
   });
 
   test("is one function, so a reference check can skip the call", () => {
-    const load: (value: unknown) => unknown = IDENTITY;
-    expect(load === IDENTITY).toBe(true);
+    const fromDb: (value: unknown) => unknown = IDENTITY;
+    expect(fromDb === IDENTITY).toBe(true);
     expect(((value: unknown) => value) === IDENTITY).toBe(false);
   });
 });
 
 describe("META and ROW", () => {
   test("are registered symbols, shared by every copy of the package", () => {
-    expect(META).toBe(Symbol.for("ectype.meta"));
-    expect(ROW).toBe(Symbol.for("ectype.row"));
+    expect(META).toBe(Symbol.for("egon.meta"));
+    expect(ROW).toBe(Symbol.for("egon.row"));
     expect(META).not.toBe(ROW);
   });
 
   test("ROW does not show up when a row is enumerated or serialised", () => {
-    const row = { id: 1, [ROW]: { state: "loaded", source: "users", prefix: undefined } };
+    const row = { id: 1, [ROW]: { state: "loaded", source: "users", schema: undefined } };
     expect(Object.keys(row)).toEqual(["id"]);
     expect(JSON.stringify(row)).toBe('{"id":1}');
     const seen: string[] = [];

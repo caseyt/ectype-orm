@@ -23,13 +23,13 @@
     "emitDeclarationOnly": true,
 
     "paths": {
-      "ectype": ["./packages/core/src/index.ts"],
-      "@ectype/postgres": ["./packages/postgres/src/index.ts"],
-      "@ectype/sqlite": ["./packages/sqlite/src/index.ts"],
-      "@ectype/mysql": ["./packages/mysql/src/index.ts"],
-      "@ectype/zod": ["./packages/zod/src/index.ts"],
-      "@ectype/cli": ["./packages/cli/src/index.ts"],
-      "@ectype/test-support": ["./packages/core/test/support/index.ts"]
+      "egon-orm": ["./packages/core/src/index.ts"],
+      "@egon-orm/postgres": ["./packages/postgres/src/index.ts"],
+      "@egon-orm/sqlite": ["./packages/sqlite/src/index.ts"],
+      "@egon-orm/mysql": ["./packages/mysql/src/index.ts"],
+      "@egon-orm/zod": ["./packages/zod/src/index.ts"],
+      "@egon-orm/cli": ["./packages/cli/src/index.ts"],
+      "@egon-orm/test-support": ["./packages/core/test/support/index.ts"]
     }
   }
 }
