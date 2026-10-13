@@ -53,7 +53,7 @@ These are settled. Changing one requires an ADR (§9), not a unilateral edit.
 | D11 | Changesets are immutable and synchronous. Async validation is a separate, explicit `validateAsync`. | Keeps the common path allocation-light and predictable. |
 | D12 | **Kysely is the SQL back end**: our query AST is lowered to Kysely `OperationNode` trees, compiled by Kysely's dialect compilers, and executed through Kysely drivers. Kysely is never exposed in the public API and sits behind our own `Adapter` interface. | Postgres, MySQL and SQLite support, pooling and DDL without writing three compilers. Hidden behind `Adapter` so it can be replaced if step 02's spike shows unacceptable overhead. |
 | D13 | Postgres is tier 1 (every feature, every test). SQLite and MySQL are tier 2 (conformance suite, documented capability gaps). | Scope control. |
-| D14 | Node >= 22, TypeScript >= 5.5, ESM-first with a CJS build. pnpm workspace. Vitest. Biome. | Current baseline. |
+| D14 | Node >= 22.12, TypeScript >= 5.5, **ESM only: no CommonJS build**. pnpm workspace. Vitest. Biome. | Current baseline. Kysely (D12) is ESM-only, so a CommonJS build could not load it on every supported Node. Node 22.12 is the first release in which a CommonJS project can `require()` an ES module, which is how such projects use the packages (ADR 0002). |
 | D15 | Validators are consumed through the Standard Schema interface (types vendored, no dependency). Zod is a dev/peer dependency of `@ectype/zod` only. | "Zod by default, anything else allowed" with zero coupling in core. |
 
 ---

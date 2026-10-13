@@ -81,16 +81,21 @@ to those safe kinds), `param(name, type)`, `fragment`.
    level so the query's required params object is inferred (plumbed through in step 08).
 6. **Shape hash.** Every node contributes to the incremental `shape` hash by kind,
    operator, column identity, and param **type**, never by param **value**. Two expressions
-   that differ only in bound values have equal shapes. `list` params contribute their
-   length only on dialects that expand (decided by the compiler; expose both hashes or a
-   length-agnostic one plus a `listLengths` vector — choose and document).
-7. **Param collection.** Each `Expr` knows its params in emission order so that builders
-   can concatenate param arrays without re-walking the tree (see step 10 for the
-   contract). Provide `collectParams(node, out)` for the general case and test that both agree.
+   that differ only in bound values have equal shapes. That list is not complete: the
+   full one is in `contracts/query.ts` ("Shape") and also has literal values, a
+   parameter's `redact` flag, and each schema's name and declared prefix. Decided in `contracts/query.ts`:
+   `shape` is length-agnostic, and the lengths of the `list` params are kept beside it in
+   `QueryAst.listLengths`, which the compiler adds to the cache key on dialects that expand.
+7. **Param collection.** Each `Expr` knows its params in **canonical order** (depth-first,
+   node properties in interface declaration order; see `contracts/query.ts`) so that
+   builders can splice param arrays without re-walking the tree. Provide
+   `collectParams(node, out)`, which defines that order for every node kind including a
+   whole `QueryAst`, and test that both agree.
 8. **Node set.** Define and export (internally) every node kind needed by steps 08–10:
    column, param, namedParam, list, literal, unary, binary, nary (and/or), fn, aggregate
-   (with distinct/filter/over), fragment, cast, case, jsonPath, subquery, exists, tuple,
-   order, selectedAs, star. Each with a TSDoc line giving the SQL it stands for.
+   (with distinct/filter/over), ident, fragment, cast, case, jsonPath, subquery, exists,
+   tuple, order, selectedAs, star. `param`, `list` and `namedParam` carry `redact`, which
+   an operand inherits from the field on the other side, like its type. Each with a TSDoc line giving the SQL it stands for.
 
 ## Tests
 

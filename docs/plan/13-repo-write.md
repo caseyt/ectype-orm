@@ -70,7 +70,9 @@ By primary key; zero rows → `StaleEntryError` (same options). Returned row has
 ### Constraint handling (`constraints.ts`)
 
 When the adapter raises `ConstraintError`, look for a matching declaration on the changeset:
-type equal, and name matched per `match` (`exact` | `suffix` | `prefix`). If found, return
+type matching (a declared `foreignKey` or `noAssoc` constraint matches a database
+`foreignKey` violation; the other types match their own; `notNull` matches nothing), and
+name matched per `match` (`exact` | `suffix` | `prefix`). If found, return
 `err(cs)` with the declared message on the declared field (`errorKey`), plus
 `constraint: type` and `constraint_name` in meta. If not found, **rethrow**
 `ConstraintError` with a message that tells the user exactly which call to add, e.g.:

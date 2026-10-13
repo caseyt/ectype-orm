@@ -1,9 +1,16 @@
 import { defineConfig } from "tsup";
 
-// Build config is identical across packages on purpose; keep them in sync.
+// Build config is identical across packages on purpose; keep them in sync. The one
+// difference here is the second entry: `dist/internal.js` is NOT part of the package's
+// `exports` (nothing can import it by name) and is excluded from the published files
+// (`"!dist/internal.*"` in package.json). It exists so that benchmarks, which run inside
+// the workspace, can measure the built internal utilities
+// (benchmarks/micro/internal.bench.ts) instead of the sources.
 export default defineConfig({
-  entry: ["src/index.ts"],
-  format: ["esm", "cjs"],
+  entry: { index: "src/index.ts", internal: "src/internal/index.ts" },
+  // ESM only (decision D14): no CommonJS build. A CommonJS project loads the package with
+  // `require()` of an ES module, which Node supports from 22.12.
+  format: ["esm"],
   target: "node22",
   platform: "node",
   tsconfig: "tsconfig.build.json",

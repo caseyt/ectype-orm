@@ -1,0 +1,3 @@
+# Output of ordinary runs. The committed results/04-cost.json is the run ADR 0002 quotes;
+# it is replaced only by a run with SPIKE_COST_RECORD=1.
+results/*.local.json

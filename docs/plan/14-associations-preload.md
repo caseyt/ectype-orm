@@ -55,9 +55,11 @@ assocLoaded(user, "posts")                   // type guard: narrows to Loaded<..
 3. **Custom queries.** Must select the whole target row. Their `where`/`orderBy`/joins
    apply; `limit` applies to the whole query (not per parent) — document it and point to the
    lateral-join recipe for "top N per parent". Association-level `where` options always apply.
-4. **Join preloads.** `.preload({ posts: "p" })` adds `p`'s columns to the select and
-   de-duplicates parents in the decoder while collecting children (by parent primary key,
-   preserving first-seen order). Nested join preloads (`{ posts: { $from: "p", comments: "c" } }`)
+4. **Join preloads.** `.preload({ posts: "p" })` adds `p`'s columns to the select. The
+   per-row decoder builds each parent with that row's child in place; parents are then
+   de-duplicated in the post-decode stage (step 12's `afterDecode` hook), which collects
+   the children (by parent primary key, preserving first-seen order). A row decoder is
+   stateless and cannot do this itself (`contracts/adapter.ts`, "Join preloads"). Nested join preloads (`{ posts: { $from: "p", comments: "c" } }`)
    are supported. Parents must be selected whole. Warn in docs about row multiplication.
 5. **Attaching.** Preloaded associations are assigned as own properties on the row
    **in a fixed order after the fields**. To keep shapes monomorphic, rows produced by a
@@ -69,8 +71,10 @@ assocLoaded(user, "posts")                   // type guard: narrows to Loaded<..
    `belongsTo` share one instance per key (documented).
 7. **`repo.preload(rows, spec, opts)`.** Skips associations already loaded unless
    `force: true`. Accepts `null`/empty input and returns it. Mixed schemas in one array throw.
-8. **Types.** `preload(spec)` maps to `Loaded<S, Spec>` for strings, arrays, nested
-   objects, custom queries, and alias strings. `repo.preload` over `Loaded<S, A>` with `B`
+8. **Types.** `preload(spec)` maps to the loaded type for strings, arrays, nested
+   objects, custom queries, and alias strings: the argument is first mapped to a
+   `PreloadSpec` (a custom query or an alias becomes `true`, `$from` is dropped), then
+   checked with `ValidPreload` and typed with `LoadedUnchecked` (`contracts/schema.ts`). `repo.preload` over `Loaded<S, A>` with `B`
    returns `Loaded<S, A | B>`. Unknown association names are compile errors at any depth.
 9. **`assoc(parents, name)`** returns a typed `Query` rooted at the target, filtered by the
    parents' keys, usable as any other query (`repo.all(assoc(user, "posts").where(...))`).

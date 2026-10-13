@@ -43,7 +43,8 @@ import { fromKyselyDialect } from "ectype/adapter";
    without constructing Kysely builders. Lazy init on first use; `close()` is idempotent
    and waits for checked-out connections.
 2. **Connections.** `acquire()` returns a `Connection` with `execute`, `stream`, `begin(opts)`,
-   `commit`, `rollback`, `savepoint(name)`, `rollbackTo(name)`, `releaseSavepoint(name)`, `release()`.
+   `commit`, `rollback`, `savepoint(name)`, `rollbackTo(name)`, `releaseSavepoint(name)`, `release()`,
+   `destroy()`. `execute` options also carry `slots`, `context` and `statementName` (`contracts/adapter.ts`).
    `begin` options: `isolation` (`"read committed" | "repeatable read" | "serializable"`),
    `readOnly`, `deferrable`. A connection that errors fatally (socket closed, protocol
    error) is destroyed, not returned to the pool.
@@ -67,7 +68,8 @@ import { fromKyselyDialect } from "ectype/adapter";
 7. **Capabilities (Postgres):** everything true; lock modes listed; `ddlTransactions: true`.
 8. **Telemetry.** Adapter emits events through a tiny synchronous emitter (no
    EventEmitter overhead when there are no listeners; check a boolean first):
-   `query` `{ sql, paramCount, durationMs, queueMs, rowCount, source?, error? }`,
+   `query` `{ sql, paramCount, durationMs, queueMs, rowCount, error, params, context }` (no
+   `source`: the repo adds it, using the `context` it passed to `execute`),
    `connect`, `disconnect`, `poolExhausted`. Step 12 exposes `repo.on("query", fn)` and a
    `log: true | LoggerFn` option. Parameters are included only when `logParams: true`, and
    redacted fields are never logged.

@@ -1,0 +1,41 @@
+# Question 1: lowering
+database: ectype_spike_p62914_tmtejm_f5bee21f on 127.0.0.1:54329
+server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+node:     v22.23.1
+
+reference SELECT (join, where, group by, order by, limit)
+  ok  sql
+  ok  slots
+  ok  executes: rows equal the hand-written statement's (5 rows)
+
+CTE (WITH ... AS MATERIALIZED)
+  ok  sql
+  ok  executes: rows equal the hand-written statement's (7 rows)
+
+window function
+  ok  sql
+  ok  executes: rows equal the hand-written statement's (6 rows)
+
+raw fragment
+  ok  sql
+  ok  executes: rows equal the hand-written statement's (11 rows)
+
+precedence: (a OR b) AND c
+  ok  sql
+  ok  executes: rows equal the hand-written statement's (2 rows)
+
+INSERT ... ON CONFLICT ... RETURNING
+  ok  sql
+  ok  slots
+  ok  insert returns the new row
+  ok  numAffectedRows
+  ok  conflict updates the same row
+  ok  the database holds the updated row, once
+
+UPDATE ... RETURNING
+  ok  sql
+  ok  slots
+  ok  update returns the row
+  ok  a stale lock_version updates nothing
+
+Question 1: every statement lowered, compiled to the expected SQL, and ran.

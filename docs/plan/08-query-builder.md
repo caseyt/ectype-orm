@@ -52,7 +52,11 @@ right/full, the existing bindings). Selecting a whole left-joined binding yields
    returns a new `Query` with a new AST object that shares all untouched arrays
    (`wheres` gets a new array, everything else is the same reference). The `shape` hash and
    the params array are extended incrementally: O(size of the added clause), never a
-   re-walk. Budget: 3-clause query < 1.5 µs.
+   re-walk. Both are **canonical** (`contracts/query.ts`): they depend on the query's
+   structure, not on the order its clauses were added. So the `Query` keeps, outside the
+   AST, a param count, a list count and a hash per top-level `QueryAst` property; a new
+   clause's params are spliced in at the offset those counts give, and `shape` is
+   recombined from the per-property hashes. Budget: 3-clause query < 1.5 µs.
 2. **Bindings.** For each `(schema, alias)` pair build the binding object once
    (`{ [field]: Col, $schema, $alias }`, plain object, own data properties) and cache it in
    a `Map` on the schema's metadata. The object passed to callbacks is assembled per query
@@ -86,7 +90,9 @@ right/full, the existing bindings). Selecting a whole left-joined binding yields
 11. **Named params.** `P` accumulates `{ name: Type }` from every `param(...)` used in any
     clause. Repo methods require `params: P` when `P` is non-empty (enforced in step 12).
 12. **Preload declaration.** `.preload(spec)` validates the path against association
-    metadata at build time and updates `R` to `Loaded<S, spec>`. Only valid when the select
+    metadata at build time and updates `R` to the loaded type. It is declared
+    `preload<const P>(spec: P & ValidPreload<S, P>)` and returns `LoadedUnchecked<S, P>`
+    (`contracts/schema.ts`), so that an unknown key is a compile error. Only valid when the select
     is the root row (or a binding marked for join-preload, step 14).
 13. **Inspection.** `q.toString()` / inspect prints an Ecto-like rendering
     (`from u in User, where: u.age >= ?, ...`) for debugging; no values, respects redaction.

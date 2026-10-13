@@ -54,14 +54,14 @@ before `1.0`), and make publishing a one-command, repeatable act.
 - Fault injection through a fake adapter: failure at every await point of insert/update/
   delete/transaction/Multi/nested/preload leaves no checked-out connection and surfaces the original error.
 - Runtime matrix: Node 22 and 24 (required), Bun (best effort, results recorded);
-  ESM and CJS consumers; bundled with esbuild and with a framework build (Next.js) in `examples/`.
+  ESM consumers, and CommonJS consumers through `require()` of the ES module; bundled with esbuild and with a framework build (Next.js) in `examples/`.
 - Mutation testing (Stryker) on `changeset/`, `query/`, `compiler/`: mutation score ≥ 80%;
   surviving mutants triaged (killed with new tests or justified).
 
 ### 4. Packaging and release
 
 - `publint` and `attw` clean for every package; `exports` verified from real consumer
-  projects (ESM, CJS, TS `moduleResolution` `node16` and `bundler`).
+  projects (ESM, CommonJS via `require()` of the ES module on Node >= 22.12, TS `moduleResolution` `node16` and `bundler`).
 - Peer dependency ranges tested at their lower and upper bounds (Kysely, `pg`, Zod, `better-sqlite3`, `mysql2`).
 - Confirm the package name (plan README §10 question 1); if it changes, run the rename and
   verify nothing references the old one.

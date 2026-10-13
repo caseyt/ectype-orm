@@ -3,6 +3,7 @@ packages:
   - "benchmarks"
   - "examples/*"
   - "docs/site"
+  - "docs/plan/spikes/kysely-bridge"
 
 # Supply-chain policy. pnpm refuses releases younger than its minimum release age. Strict
 # mode makes that an error; without it pnpm silently appends the package to

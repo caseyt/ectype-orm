@@ -1,0 +1,24 @@
+{
+  "name": "@ectype/spike-kysely-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Step 02 spike: can Ectype's query AST be lowered to Kysely operation nodes? Evidence for ADR 0002.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "spike": "tsx run-all.ts",
+    "spike:lowering": "tsx 01-lowering.ts",
+    "spike:slots": "tsx 02-param-slots.ts",
+    "spike:execution": "tsx 03-execution.ts",
+    "spike:cost": "node --expose-gc --import tsx 04-cost.ts",
+    "spike:gaps": "tsx 05-gaps.ts"
+  },
+  "dependencies": {
+    "kysely": "~0.29.6",
+    "mitata": "1.0.34",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
+}

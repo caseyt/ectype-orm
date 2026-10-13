@@ -7,7 +7,7 @@ protocol and the pull request and review loop that every change follows.
 
 ## Prerequisites
 
-- Node.js >= 22 (`.nvmrc` pins 22; CI also runs Node 24)
+- Node.js >= 22.12 (`.nvmrc` pins 22; CI also runs Node 24)
 - pnpm 12.11.2, pinned in `package.json` `"packageManager"`. Corepack (`corepack enable`) and
   pnpm 9 or newer switch to the pinned version by themselves. An older global pnpm does
   not; `engines.pnpm` makes it stop with an "unsupported engine" error instead of running.
@@ -25,9 +25,9 @@ protocol and the pull request and review loop that every change follows.
 | `pnpm test:types` | Type tests (`*.test-d.ts`) |
 | `pnpm test:integration` | Integration tests (`*.itest.ts`) against real databases |
 | `pnpm test:watch` | Unit tests in watch mode |
-| `pnpm build` | ESM + CJS + declarations for every package (`tsup`) |
-| `pnpm lint:packages` | `publint` and `@arethetypeswrong/cli` on the built packages |
-| `pnpm smoke` | Loads the built packages from an ESM and a CommonJS script (`examples/smoke`) |
+| `pnpm build` | ESM + declarations for every package (`tsup`). There is no CommonJS build (decision D14). |
+| `pnpm lint:packages` | `publint --strict` and `@arethetypeswrong/cli` on the built packages. attw runs with `--profile esm-only`: the packages have no CommonJS build, so its two CommonJS resolution modes (`node10`, `node16-cjs`) are reported but not failed. The ESM and bundler modes must be clean. |
+| `pnpm smoke` | Loads the built packages from an ES module and, with `require()`, from a CommonJS script (`examples/smoke`) |
 | `pnpm bench [filter]` | Builds, runs the benchmarks, writes `benchmarks/results/<git-sha>.json` |
 | `pnpm docs:dev` / `pnpm docs:build` | VitePress site in `docs/site` |
 | `pnpm db:up` / `db:down` / `db:reset` | Start / stop / recreate Postgres (`db:up:tier2` adds MySQL) |
@@ -49,7 +49,7 @@ packages/zod         "@ectype/zod"
 packages/sqlite, mysql, cli              private placeholders until steps 17 / 18
 packages/core/test/support               shared test helpers, importable as "@ectype/test-support"
 benchmarks/          micro/<area>.bench.ts, harness in src/
-examples/smoke       ESM + CJS consumers of the built packages
+examples/smoke       an ESM consumer and a CommonJS consumer (require of the ES module)
 docs/plan            the plan (frozen; workers add only status/NN.md)
 docs/adr             architecture decision records
 docs/site            VitePress site; docs/site/examples holds the type-checked example sources
@@ -65,6 +65,11 @@ which has no source `paths`; the runner and every benchmark file refuse to run u
 `ectype` resolves into the package's own `dist/` directory, and the report records the resolved file
 (`ectypeEntry`). `pnpm bench` builds first. `scripts/check-bench-dist-guard.mjs` (run by CI
 before the build) proves the refusal.
+
+Code that is not public API cannot be imported from `ectype`. `packages/core` therefore has
+a second build entry, `dist/internal.js` (the utilities of `src/internal`), which is not in
+the package's `exports` and is left out of the published files; `benchmarks/micro/internal.bench.ts` shows how a benchmark loads
+it from `dist/` while taking its types from the sources.
 
 ## Tests
 
@@ -134,6 +139,12 @@ classes) and is type-checked by `pnpm typecheck` through `tsconfig.spikes.json`.
 excluded from every tsconfig and from Biome, and `scripts/check-rejected-spike.mjs` asserts
 that it still fails with TS7022 and TS2506.
 
+`docs/plan/spikes/kysely-bridge/` is the evidence for ADR 0002 (Kysely as the SQL back
+end): five scripts that lower a hand-built query AST to Kysely nodes and run it against
+the Compose Postgres. It is a private workspace package, type-checked by `pnpm typecheck`
+but not run by CI. To run it: `pnpm db:up`, then
+`pnpm --filter @ectype/spike-kysely-bridge run spike` (see its `README.md`).
+
 ### Dependency versions
 
 pnpm refuses releases younger than its minimum release age. **Never add
@@ -145,7 +156,7 @@ too new, pin the newest one that passes and say so in your status note. `pnpm li
 off. Read the diff of `pnpm-workspace.yaml` and `package.json` before committing a
 dependency change.
 
-Runtime support starts at Node 22 (decision D14) and every tool is on its current stable
+Runtime support starts at Node 22.12 (decision D14) and every tool is on its current stable
 release, with one exception: TypeScript is held at `6` because tsup's declaration bundler
 does not work with TypeScript 7. `docs/plan/status/01.md` has the details. Kysely is
 pinned to one minor (`~0.29`), because the compiler in step 10 depends on its internals;

@@ -1,0 +1,38 @@
+# Question 2: parameter slots
+database: ectype_spike_p62916_tmtejm_f6a78f86 on 127.0.0.1:54329
+server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+node:     v22.23.1
+
+Postgres: slots are in placeholder order and index the canonical parameter order
+  ok  sql
+  ok  slots
+  ok  collectParams gives the canonical order
+  ok  a missing named parameter is an error, not undefined
+
+one plan (compiled from dummy values), 60 other ASTs, executed against Postgres
+  ok  60 rounds equal the hand-written statement (40 with rows, 39 with more than one row, 19 with rows from both UNION branches)
+
+a wrong numbering is caught by this check (it is not a tautology)
+  ok  swapping two indexes changed the result in 13 of 18 rounds that return rows
+
+list length does not change the Postgres SQL (one plan for every length)
+  ok  lengths 0, 1, 7 and 500 compile to identical SQL
+
+simpler statements: slots follow the canonical order too
+  ok  reference SELECT
+  ok  UPDATE (SET values, then WHERE values)
+
+MySQL and SQLite: `?` placeholders, lists expanded (compile only, no database)
+  ok  mysql: one slot per ?
+  ok  mysql: slots
+  ok  mysql: a cached plan bound with 200 other value sets equals the hand-assembled array
+  ok  mysql: a list of another length is another SQL text (length belongs in the cache key)
+  ok  sqlite: one slot per ?
+  ok  sqlite: slots
+  ok  sqlite: a cached plan bound with 200 other value sets equals the hand-assembled array
+  ok  sqlite: a list of another length is another SQL text (length belongs in the cache key)
+
+a value that is not a slot cannot reach the parameters unnoticed
+  ok  compileNode rejects it
+
+Question 2: parameter order is recovered exactly and numbered canonically, for $n and for ?, including arrays.

@@ -1,0 +1,92 @@
+# Question 5: gaps
+database: ectype_spike_p62920_tmtejn_c71f793d on 127.0.0.1:54329
+server:   PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+node:     v22.23.1
+
+  ok  [native] lock: FOR UPDATE: executed
+  ok  [native] lock: FOR UPDATE OF u SKIP LOCKED: executed
+  ok  [native] lock: FOR NO KEY UPDATE NOWAIT: executed
+  ok  [native] lock: FOR KEY SHARE: executed
+  ok  [raw glue] lock: any other lock text (Ecto lock: fragment): executed
+  ok  [native] DISTINCT: executed
+  ok  [native] DISTINCT ON (expr, …): executed, rows equal the hand-written statement's (40)
+  ok  [native] LEFT JOIN LATERAL (subquery) ON true: executed, rows equal the hand-written statement's (80)
+  ok  [native] CROSS JOIN LATERAL (subquery): executed
+  ok  [native] FULL JOIN and CROSS JOIN: executed
+  ok  [native] schema prefix on a table: executed
+  ok  [raw glue] TABLESAMPLE (Ecto hints): executed
+  ok  [native] aggregate FILTER (WHERE …): executed, rows equal the hand-written statement's (40)
+  ok  [native] count(DISTINCT x), agg(x ORDER BY y): executed
+  ok  [native] window: fn() OVER (PARTITION BY col ORDER BY …): executed
+  ok  [raw glue] window frame (ROWS BETWEEN …): executed, rows equal the hand-written statement's (18)
+  ok  [inline] named windows (WINDOW w AS (…), OVER w): executed, rows equal the hand-written statement's (18)
+  ok  [raw glue] PARTITION BY an expression: executed
+  ok  [native] array operators @> and &&; col = ANY($1); $1 = ANY(col): executed, rows equal the hand-written statement's (1)
+  ok  [native] ILIKE, IS DISTINCT FROM, IS NULL, BETWEEN, NOT: executed, rows equal the hand-written statement's (1)
+  ok  [native] JSON -> and ->>, jsonb @>: executed
+  ok  [keyword] JSON #>> (path as text[]): executed
+  ok  [keyword] CAST(x AS text) and CAST($1 AS int8[]), a type Kysely does not list: executed, rows equal the hand-written statement's (2)
+  ok  [native] tuple comparison (a, b) > ($1, $2): executed, rows equal the hand-written statement's (5)
+  ok  [native] CASE WHEN … THEN … ELSE … END, coalesce(): executed, rows equal the hand-written statement's (4)
+  ok  [native] EXISTS (subquery), IN (subquery), scalar subquery: executed
+  ok  [native] ORDER BY … NULLS LAST: executed
+  ok  [native] WITH … AS NOT MATERIALIZED: executed
+  ok  [native] WITH RECURSIVE name(columns) … UNION ALL: executed, rows equal the hand-written statement's (1)
+  ok  [native] EXCEPT, with ORDER BY and LIMIT on the combined result: executed, rows equal the hand-written statement's (4)
+  ok  [raw glue] VALUES list as a source, with a column alias list (Ecto values/2): executed, rows equal the hand-written statement's (2)
+  ok  [native] ON CONFLICT ON CONSTRAINT name DO NOTHING: executed
+  ok  [native] ON CONFLICT (expr) WHERE … DO UPDATE SET … WHERE … (partial / expression index): executed
+  ok  [native] ON CONFLICT DO NOTHING (no target): executed
+  ok  [native] multi-row INSERT with DEFAULT in a cell: executed
+  ok  [native] INSERT … DEFAULT VALUES: executed
+  ok  [native] INSERT … SELECT (insert_all from a query): executed
+  ok  [native] UPDATE … FROM … (update_all with a join): executed
+  ok  [native] DELETE … USING … RETURNING (delete_all with a join): executed
+  ok  [keyword] EXPLAIN (ANALYZE, FORMAT JSON): executed
+
+40 features compiled to the expected SQL and executed: 31 native, 3 keyword, 5 raw glue, 1 inline.
+
+| Feature | Kysely | How |
+|---|---|---|
+| lock: FOR UPDATE | native | SelectModifierNode in endModifiers |
+| lock: FOR UPDATE OF u SKIP LOCKED | native | SelectModifierNode with `of`, plus a SkipLocked modifier |
+| lock: FOR NO KEY UPDATE NOWAIT | native | SelectModifierNode |
+| lock: FOR KEY SHARE | native | SelectModifierNode |
+| lock: any other lock text (Ecto lock: fragment) | raw glue | SelectModifierNode.createWithExpression(RawNode) with text from an allowlist or a fragment |
+| DISTINCT | native | SelectModifierNode('Distinct') in frontModifiers |
+| DISTINCT ON (expr, …) | native | SelectQueryNode.distinctOn |
+| LEFT JOIN LATERAL (subquery) ON true | native | JoinNode('LateralLeftJoin') over an aliased SelectQueryNode |
+| CROSS JOIN LATERAL (subquery) | native | JoinNode('LateralCrossJoin') |
+| FULL JOIN and CROSS JOIN | native | JoinNode('FullJoin' \| 'CrossJoin') |
+| schema prefix on a table | native | TableNode.createWithSchema |
+| TABLESAMPLE (Ecto hints) | raw glue | RawNode around the aliased table |
+| aggregate FILTER (WHERE …) | native | AggregateFunctionNode.filter |
+| count(DISTINCT x), agg(x ORDER BY y) | native | AggregateFunctionNode.distinct / .orderBy |
+| window: fn() OVER (PARTITION BY col ORDER BY …) | native | AggregateFunctionNode.over with OverNode |
+| window frame (ROWS BETWEEN …) | raw glue | OverNode has no frame: the whole OVER (…) is a RawNode around the function, partition and order nodes |
+| named windows (WINDOW w AS (…), OVER w) | inline | SelectQueryNode has no WINDOW clause: the lowering expands the named definition at each use |
+| PARTITION BY an expression | raw glue | PartitionByItemNode is typed for column references only: raw OVER (…) as for frames |
+| array operators @> and &&; col = ANY($1); $1 = ANY(col) | native | OperatorNode; FunctionNode('any') around one array parameter |
+| ILIKE, IS DISTINCT FROM, IS NULL, BETWEEN, NOT | native | OperatorNode, UnaryOperationNode, immediate NULL |
+| JSON -> and ->>, jsonb @> | native | OperatorNode with bound keys |
+| JSON #>> (path as text[]) | keyword | operator text from RawNode (not in Kysely's operator list) |
+| CAST(x AS text) and CAST($1 AS int8[]), a type Kysely does not list | keyword | CastNode; DataTypeNode for listed types, RawNode from an allowlist for others (int8[], citext, …) |
+| tuple comparison (a, b) > ($1, $2) | native | TupleNode |
+| CASE WHEN … THEN … ELSE … END, coalesce() | native | CaseNode / WhenNode, FunctionNode |
+| EXISTS (subquery), IN (subquery), scalar subquery | native | UnaryOperationNode('exists'), nested SelectQueryNode (parenthesised by the compiler) |
+| ORDER BY … NULLS LAST | native | OrderByItemNode.nulls |
+| WITH … AS NOT MATERIALIZED | native | CommonTableExpressionNode.materialized = false |
+| WITH RECURSIVE name(columns) … UNION ALL | native | WithNode.recursive, CommonTableExpressionNameNode with columns, SetOperationNode |
+| EXCEPT, with ORDER BY and LIMIT on the combined result | native | SelectQueryNode.setOperations |
+| VALUES list as a source, with a column alias list (Ecto values/2) | raw glue | ValuesNode in parentheses; the alias `v(a, b)` is a RawNode over IdentifierNodes |
+| ON CONFLICT ON CONSTRAINT name DO NOTHING | native | OnConflictNode.constraint + doNothing |
+| ON CONFLICT (expr) WHERE … DO UPDATE SET … WHERE … (partial / expression index) | native | OnConflictNode.indexExpression, indexWhere, updates, updateWhere |
+| ON CONFLICT DO NOTHING (no target) | native | OnConflictNode.doNothing |
+| multi-row INSERT with DEFAULT in a cell | native | DefaultInsertValueNode |
+| INSERT … DEFAULT VALUES | native | InsertQueryNode.defaultValues |
+| INSERT … SELECT (insert_all from a query) | native | InsertQueryNode.values = SelectQueryNode |
+| UPDATE … FROM … (update_all with a join) | native | UpdateQueryNode.from |
+| DELETE … USING … RETURNING (delete_all with a join) | native | DeleteQueryNode.using |
+| EXPLAIN (ANALYZE, FORMAT JSON) | keyword | ExplainNode on the root query; the option list is a RawNode from an allowlist |
+
+Question 5: every feature tried is expressible; the keyword, raw-glue and inline cases are listed above.

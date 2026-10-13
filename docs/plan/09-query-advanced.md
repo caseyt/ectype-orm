@@ -105,8 +105,8 @@ benchmark it against the cached path.
 
 ### 9. Small ones
 
-`selectedAs(expr, "alias")` + `selectedAs("alias")` in order/group; `.hint(...)` (MySQL
-index hints, capability-gated); tuple comparison `tuple(u.a, u.b).gt(tuple(x, y))` for keyset pagination;
+`selectedAs(expr, "alias")` + `selectedAs("alias")` in order/group; `.hint(fragment)` (MySQL
+index hints, capability-gated; a hint is a `fragment`, the only way to supply raw SQL text); tuple comparison `tuple(u.a, u.b).gt(tuple(x, y))` for keyset pagination;
 `asOf`-style helpers are out.
 
 ## Tests (per feature)

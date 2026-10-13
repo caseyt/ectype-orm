@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { findPolicyProblems } from "./check-workspace-policy.mjs";
+import { findPolicyProblems, readEntries } from "./check-workspace-policy.mjs";
 
 const GOOD =
   'packages:\n  - "packages/*"\n\n# minimumReleaseAgeExclude must never appear\nminimumReleaseAgeStrict: true\n\nallowBuilds:\n  esbuild: true\n';
@@ -48,6 +48,34 @@ describe("findPolicyProblems", () => {
       assert.equal(problems.length, 1, JSON.stringify(replacement));
       assert.match(problems[0], /minimumReleaseAgeStrict must be set/);
     }
+  });
+
+  test("rejects strict mode nested under another key, which pnpm does not read", () => {
+    const without = GOOD.replace("minimumReleaseAgeStrict: true\n", "");
+    for (const nested of [
+      "settings:\n  minimumReleaseAgeStrict: true\n",
+      'settings:\n  "minimumReleaseAgeStrict": true\n',
+      "allowBuilds:\n  esbuild: true\n\tminimumReleaseAgeStrict: true\n",
+      " minimumReleaseAgeStrict: true\n",
+    ]) {
+      const problems = findPolicyProblems(without + nested);
+      assert.equal(problems.length, 1, JSON.stringify(nested));
+      assert.match(problems[0], /minimumReleaseAgeStrict must be set exactly once, at the top level/);
+    }
+  });
+
+  test("rejects a nested strict key even when a top-level one is present", () => {
+    const problems = findPolicyProblems(`${GOOD}settings:\n  minimumReleaseAgeStrict: false\n`);
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /minimumReleaseAgeStrict must be set exactly once/);
+  });
+
+  test("readEntries reports whether a key starts in column 0", () => {
+    assert.deepEqual(readEntries('a: 1\n  b: 2\n"c" : 3\n'), [
+      { key: "a", value: "1", topLevel: true },
+      { key: "b", value: "2", topLevel: false },
+      { key: "c", value: "3", topLevel: true },
+    ]);
   });
 
   test("accepts strict mode written with a quoted key", () => {

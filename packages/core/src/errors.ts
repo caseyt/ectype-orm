@@ -1,0 +1,459 @@
+/**
+ * Every error Ectype throws. Each class has a stable `code`, so callers can branch on
+ * `error.code` (or use {@link isEctypeError}) without depending on `instanceof`, which
+ * fails when two copies of the package are loaded.
+ *
+ * Messages say what happened, what was expected and how to fix it. They never contain
+ * the value of a parameter or of a redacted field.
+ *
+ * @module
+ */
+import type { ChangesetLike } from "./contracts/changeset.js";
+
+/**
+ * The stable codes of the error classes. {@link AdapterError} has several, one per kind
+ * of failure.
+ *
+ * @example
+ * ```ts
+ * const code: ErrorCode = "stale_entry";
+ * ```
+ */
+export type ErrorCode =
+  | "no_results"
+  | "multiple_results"
+  | "invalid_changeset"
+  | "stale_entry"
+  | "constraint"
+  | "query"
+  | "cast"
+  | "not_loaded"
+  | AdapterErrorCode
+  | "migration"
+  | "schema_definition";
+
+/**
+ * The codes of an {@link AdapterError}.
+ *
+ * - `"adapter"`: a driver error with no more specific code.
+ * - `"connection"`: the database could not be reached, or the connection was lost.
+ * - `"serialization_failure"`, `"deadlock"`: the transaction lost a conflict; retrying it is safe.
+ * - `"aborted"`: the caller's `AbortSignal` fired.
+ * - `"timeout"`: the statement ran longer than its `timeoutMs`.
+ *
+ * @example
+ * ```ts
+ * const code: AdapterErrorCode = "deadlock";
+ * ```
+ */
+export type AdapterErrorCode =
+  | "adapter"
+  | "connection"
+  | "serialization_failure"
+  | "deadlock"
+  | "aborted"
+  | "timeout";
+
+/** Marks an error as Ectype's across copies of the package (`Symbol.for` is process-wide). */
+const BRAND: unique symbol = Symbol.for("ectype.error");
+
+/**
+ * The base class of every error Ectype throws.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await work();
+ * } catch (error) {
+ *   if (error instanceof EctypeError) console.error(error.code, error.message);
+ *   else throw error;
+ * }
+ * ```
+ */
+export abstract class EctypeError extends Error {
+  /** A stable, machine-readable identifier. It never changes between releases. */
+  abstract readonly code: ErrorCode;
+  readonly [BRAND] = true;
+
+  /**
+   * @param message What happened, what was expected, and how to fix it.
+   * @param cause The underlying error, kept as `error.cause`.
+   */
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+  }
+}
+
+/**
+ * Whether `value` is an error thrown by Ectype, optionally with a given code. Unlike
+ * `instanceof`, it also recognises errors created by another copy of the package (for
+ * example two versions installed side by side in one dependency tree).
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await repo.getOrThrow(User, id);
+ * } catch (error) {
+ *   if (isEctypeError(error, "no_results")) return notFound();
+ *   throw error;
+ * }
+ * ```
+ */
+export function isEctypeError(value: unknown, code?: ErrorCode): value is EctypeError {
+  if (typeof value !== "object" || value === null || (value as { [BRAND]?: unknown })[BRAND] !== true) {
+    return false;
+  }
+  return code === undefined || (value as EctypeError).code === code;
+}
+
+/** Appends "in query: …" when the query's text is known. */
+function inQuery(query: string | undefined): string {
+  return query === undefined ? "" : ` in query: ${query}`;
+}
+
+/**
+ * A query that had to return a row returned none (`oneOrThrow`, `getOrThrow`, …).
+ *
+ * Ecto equivalent: `Ecto.NoResultsError`.
+ *
+ * @example
+ * ```ts
+ * throw new NoResultsError({ query: 'from(User, "u").where(u.id = $1)' });
+ * ```
+ */
+export class NoResultsError extends EctypeError {
+  override readonly name = "NoResultsError" as const;
+  readonly code = "no_results" as const;
+  /** A rendering of the query, without parameter values. */
+  readonly query: string | undefined;
+
+  constructor(details: { readonly query?: string; readonly cause?: unknown } = {}) {
+    super(
+      `Expected at least one result but got none${inQuery(details.query)}. Use the variant without "OrThrow" (it returns null) if a missing row is not an error.`,
+      details.cause,
+    );
+    this.query = details.query;
+  }
+}
+
+/**
+ * A query that may return at most one row returned more (`one`, `getBy`, …).
+ *
+ * Ecto equivalent: `Ecto.MultipleResultsError`.
+ *
+ * @example
+ * ```ts
+ * throw new MultipleResultsError({ count: 3, query: 'from(User, "u")' });
+ * ```
+ */
+export class MultipleResultsError extends EctypeError {
+  override readonly name = "MultipleResultsError" as const;
+  readonly code = "multiple_results" as const;
+  /** How many rows came back. */
+  readonly count: number;
+  /** A rendering of the query, without parameter values. */
+  readonly query: string | undefined;
+
+  constructor(details: { readonly count: number; readonly query?: string; readonly cause?: unknown }) {
+    super(
+      `Expected at most one result but got ${details.count}${inQuery(details.query)}. Narrow the query until it matches a single row, add limit(1), or use all().`,
+      details.cause,
+    );
+    this.count = details.count;
+    this.query = details.query;
+  }
+}
+
+/** Fills the `%{key}` placeholders of a changeset error message from its metadata. */
+function interpolate(message: string, meta: Readonly<Record<string, unknown>>): string {
+  return message.replace(/%\{(\w+)\}/g, (placeholder, key: string) =>
+    Object.hasOwn(meta, key) ? String(meta[key]) : placeholder,
+  );
+}
+
+/**
+ * An `…OrThrow` write was given an invalid changeset. The changeset, with its errors, is
+ * on the error.
+ *
+ * The message lists the errors by field. It contains no field values.
+ *
+ * Ecto equivalent: `Ecto.InvalidChangesetError`.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await repo.insertOrThrow(User.changeset(new User(), params));
+ * } catch (error) {
+ *   if (error instanceof InvalidChangesetError) return render(error.changeset.errors);
+ *   throw error;
+ * }
+ * ```
+ */
+export class InvalidChangesetError<C extends ChangesetLike = ChangesetLike> extends EctypeError {
+  override readonly name = "InvalidChangesetError" as const;
+  readonly code = "invalid_changeset" as const;
+  /** What was being attempted: `"insert"`, `"update"`, … */
+  readonly action: string;
+  readonly changeset: C;
+
+  constructor(details: { readonly action: string; readonly changeset: C; readonly cause?: unknown }) {
+    const lines: string[] = [];
+    for (const [field, errors] of Object.entries(details.changeset.errors)) {
+      for (const error of errors) lines.push(`  ${field}: ${interpolate(error.message, error.meta)}`);
+    }
+    const listing =
+      lines.length === 0 ? "  (the changeset is marked invalid but lists no errors)" : lines.join("\n");
+    super(
+      `Could not perform ${details.action} because the changeset is invalid.\n\nErrors:\n${listing}\n\nFix the input, or call the variant without "OrThrow" to get the changeset back as a Result instead of an exception.`,
+      details.cause,
+    );
+    this.action = details.action;
+    this.changeset = details.changeset;
+  }
+}
+
+/**
+ * An update or delete matched no row: the row was deleted, or changed since it was read
+ * (optimistic locking).
+ *
+ * Ecto equivalent: `Ecto.StaleEntryError`.
+ *
+ * @example
+ * ```ts
+ * throw new StaleEntryError({ action: "update", schema: "User" });
+ * ```
+ */
+export class StaleEntryError extends EctypeError {
+  override readonly name = "StaleEntryError" as const;
+  readonly code = "stale_entry" as const;
+  readonly action: string;
+  /** The schema's name. */
+  readonly schema: string;
+
+  constructor(details: { readonly action: string; readonly schema: string; readonly cause?: unknown }) {
+    super(
+      `Attempted to ${details.action} a stale ${details.schema} row: no row matched its primary key${
+        details.action === "update" ? " and lock version" : ""
+      }. It was deleted or changed since it was loaded. Reload it and try again, or pass allowStale: true to ignore this.`,
+      details.cause,
+    );
+    this.action = details.action;
+    this.schema = details.schema;
+  }
+}
+
+/**
+ * The kinds of constraint violation a database reports.
+ *
+ * @example
+ * ```ts
+ * const type: ConstraintViolationType = "foreignKey";
+ * ```
+ */
+export type ConstraintViolationType = "unique" | "foreignKey" | "check" | "exclusion" | "notNull";
+
+/** The changeset method that turns each kind of violation into a changeset error. */
+const CONSTRAINT_HELP: Record<ConstraintViolationType, string> = {
+  unique: "uniqueConstraint",
+  foreignKey: "foreignKeyConstraint (or noAssocConstraint on the referenced side)",
+  check: "checkConstraint",
+  exclusion: "exclusionConstraint",
+  notNull: "validateRequired",
+};
+
+/**
+ * The database rejected a write because of a constraint that the changeset did not
+ * declare. Declared constraints become changeset errors instead (step 13).
+ *
+ * Ecto equivalent: `Ecto.ConstraintError`.
+ *
+ * @example
+ * ```ts
+ * throw new ConstraintError({
+ *   type: "unique",
+ *   constraint: "users_email_index",
+ *   table: "users",
+ *   column: undefined,
+ *   detail: undefined,
+ *   cause: driverError,
+ * });
+ * ```
+ */
+export class ConstraintError extends EctypeError {
+  override readonly name = "ConstraintError" as const;
+  readonly code = "constraint" as const;
+  readonly type: ConstraintViolationType;
+  /** The constraint's name, when the database reports it. */
+  readonly constraint: string | undefined;
+  readonly table: string | undefined;
+  readonly column: string | undefined;
+  /** The database's own detail line. It may quote row values, so it is not part of `message`. */
+  readonly detail: string | undefined;
+
+  constructor(details: {
+    readonly type: ConstraintViolationType;
+    readonly constraint: string | undefined;
+    readonly table: string | undefined;
+    readonly column: string | undefined;
+    readonly detail: string | undefined;
+    /** Replaces the default message (step 13 names the exact call to add). */
+    readonly message?: string;
+    readonly cause?: unknown;
+  }) {
+    const what =
+      details.type === "notNull" ? "not-null" : details.type === "foreignKey" ? "foreign-key" : details.type;
+    const name = details.constraint === undefined ? "" : ` "${details.constraint}"`;
+    const where =
+      details.table === undefined
+        ? ""
+        : ` on table "${details.table}"${details.column === undefined ? "" : `, column "${details.column}"`}`;
+    super(
+      details.message ??
+        `The database rejected the write: ${what} constraint${name}${where} was violated. To report this as a changeset error instead of an exception, call ${CONSTRAINT_HELP[details.type]} on the changeset before the write.`,
+      details.cause,
+    );
+    this.type = details.type;
+    this.constraint = details.constraint;
+    this.table = details.table;
+    this.column = details.column;
+    this.detail = details.detail;
+  }
+}
+
+/**
+ * A query is wrong: it was built incorrectly, uses a feature the dialect lacks, or was
+ * executed with the wrong parameters. Detected when the query is built or compiled,
+ * before anything is sent to the database.
+ *
+ * Ecto equivalent: `Ecto.QueryError` (and `Ecto.Query.CompileError`).
+ *
+ * @example
+ * ```ts
+ * throw new QueryError('FULL JOIN is not supported by sqlite. Use a LEFT JOIN, or UNION two LEFT JOINs.');
+ * ```
+ */
+export class QueryError extends EctypeError {
+  override readonly name = "QueryError" as const;
+  readonly code = "query" as const;
+}
+
+/**
+ * A value could not be converted to the type it was supposed to have, outside a
+ * changeset (inside one, a failed cast is a changeset error, not an exception).
+ *
+ * Ecto equivalent: `Ecto.CastError`.
+ *
+ * @example
+ * ```ts
+ * throw new CastError('Cannot cast params of type "string" to a changeset: expected a plain object.');
+ * ```
+ */
+export class CastError extends EctypeError {
+  override readonly name = "CastError" as const;
+  readonly code = "cast" as const;
+}
+
+/**
+ * An association was needed but had not been preloaded.
+ *
+ * Ecto equivalent: the error raised on `%Ecto.Association.NotLoaded{}`.
+ *
+ * @example
+ * ```ts
+ * throw new NotLoadedError({ schema: "User", association: "posts" });
+ * ```
+ */
+export class NotLoadedError extends EctypeError {
+  override readonly name = "NotLoadedError" as const;
+  readonly code = "not_loaded" as const;
+  /** The owner schema's name. */
+  readonly schema: string;
+  readonly association: string;
+
+  constructor(details: { readonly schema: string; readonly association: string; readonly cause?: unknown }) {
+    super(
+      `Association "${details.association}" of ${details.schema} is not loaded. Preload it first: add .preload("${details.association}") to the query, or call repo.preload(rows, "${details.association}").`,
+      details.cause,
+    );
+    this.schema = details.schema;
+    this.association = details.association;
+  }
+}
+
+/**
+ * The database or its driver failed. The driver's error is kept as `cause`.
+ *
+ * `sql` is the statement that failed; parameter values are never attached.
+ *
+ * Ecto equivalent: the driver exceptions an Ecto adapter lets through, such as `Postgrex.Error` and `DBConnection.ConnectionError`.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await pool.query(sql, params);
+ * } catch (cause) {
+ *   throw new AdapterError("Lost the connection to the database while running a statement.", {
+ *     code: "connection",
+ *     sql,
+ *     cause,
+ *   });
+ * }
+ * ```
+ */
+export class AdapterError extends EctypeError {
+  override readonly name = "AdapterError" as const;
+  readonly code: AdapterErrorCode;
+  /** Whether running the same transaction again can succeed. */
+  readonly retryable: boolean;
+  readonly sql: string | undefined;
+
+  constructor(
+    message: string,
+    details: {
+      readonly code?: AdapterErrorCode;
+      /** Defaults to true for `"serialization_failure"` and `"deadlock"`, false otherwise. */
+      readonly retryable?: boolean;
+      readonly sql?: string;
+      readonly cause?: unknown;
+    } = {},
+  ) {
+    super(message, details.cause);
+    this.code = details.code ?? "adapter";
+    this.retryable = details.retryable ?? (this.code === "serialization_failure" || this.code === "deadlock");
+    this.sql = details.sql;
+  }
+}
+
+/**
+ * A migration could not be run or rolled back.
+ *
+ * Ecto equivalent: `Ecto.MigrationError`.
+ *
+ * @example
+ * ```ts
+ * throw new MigrationError("Cannot roll back 20261012_add_users: dropColumn has no automatic reverse. Write up() and down() instead of change().");
+ * ```
+ */
+export class MigrationError extends EctypeError {
+  override readonly name = "MigrationError" as const;
+  readonly code = "migration" as const;
+}
+
+/**
+ * A schema is declared wrongly: no primary key, a duplicate column, an association whose
+ * foreign key does not exist. Thrown when the class is defined, or the first time its
+ * associations are resolved.
+ *
+ * Ecto equivalent: the `ArgumentError`s raised by the `Ecto.Schema` macros at compile time.
+ *
+ * @example
+ * ```ts
+ * throw new SchemaDefinitionError(
+ *   'Post.author: belongsTo expects the foreign key field "authorId" on Post, but Post has no such field. Declare it (authorId: t.id()) or pass { foreignKey }.',
+ * );
+ * ```
+ */
+export class SchemaDefinitionError extends EctypeError {
+  override readonly name = "SchemaDefinitionError" as const;
+  readonly code = "schema_definition" as const;
+}

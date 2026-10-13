@@ -11,18 +11,24 @@ import { fileURLToPath } from "node:url";
 // No YAML parser is resolvable from the workspace root, and adding one for this check is
 // not worth a dependency. The scan below reads `key: value` lines, with the key bare,
 // single-quoted or double-quoted and at any indentation, and errs on the strict side.
-const KEY_LINE = /^\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_.-]+))\s*:\s*(.*)$/;
+// It records the indentation, because pnpm reads its settings at the top level only.
+const KEY_LINE = /^(\s*)(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_.-]+))\s*:\s*(.*)$/;
 
 /**
- * Returns the `key: value` pairs of a YAML document, one per line that has a key.
- * Comments are dropped, so the settings can be discussed in the file itself.
+ * Returns the `key: value` pairs of a YAML document, one per line that has a key, with
+ * `topLevel` true when the key starts in column 0. Comments are dropped, so the settings
+ * can be discussed in the file itself.
  */
 export function readEntries(yaml) {
   const entries = [];
   for (const raw of yaml.split(/\r?\n/)) {
     const match = KEY_LINE.exec(raw.replace(/\s+#.*$|^#.*$/, ""));
     if (match === null) continue;
-    entries.push({ key: match[1] ?? match[2] ?? match[3], value: match[4].trim() });
+    entries.push({
+      key: match[2] ?? match[3] ?? match[4],
+      value: match[5].trim(),
+      topLevel: match[1] === "",
+    });
   }
   return entries;
 }
@@ -37,9 +43,11 @@ export function findPolicyProblems(yaml) {
     );
   }
   const strict = entries.filter(({ key }) => key === "minimumReleaseAgeStrict");
-  if (strict.length !== 1 || strict[0].value !== "true") {
+  // A key nested under another one (indented) is not a pnpm setting: pnpm ignores it and
+  // strict mode stays off. So the one occurrence must start in column 0.
+  if (strict.length !== 1 || strict[0].value !== "true" || !strict[0].topLevel) {
     problems.push(
-      "minimumReleaseAgeStrict must be set exactly once, to an unquoted `true`: without it pnpm adds exclusions by itself.",
+      "minimumReleaseAgeStrict must be set exactly once, at the top level (column 0), to an unquoted `true`: without it pnpm adds exclusions by itself.",
     );
   }
   for (const { key, value } of entries) {
