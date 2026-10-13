@@ -30,7 +30,7 @@ type ValidatorFn<T> = (
 type ValidationIssue = { path: PropertyKey | readonly PropertyKey[]; message: string; meta?: Record<string, unknown> };
 
 type ValidateOptions = {
-  scope?: "auto" | "changed" | "all";   // default "auto"
+  scope?: "all" | "changed";            // default "all"
   apply?: boolean;                      // default false: write validator output back as changes
   only?: string[];                      // restrict to these top-level fields
 };
@@ -44,7 +44,7 @@ const UserInput = z.object({
   email: z.string().email(),
   age: z.number().int().min(13).nullish(),
 });
-cast(user, params, ["email", "age"]).validate(UserInput);
+cast(User, params, ["email", "age"]).validate(UserInput);
 
 // Cross-field rule with Zod
 cs.validate(z.object({ startsAt: z.date(), endsAt: z.date() })
@@ -71,9 +71,11 @@ await cs.validateAsync(async (v) => (await isDisposable(v.email)) ? [{ path: "em
    (already cast: `Date`, numbers, enums). Virtual fields are included. `only` narrows the
    object to those keys. Build the object once per call, in field order.
 3. **Scope** decides which issues are kept, by `path[0]`:
-   - `"changed"`: only issues on fields that have a change (Ecto's rule: unchanged data is not re-validated).
-   - `"all"`: every issue.
-   - `"auto"` (default): `"all"` when `data` is in state `built` (an insert, where "missing" must be reported), `"changed"` when `loaded`.
+   - `"all"` (default): every issue is kept, for new records and loaded rows alike. A
+     cross-field rule must not be dropped because the field it reports on did not change.
+   - `"changed"` (opt-in): only issues on fields that have a change (Ecto's rule: unchanged
+     data is not re-validated).
+   There is no `"auto"`.
    Issues with an empty path are always kept and stored under the exported key `BASE` (`"$base"`).
 4. **Issue mapping.** `path[0]` selects the field; the error is
    `{ message, validation: "schema", meta: { path: rest, ...issue.meta } }`. A path into an
@@ -96,13 +98,13 @@ await cs.validateAsync(async (v) => (await isDisposable(v.email)) ? [{ path: "em
 9. **Introspection.** Each call appends `["$schema", { validator, opts }]` (or
    `[field, { schema: validator }]`) to `cs.validations`.
 
-## `@ectype/zod`
+## `@egon-orm/zod`
 
 Peer dependency on Zod (support the current major; state the range). Derives Zod schemas
-from Ectype schemas so users do not write the shape twice:
+from Egon schemas so users do not write the shape twice:
 
 ```ts
-import { toZod } from "@ectype/zod";
+import { toZod } from "@egon-orm/zod";
 
 const UserZ = toZod(User);                      // z.object matching Row<User> (virtual included, redacted included)
 const CreateUser = toZod(User, { mode: "insert", pick: ["email", "name", "age"] })
@@ -122,7 +124,8 @@ type CreateUser = z.infer<typeof CreateUser>;   // { email: string; name?: strin
 
 ## Tests
 
-- Unit: dispatch; each scope against built and loaded data; path normalisation; `BASE`;
+- Unit: dispatch; each scope against new-record and loaded-row changesets (including a
+  cross-field issue on an unchanged field, kept under `"all"`); path normalisation; `BASE`;
   `apply`; sync-with-promise error; thrown validator propagates; `only`.
 - Compatibility matrix (dev dependencies only, one test file each): Zod, Valibot, ArkType,
   Yup. Each runs the same six scenarios. If Yup's installed version lacks Standard Schema,
@@ -137,7 +140,7 @@ type CreateUser = z.infer<typeof CreateUser>;   // { email: string; name?: strin
 Choosing between built-in validations, Zod schemas and functions; the scope rule with a
 worked insert vs update example; cross-field rules; transforms with `apply`; async
 validation and why it is separate; using Valibot/ArkType/Yup; deriving schemas with
-`@ectype/zod`; writing a reusable validator.
+`@egon-orm/zod`; writing a reusable validator.
 
 ## Acceptance
 

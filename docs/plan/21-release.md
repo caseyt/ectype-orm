@@ -26,7 +26,7 @@ before `1.0`), and make publishing a one-command, repeatable act.
   what happened, the offending name, and the fix. Do the same for the ten most likely
   **type** errors and make sure the docs' troubleshooting page covers them.
 - **Cross-step seams.** Scenario tests that cross features: nested changeset insert inside
-  a Multi inside a savepoint with a constraint violation on the deepest child; preload of a
+  a Batch inside a savepoint with a constraint violation on the deepest child; preload of a
   has-through inside a transaction after a bulk insert; prepared query with named params
   used concurrently from 50 tasks; streaming 1M rows with constant memory.
 
@@ -34,7 +34,7 @@ before `1.0`), and make publishing a one-command, repeatable act.
 
 - Injection: rerun the step 10 property test at 100k runs across all dialects; manual
   review of every place SQL text is assembled (fragments, identifiers, lock clauses, DDL,
-  prefix names, savepoint names, `explain` options).
+  database schema names, savepoint names, `explain` options).
 - Prototype pollution and mass assignment: `cast` with `__proto__`, `constructor`,
   getters, symbol keys, deeply nested and huge params (size/time bounded).
 - ReDoS: every built-in regex (uuid, integer, decimal, ISO date parsing, identifier checks)
@@ -52,7 +52,7 @@ before `1.0`), and make publishing a one-command, repeatable act.
   (`pg_terminate_backend`) and a pool of 5 — no leaked connections, no unhandled
   rejections, stable memory.
 - Fault injection through a fake adapter: failure at every await point of insert/update/
-  delete/transaction/Multi/nested/preload leaves no checked-out connection and surfaces the original error.
+  delete/transaction/Batch/nested/preload leaves no checked-out connection and surfaces the original error.
 - Runtime matrix: Node 22 and 24 (required), Bun (best effort, results recorded);
   ESM consumers, and CommonJS consumers through `require()` of the ES module; bundled with esbuild and with a framework build (Next.js) in `examples/`.
 - Mutation testing (Stryker) on `changeset/`, `query/`, `compiler/`: mutation score ≥ 80%;
@@ -63,8 +63,8 @@ before `1.0`), and make publishing a one-command, repeatable act.
 - `publint` and `attw` clean for every package; `exports` verified from real consumer
   projects (ESM, CommonJS via `require()` of the ES module on Node >= 22.12, TS `moduleResolution` `node16` and `bundler`).
 - Peer dependency ranges tested at their lower and upper bounds (Kysely, `pg`, Zod, `better-sqlite3`, `mysql2`).
-- Confirm the package name (plan README §10 question 1); if it changes, run the rename and
-  verify nothing references the old one.
+- The package name is decided: `egon-orm` / `@egon-orm/*` (plan README §11). Confirm the
+  npm scope is claimed and verify nothing still references `ectype`.
 - Changesets-based release workflow: version PR, changelog generation, npm publish with
   provenance from CI, git tags, GitHub release notes. Dry-run it end to end against a local registry (verdaccio).
 - Versioning policy and support policy written down (semver; what counts as breaking for

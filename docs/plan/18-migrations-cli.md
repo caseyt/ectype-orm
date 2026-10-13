@@ -16,12 +16,12 @@ that is safe under concurrent deploys, and a small CLI.
 
 ```ts
 // migrations/20261012093000_create_users.ts
-import { defineMigration } from "ectype/migration";
+import { defineMigration } from "egon-orm/migration";
 
 export default defineMigration({
   change(m) {                                   // reversible: the runner derives `down`
     m.createTable("users", (t) => {
-      t.id();                                   // bigserial primary key "id"
+      t.id();                                   // bigserial primary key "id" (a migration column helper, unrelated to the removed schema builder t.id())
       t.string("email").notNull();
       t.string("name");
       t.integer("age");
@@ -43,11 +43,11 @@ export default defineMigration({
 });
 ```
 
-Operations: `createTable` (options: `primaryKey: false`, `prefix`, `ifNotExists`),
+Operations: `createTable` (options: `primaryKey: false`, `schema`, `ifNotExists`),
 `alterTable` (`add`, `modify(name, type, { from })`, `remove(name, type?)`, `rename`),
 `dropTable`, `renameTable`, `createIndex`/`dropIndex` (`unique`, `where`, `using`,
 `concurrently`, `include`, `name`), `createConstraint`/`dropConstraint` (`check`,
-`exclude`), `execute(up, down?)`, `createSchema`/`dropSchema` (prefix),
+`exclude`), `execute(up, down?)`, `createSchema`/`dropSchema` (database schema),
 `createExtension`. Column builders mirror `DbType` from step 02, and names default to the
 conventions the changeset constraint functions expect (`<table>_<cols>_index`,
 `<table>_<col>_fkey`) — test this pairing explicitly.
@@ -55,22 +55,22 @@ conventions the changeset constraint functions expect (`<table>_<cols>_index`,
 Runner:
 
 ```ts
-import { createMigrator } from "ectype/migration";
+import { createMigrator } from "egon-orm/migration";
 const migrator = createMigrator({ repo, directory: "./migrations", table: "schema_migrations" });
 await migrator.up({ to?: version, step?: n });
 await migrator.down({ to?: version, step?: n });      // default step: 1
 await migrator.status();                               // [{ version, name, state: "up" | "down" | "missing" }]
 ```
 
-CLI (`ectype`, from `@ectype/cli`; config in `ectype.config.ts` exporting `{ repo, migrations }`):
+CLI (`egon`, from `@egon-orm/cli`; config in `egon.config.ts` exporting `{ repo, migrations }`):
 
 ```
-ectype gen migration <name>         # timestamped file from a template
-ectype gen migration <name> --from-schema src/schemas/user.ts   # createTable prefilled from a schema class
-ectype migrate [--to V | --step N] [--dry-run]
-ectype rollback [--to V | --step N | --all]
-ectype migrations                   # status table
-ectype db create | drop | reset     # dev conveniences; refuse when NODE_ENV=production unless --force
+egon gen migration <name>         # timestamped file from a template
+egon gen migration <name> --from-schema src/schemas/user.ts   # createTable prefilled from a schema class
+egon migrate [--to V | --step N] [--dry-run]
+egon rollback [--to V | --step N | --all]
+egon migrations                   # status table
+egon db create | drop | reset     # dev conveniences; refuse when NODE_ENV=production unless --force
 ```
 
 ## Behaviour
@@ -83,7 +83,7 @@ ectype db create | drop | reset     # dev conveniences; refuse when NODE_ENV=pro
    Operations lacking enough information to reverse (`remove` without a type, `execute`
    with one argument, `modify` without `from`, `dropTable` without a definition) throw
    `MigrationError` **at rollback time** with the fix, as Ecto does.
-3. **Tracking table** `schema_migrations(version bigint primary key, inserted_at timestamp)`
+3. **Tracking table** `schema_migrations(version bigint primary key, created_at timestamp)`
    — compatible with Ecto's, so a database migrated by Ecto can be adopted.
 4. **Locking.** The runner takes a lock so concurrent deploys do not race: Postgres
    advisory lock (session-level, keyed by a hash of the table name), MySQL `GET_LOCK`,

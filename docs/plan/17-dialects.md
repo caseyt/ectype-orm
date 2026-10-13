@@ -16,11 +16,13 @@ published support matrix.
 ## Public API
 
 ```ts
-import { sqlite } from "@ectype/sqlite";     // peer: better-sqlite3
+import { sqlite } from "@egon-orm/sqlite";     // peer: better-sqlite3
 const adapter = sqlite({ filename: ":memory:", pragmas: { journal_mode: "WAL", foreign_keys: "ON" } });
 
-import { mysql } from "@ectype/mysql";       // peer: mysql2
-const adapter = mysql({ uri: process.env.DATABASE_URL, pool: { max: 10 }, timezone: "Z" });
+import { mysql } from "@egon-orm/mysql";       // peer: mysql2
+const adapter = mysql({ connectionString: process.env.DATABASE_URL, pool: { max: 10 } });
+// Same option names as postgres(): connectionString, pool, planCacheSize. No `timezone`:
+// the session is always UTC. sqlite() turns foreign_keys ON unless `pragmas` says otherwise.
 ```
 
 ## Work per dialect
@@ -33,14 +35,14 @@ const adapter = mysql({ uri: process.env.DATABASE_URL, pool: { max: 10 }, timezo
    | Capability | SQLite | MySQL 8 |
    |---|---|---|
    | `RETURNING` | yes (3.35+) | **no** → read-back path (step 13 item 7) |
-   | `ON CONFLICT` | yes | `ON DUPLICATE KEY UPDATE` (no conflict target; `conflictTarget` throws) |
+   | `ON CONFLICT` | yes | `ON DUPLICATE KEY UPDATE` (no conflict target: `onConflict.target` is optional and throws `QueryError` if given) |
    | `ILIKE` | lowered to `LIKE` (case-insensitive for ASCII; documented) | lowered to `LIKE` with collation note |
    | Array columns and operators | no → `QueryError`; suggest json | no |
    | `jsonb` | JSON text functions | native JSON |
    | Lateral join | no | yes (8.0.14+) |
    | Full join | yes (3.39+) | no |
    | `DISTINCT ON` | no | no |
-   | Lock clauses | none (ignored with a one-time warning, or error — choose, document) | `FOR UPDATE`/`FOR SHARE` (+ `SKIP LOCKED`, `NOWAIT`) |
+   | Lock clauses | none: ignored silently (single writer already satisfies them; keeps SQLite usable as a test database). Documented. | `FOR UPDATE`/`FOR SHARE` (+ `SKIP LOCKED`, `NOWAIT`) |
    | Savepoints | yes | yes |
    | DDL in transactions | yes | **no** (implicit commit; matters to step 18) |
    | Array params (`= ANY`) | no → `IN` expansion | no → `IN` expansion |
@@ -50,7 +52,7 @@ const adapter = mysql({ uri: process.env.DATABASE_URL, pool: { max: 10 }, timezo
 3. **Type overrides.** SQLite: boolean ↔ 0/1; dates/datetimes ↔ ISO-8601 text (UTC);
    json ↔ text; bigint ↔ integer (use `safeIntegers` path for `t.bigint()`); uuid ↔ text;
    decimal ↔ text. MySQL: boolean ↔ tinyint(1); datetime with forced UTC session time
-   zone; json parsed by driver; bigint and decimal as strings → codecs; uuid ↔ char(36)
+   zone (not configurable); json parsed by driver; bigint and decimal as strings → codecs; uuid ↔ char(36)
    (binary(16) as an option); binary ↔ Buffer.
 4. **Error normalisation.** SQLite extended result codes (`SQLITE_CONSTRAINT_UNIQUE`,
    `_FOREIGNKEY`, `_CHECK`, `_NOTNULL`, `SQLITE_BUSY` → retryable). SQLite reports unique
@@ -61,7 +63,7 @@ const adapter = mysql({ uri: process.env.DATABASE_URL, pool: { max: 10 }, timezo
    `ER_CHECK_CONSTRAINT_VIOLATED`, `ER_LOCK_DEADLOCK` → retryable.
 5. **Compiler expected output.** Add the dialect column to every SQL snapshot matrix from
    steps 09 and 10. Where lowering needs a dialect branch (list expansion, `ILIKE`,
-   json path syntax, `push`/`pull` unsupported, boolean literals), implement it in the
+   json path syntax, array `append`/`remove` unsupported, boolean literals), implement it in the
    lowering layer behind capabilities, not with `if (dialect === ...)` scattered through builders.
 6. **Plan cache keys** include list lengths on these dialects (step 10); add a test that
    lists of different lengths do not share a plan and lists of equal length do.
@@ -100,5 +102,5 @@ Dialect sections in `adapters.md`: install, options, type mapping table, caveats
 
 ## Out of scope
 
-MSSQL, CockroachDB, PlanetScale/serverless drivers (note as future work; the
-`fromKyselyDialect` escape hatch covers adventurous users).
+MSSQL, CockroachDB, PlanetScale/serverless drivers (future work, together with
+`fromKyselyDialect`).
