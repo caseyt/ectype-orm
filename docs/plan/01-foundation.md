@@ -47,17 +47,17 @@ No library code is written in this step beyond placeholder exports.
    - `fixtures/blog.sql`: DDL for the reference schema below.
 9. **Reference schema.** The blog domain used by all tests, docs and benchmarks. DDL only in
    this step (schema classes arrive in step 04 at `packages/core/test/support/blog.ts`):
-   - `users(id bigserial pk, email text unique not null, name text, age int, role text not null default 'member', password_hash text, settings jsonb, lock_version int not null default 1, inserted_at, updated_at)`
+   - `users(id bigserial pk, email text unique not null, name text, age int, role text not null default 'member', password_hash text, settings jsonb, lock_version int not null default 1, created_at, updated_at)`
    - `profiles(id, user_id fk unique, bio text, avatar_url text)` — has_one
-   - `posts(id, author_id fk, title text not null, body text, published boolean default false, views int default 0, tags text[], published_at timestamptz, inserted_at, updated_at)`
-   - `comments(id, post_id fk on delete cascade, author_id fk, body text not null, inserted_at)`
+   - `posts(id, author_id fk, title text not null, body text, published boolean default false, views int default 0, tags text[], published_at timestamptz, created_at, updated_at)`
+   - `comments(id, post_id fk on delete cascade, author_id fk, body text not null, created_at)`
    - `tags(id, name text unique)`, `posts_tags(post_id, tag_id, pk(post_id, tag_id))` — many_to_many
    - `orgs(id uuid pk default gen_random_uuid(), name)`, `memberships(org_id, user_id, role, pk(org_id, user_id))` — uuid and composite keys
 10. **Benchmarks skeleton.** `benchmarks/` package using `mitata` (or `tinybench`), a
     `pnpm bench` script, a `benchmarks/micro/_example.bench.ts`, and a JSON reporter that
     writes `benchmarks/results/<git-sha>.json`. Regression gating comes in step 19.
-11. **Docs skeleton.** VitePress site at `docs/site` with nav stubs for Guide, API,
-    Ecto cheat sheet; `pnpm docs:dev` / `docs:build`.
+11. **Docs skeleton.** VitePress site at `docs/site` with nav stubs for Guide and API
+    (no Ecto page: plan README §8); `pnpm docs:dev` / `docs:build`.
 12. **CI** (GitHub Actions): jobs `lint`, `typecheck`, `unit+types` (Node 22 and 24),
     `integration` (Postgres service), `build+publint+attw`, `docs:build`. Cache pnpm store.
 13. **Root scripts.** `pnpm check` = lint + typecheck + unit + type tests + build.
@@ -75,7 +75,7 @@ No library code is written in this step beyond placeholder exports.
 - [ ] Fresh clone: `pnpm i && pnpm db:up && pnpm check && pnpm test:integration` passes.
 - [ ] A deliberately failing type test, unit test, lint error and coverage drop each fail CI
       (demonstrate once, then remove).
-- [ ] `import { VERSION } from "ectype"` works from an ESM consumer script in `examples/smoke/`, and from a CommonJS script that loads the ES module with `require()`.
+- [ ] `import { VERSION } from "egon-orm"` works from an ESM consumer script in `examples/smoke/`, and from a CommonJS script that loads the ES module with `require()`.
 - [ ] `docs/plan/spikes/schema-typing.ts` is type-checked in CI (it is the regression test for D1).
 - [ ] Two integration test files run in parallel without interfering.
 - [ ] `pnpm bench` runs the example benchmark and writes a results file.

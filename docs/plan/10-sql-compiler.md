@@ -28,13 +28,13 @@ QueryAst ──lower──▶ Kysely OperationNode tree ──dialect QueryCompi
 
 - One function per AST node kind producing Kysely nodes directly (no fluent Kysely builder,
   no `Kysely` instance per call). A `lowerNode` registry lets step 09 add node kinds.
-- Identifiers: table = `meta.source` (+ `prefix`), alias = the binding alias, column =
+- Identifiers: table = `meta.source` (+ its database schema), alias = the binding alias, column =
   `FieldMeta.column`. All identifiers go through Kysely's identifier nodes (quoted by the dialect).
 - **Select list and output aliases.** Every selected expression gets a short alias
   `c0, c1, …` in output order. A whole-binding select expands to that schema's persisted
   columns in `meta.persisted` order (virtual fields skipped). Never `SELECT *`. The lowering
   returns an `OutputPlan` — a tree mirroring the user's select shape with, at each leaf,
-  the alias and the `EctoType` to load with — which step 12 turns into a row decoder. It
+  the alias and the `FieldType` to load with — which step 12 turns into a row decoder. It
   also has a `constant` leaf (an index into `SelectNode.constants`; no column), and its row
   leaf carries `key`, `nullable` and `preloads` (`contracts/adapter.ts`).
 - Params: each `param`/`list`/`namedParam` node lowers to a Kysely value node carrying a
@@ -50,23 +50,24 @@ QueryAst ──lower──▶ Kysely OperationNode tree ──dialect QueryCompi
 
 ### Row-level writes (`write.ts`)
 
-`compileInsert(meta, columns, { source, returning, onConflict, conflictTarget }, prefix)`,
-`compileUpdate(meta, setColumns, whereColumns, returning, prefix)`,
-`compileDelete(meta, whereColumns, returning, prefix)`; `compile(ast, op, prefix)` likewise
-takes the prefix, and there are `compileFragment(fragment)` and
-`compileExplain(ast, op, prefix, options)` (`contracts/adapter.ts`). Keyed in the plan cache by
+`compileInsert(meta, columns, { source, returning, onConflict }, schema)`,
+`compileUpdate(meta, setColumns, whereColumns, returning, schema)`,
+`compileDelete(meta, whereColumns, returning, schema)`; `compile(ast, op, schema)` likewise
+takes the database schema, and there are `compileFragment(fragment)` and
+`compileExplain(ast, op, schema, options)` (`contracts/adapter.ts`). Keyed in the plan cache by
 (schema, operation, column-set bitmask, options), so inserting the same set of fields
-reuses one plan. Multi-row insert plans are cached per row count up to a threshold
+reuses one plan. Batch-row insert plans are cached per row count up to a threshold
 (e.g. 1, 2, 4, 8, … chunks) — choose a strategy, benchmark it, document it.
-`onConflict` forms as Ecto: `"raise"`, `"nothing"`, `"replaceAll"`, `{ replace: fields }`,
-`{ replaceAllExcept: fields }`, or an update query; `conflictTarget`: fields, `{ constraint }`, or a fragment.
+`onConflict` (plan README §11, one option): absent = raise; `"nothing"`; or
+`{ target?, update: "all" | fields | { except: fields } }` with `target`: fields,
+`{ constraint }`, or a fragment. (The contract's separate `conflictTarget` member is folded into it: a contract change to record.)
 
 ### Plan cache (`cache.ts`)
 
 Two levels, per adapter instance:
 
-1. **L1 identity:** per (`QueryAst`, prefix): a `WeakMap` on the AST, then the prefix. A
-   module-level query constant compiles once per prefix, ever. Budget for a hit: < 0.3 µs.
+1. **L1 identity:** per (`QueryAst`, schema): a `WeakMap` on the AST, then the database schema. A
+   module-level query constant compiles once per database schema, ever. Budget for a hit: < 0.3 µs.
 2. **L2 shape:** bounded LRU (default 1,000 entries, configurable) keyed by the AST's
    `shape` hash. Because a hash can collide, a hit is confirmed by a structural comparison
    `sameShape(a, b)` that ignores param values; on mismatch, treat as a miss and count it
@@ -75,7 +76,7 @@ Two levels, per adapter instance:
 
 `compile(ast, op)` returns the cached plan; the caller builds params with
 `bindParams(plan.slots, ast.params, namedValues)` — a tight loop with no allocation beyond
-the output array. `dump` functions are applied here, skipped when `IDENTITY`.
+the output array. `toDb` functions are applied here, skipped when `IDENTITY`.
 Missing or extra named params throw `QueryError` listing the names.
 
 Expose `repo.toSql(queryable, params?)` → `{ sql, params }` (Ecto `Repo.to_sql`) and
@@ -92,17 +93,21 @@ cache statistics (`hits`, `misses`, `collisions`, `size`) for telemetry.
   cache with the AST of values A, bind with `params` of another AST of the same shape
   holding values B, and compare against a cold compile of B. `shape` is canonical too, so
   two structurally identical queries share one plan however they were built.
+- **Bulk update and delete:** `.set(...)` lowers to `UPDATE ... SET`; `.returning(...)` to
+  `RETURNING` (step 09).
 - **Null/boolean literals** from `lit()` are inlined; everything else is bound.
 - **`limit`/`offset`** are bound parameters where the dialect allows.
-- **Prefix:** resolved per table with Ecto's precedence: per-source prefix (`from`/`join`)
-  > the schema's declared prefix > the query prefix > the `prefix` argument of `compile`
-  (the per-call option, else the repo default). A query or repo prefix never overrides a
-  schema's declared prefix. Row-level writes (insert, update and delete alike) have one
-  table source and no query: their `prefix` parameter is that source's own prefix, the
+- **Database schema (the `schema` option, formerly `prefix`):** resolved per table with Ecto's precedence: per-source schema (`from`/`join`)
+  > the schema class's own database schema > the query's `.schema()` > the `schema` argument of `compile`
+  (the per-call option, else the repo default). A query or repo schema never overrides a
+  schema class's own database schema. Row-level writes (insert, update and delete alike) have one
+  table source and no query: their `schema` parameter is that source's own schema, the
   strongest position, and the repo passes the per-call option, else the row's
-  `RowMeta.prefix` (a built row holds its schema's declared prefix), else its default.
-- **Lock:** rendered last; string modes validated against a per-dialect allowlist.
-- **Debug:** `explain` support hook (`repo.explain(queryable, opts)` implemented in step 12 uses `compile` + prefix).
+  `RowMeta.schema` (a built row holds its schema class's own database schema), else its default.
+- **Lock:** rendered last; the typed modes (`"update"`, `"share"`, `"noKeyUpdate"`, `"keyShare"`,
+  with `skipLocked` / `noWait`) map to SQL through a per-dialect table. SQLite ignores locks
+  silently (single writer).
+- **Debug:** `explain` support hook (`repo.explain(queryable, opts)` implemented in step 12 uses `compile` + database schema).
 
 ## Tests
 

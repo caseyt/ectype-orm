@@ -1,4 +1,4 @@
-# Step 08 — Query builder (Ecto.Query)
+# Step 08 — Query builder
 
 **Depends on:** 04, 07. **Parallel with:** 05, 10, 11.
 **Owns:** `packages/core/src/query/builder.ts`, `packages/core/src/query/bindings.ts`,
@@ -17,7 +17,7 @@ skeleton is proven in `spikes/schema-typing.ts` (`Query<B, R>`, `Binding<S>`, `S
 type Query<B, R, P = {}>      // B: named bindings, R: result row type, P: required named params
 type Queryable<...> = SchemaClass | Query
 
-from(User, "u")                               // alias defaults to "root" when omitted
+from(User, "u")                               // the alias is required
   .join(Post, "p", ({ u, p }) => p.authorId.eq(u.id))      // inner
   .leftJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id))
   .rightJoin(...) .fullJoin(...) .crossJoin(Tag, "t")
@@ -31,13 +31,14 @@ from(User, "u")                               // alias defaults to "root" when o
   .distinct()                                  // or .distinct(({ u }) => [u.email])  -> DISTINCT ON
   .groupBy(({ u }) => [u.id])
   .having(({ p }) => count(p.id).gt(3))
-  .orderBy(({ u }) => [u.insertedAt.desc(), u.id])         // bare column = asc
+  .orderBy(({ u }) => [u.createdAt.desc(), u.id])         // bare column = asc
   .limit(10).offset(20)
-  .lock("FOR UPDATE")                          // typed union of standard modes; lock(fragment`...`) for others
-  .prefix("tenant_1")
+  .lock("update", { skipLocked: true })        // "update" | "share" | "noKeyUpdate" | "keyShare", { skipLocked?, noWait? }; lock(fragment`...`) for others
+  .schema("tenant_1")                          // database schema (was `prefix`)
   .exclude("orderBy")                          // Ecto exclude/2
-  .first() / .last() / .reverseOrder()         // Ecto first/last/reverse_order
+  .reverseOrder()                              // there is no .first() / .last(): use repo.first(q)
   .preload("posts")                            // declared here, typed here, executed in step 14
+  .preload("posts", (q) => q.where(({ posts }) => posts.published).limit(3))   // callback form, step 14
   .pipe(fn)                                    // q.pipe(onlyPublished) === onlyPublished(q)
 
 hasNamedBinding(q, "p")                        // type guard
@@ -64,10 +65,10 @@ right/full, the existing bindings). Selecting a whole left-joined binding yields
    rebuild it. Nullable-by-join is a type-level concern only.
 3. **Callbacks run once**, at build time. They must be pure. Returning a non-`Expr` where
    one is required throws `QueryError` with the clause name.
-4. **`from`.** Accepts a schema class or a `Query` (then acts as identity/aliasing for the
-   root, so that `from(baseQuery, "u")` rebinds nothing and merely continues it; if the
-   aliases conflict, throw). Subquery and other sources are step 09. Duplicate alias
-   anywhere in a query throws.
+4. **`from`.** Accepts a schema class, or an explicit source wrapper from step 09
+   (`subquery(q)`, `cte(...)`). It does **not** accept a bare `Query` (a compile error and a
+   `QueryError`): a query is continued by chaining, and used as a source through
+   `subquery()`. The alias is a required argument. Duplicate alias anywhere in a query throws.
 5. **`joinAssoc`.** Resolves association metadata to an ON condition:
    belongsTo/hasOne/hasMany → key equality; manyToMany → two joins (join table gets an
    internal alias); has-through → the chain of joins. Association `where` options are ANDed
@@ -93,9 +94,12 @@ right/full, the existing bindings). Selecting a whole left-joined binding yields
     metadata at build time and updates `R` to the loaded type. It is declared
     `preload<const P>(spec: P & ValidPreload<S, P>)` and returns `LoadedUnchecked<S, P>`
     (`contracts/schema.ts`), so that an unknown key is a compile error. Only valid when the select
-    is the root row (or a binding marked for join-preload, step 14).
-13. **Inspection.** `q.toString()` / inspect prints an Ecto-like rendering
-    (`from u in User, where: u.age >= ?, ...`) for debugging; no values, respects redaction.
+    is the root row (or a binding marked for join-preload, step 14). The second argument is
+    the optional preload callback `(q) => Query`, where `q` is a query rooted at the target
+    with the association's name as its alias; its result type (whole row, or a selected
+    shape) becomes the element type of the loaded association. Step 14 specifies it.
+13. **Inspection.** `q.toString()` / inspect prints a compact SQL-like rendering
+    (`from users u where u.age >= ? ...`) for debugging; no values, respects redaction.
 
 ## Use cases to cover in tests and docs
 
@@ -118,7 +122,7 @@ right/full, the existing bindings). Selecting a whole left-joined binding yields
 
 ## Docs (`guide/queries.md`)
 
-Building queries; bindings; each clause with Ecto side-by-side; composition patterns;
+Building queries; bindings; each clause with the SQL it produces; composition patterns;
 dynamic filters; select shapes and their result types; debugging with `toString`.
 
 ## Acceptance

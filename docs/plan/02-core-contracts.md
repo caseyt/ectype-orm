@@ -1,5 +1,9 @@
 # Step 02 — Core contracts and the Kysely bridge spike
 
+> **Merged before the API review.** This file is edited to the names decided in plan
+> README §11; the merged code still has the old ones (`prefix`, `ok`/`err`, `EctoType`,
+> `load`/`dump`, `AdapterError`) until the follow-up PR listed there lands.
+
 **Depends on:** 01. **Blocks:** everything else.
 **Owns:** `packages/core/src/contracts/`, `packages/core/src/errors.ts`,
 `packages/core/src/internal/`, `docs/adr/0002-kysely-backend.md`, `docs/plan/spikes/kysely-bridge/`.
@@ -21,19 +25,19 @@ normative for names and semantics; refine field details as needed and record ref
 
 ```ts
 export type CastResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly message?: string; readonly meta?: Readonly<Record<string, unknown>> };
+  | { readonly success: true; readonly data: T }
+  | { readonly success: false; readonly message?: string; readonly meta?: Readonly<Record<string, unknown>> };
 
 /** Ecto.Type. TApp is the value in application code, TDb what the driver sends/receives. */
-export interface EctoType<TApp, TDb = unknown> {
-  readonly name: string;                 // "string", "integer", "utcDatetime", ...
+export interface FieldType<TApp, TDb = unknown> {
+  readonly name: string;                 // "string", "integer", "timestamp", ...
   readonly db: DbType;                   // logical column type; used by casts and migrations
   cast(input: unknown): CastResult<TApp>;  // untrusted external input -> app value (changesets)
-  load(value: TDb): TApp;                  // driver value -> app value (hot path)
-  dump(value: TApp): TDb;                  // app value -> driver parameter
+  fromDb(value: TDb): TApp;                  // driver value -> app value (hot path)
+  toDb(value: TApp): TDb;                  // app value -> driver parameter
   equal(a: TApp, b: TApp): boolean;        // change detection
 }
-export declare const IDENTITY: <T>(v: T) => T;   // load/dump === IDENTITY means "skip the call"
+export declare const IDENTITY: <T>(v: T) => T;   // fromDb/toDb === IDENTITY means "skip the call"
 export type DbType =
   | { kind: "integer" | "bigint" | "float" | "decimal" | "boolean" | "text" | "uuid" | "binary"
           | "date" | "time" | "timestamp" | "timestamptz" | "json" | "jsonb" }
@@ -41,33 +45,33 @@ export type DbType =
   | { kind: "custom"; sql: string };
 ```
 
-`null` never reaches `cast`/`load`/`dump`; nullability is handled by the caller.
+`null` never reaches `cast`/`fromDb`/`toDb`; nullability is handled by the caller.
 
 ### `contracts/schema.ts`
 
 ```ts
 export interface FieldMeta {
-  readonly name: string;            // "insertedAt"
-  readonly column: string;          // "inserted_at"
-  readonly type: EctoType<any, any>;
+  readonly name: string;            // "createdAt"
+  readonly column: string;          // "created_at"
+  readonly type: FieldType<any, any>;
   readonly nullable: boolean;
   readonly primaryKey: boolean;
   readonly virtual: boolean;        // never read from or written to the database
   readonly redact: boolean;         // hidden from inspect/toJSON/logs
   readonly writable: "always" | "insert" | "never";
-  readonly readAfterWrites: boolean;   // database generates it; RETURNING it
+  readonly dbGenerated: boolean;   // database generates it; RETURNING it
   readonly default: undefined | { kind: "value"; value: unknown } | { kind: "fn"; fn: () => unknown };
   readonly autogenerate: undefined | { on: "insert" | "insertAndUpdate"; fn: () => unknown };
   readonly index: number;           // position in SchemaMeta.fields
 }
 export type AssocKind = "belongsTo" | "hasOne" | "hasMany" | "manyToMany";
 export interface AssocMeta { /* name, kind, owner, target(): SchemaClass, ownerKey, relatedKey,
-  joinThrough?, joinKeys?, through?, onReplace, onDelete (doc only), where?, preloadOrder?, defaults? */ }
+  joinThrough?, joinKeys?, through?, onReplace, where?, orderBy?, defaults? */ }
 export interface EmbedMeta { /* name, cardinality: "one" | "many", schema(), onReplace, column */ }
 export interface SchemaMeta {
   readonly name: string;                         // class name, for errors
   readonly source: string | null;                // null for embedded schemas
-  readonly prefix: string | undefined;
+  readonly schema: string | undefined;           // database schema (was `prefix`)
   readonly fields: readonly FieldMeta[];         // declaration order; defines the row shape
   readonly fieldsByName: ReadonlyMap<string, FieldMeta>;
   readonly persisted: readonly FieldMeta[];      // non-virtual
@@ -78,7 +82,7 @@ export interface SchemaMeta {
 }
 export declare const META: unique symbol;        // SchemaClass[META]: SchemaMeta
 export declare const ROW: unique symbol;         // row[ROW]: RowMeta
-export interface RowMeta { state: "built" | "loaded" | "deleted"; source: string; prefix: string | undefined }
+export interface RowMeta { state: "built" | "loaded" | "deleted"; source: string; schema: string | undefined }
 ```
 
 Also define the **type-level** contract, lifted from `spikes/schema-typing.ts`:
@@ -97,7 +101,7 @@ export interface QueryAst {
   readonly wheres: readonly BoolNode[];            // each tagged and/or with the previous
   readonly select: SelectNode | undefined;         // undefined = whole root row
   readonly distinct, groupBys, havings, orderBys, limit, offset, lock, combinations,
-           ctes, windows, preloads, updates, prefix, hints; // typed in step 07
+           ctes, windows, preloads, updates, schema, hints; // typed in step 07
   readonly shape: number;                          // incremental structural hash (plan cache key)
 }
 export type ExprNode = /* column | param | named param | literal(null/true/false) | op | fn | fragment
@@ -130,27 +134,29 @@ export interface Adapter {
   stream(sql, params, opts, conn?): AsyncIterable<Record<string, unknown>>;
   acquire(): Promise<Connection>;          // Connection has release(), begin/commit/rollback, savepoint ops
   normalizeError(e: unknown): unknown;     // maps driver errors to ConstraintError etc.
-  typeOverrides: ...;                      // per-dialect load/dump adjustments (e.g. int8, numeric)
+  typeOverrides: ...;                      // per-dialect fromDb/toDb adjustments (e.g. int8, numeric)
   close(): Promise<void>;
 }
 ```
 
 ### `contracts/changeset.ts`, `contracts/result.ts`, `contracts/standard-schema.ts`
 
-- `Result<T, E>`, `ok()`, `err()`.
+- `Result<T, E>` = `{ success: true; data: T } | { success: false; error: E }`, with the
+  helpers `success(data)` and `failure(error)`. The word `ok` is not used anywhere.
 - `ChangesetError = { message: string; validation?: string; constraint?: string; meta: Record<string, unknown> }`
-  where `message` may contain `%{count}`-style placeholders filled from `meta` (Ecto's design, enables i18n).
+  where `message` may contain `{count}`-style placeholders filled from `meta` (Ecto's design, enables i18n).
 - `Constraint = { type: "unique" | "foreignKey" | "check" | "exclusion" | "noAssoc"; name: string; match: "exact" | "suffix" | "prefix"; field: string; message: string }`.
 - Vendored `StandardSchemaV1` interface (types only, per the spec's own guidance).
 - `ValidatorFn<T>` (see step 06).
 
 ### `errors.ts`
 
-`EctypeError` base, each with a stable `code`: `NoResultsError`, `MultipleResultsError`,
+`EgonError` base, each with a stable `code`: `NoResultsError`, `MultipleResultsError`,
 `InvalidChangesetError` (carries the changeset), `StaleEntryError`, `ConstraintError`
 (unhandled constraint; carries type, name, table, column), `QueryError` (bad query,
-detected at build or compile), `CastError`, `NotLoadedError`, `AdapterError` (wraps
-driver errors, keeps `cause`), `MigrationError`, `SchemaDefinitionError`.
+detected at build or compile), `CastError`, `NotLoadedError`, `DatabaseError` (wraps
+driver errors, keeps `cause`), `SchemaDefinitionError`. (`MigrationError` is added and
+exported by step 18, `RollbackError` by step 16.)
 Messages say what happened, what was expected, and how to fix it.
 
 ### `internal/`

@@ -1,10 +1,17 @@
-# Ectype — master plan
+# Egon ORM — master plan
 
 A TypeScript ORM modelled on Elixir's Ecto: **schemas**, **changesets**, an Ecto-style
 **query builder**, and a **Repo**. Heavily tested, performance-first, fully documented.
 
-> `ectype` is a working name (Ecto + type; also an English word meaning "a copy of an
-> original"). It appears only in package names and imports, so renaming is mechanical.
+> The project is **Egon ORM**: packages `egon-orm` and `@egon-orm/*` (owner decision,
+> 2026-10-12). It was called Ectype while steps 01 and 02 were built, so the merged code,
+> the status notes and the GitHub repository still use that name until the rename PR
+> lands (§11, "Changes to merged code").
+>
+> Ecto is the design reference for behaviour. It is **not** how the library is presented:
+> users come from Drizzle, Sequelize and Prisma, so public names, TSDoc and guides do not
+> mention Ecto (§8). **§11 records the developer-API review of 2026-10-13; where an older
+> sentence in this plan disagrees with §11, §11 wins.**
 
 This file is the shared context for every step. **Every worker reads this file in full,
 then their own step file.** Step files do not repeat what is here.
@@ -41,20 +48,20 @@ These are settled. Changing one requires an ADR (§9), not a unilateral edit.
 | # | Decision | Why |
 |---|---|---|
 | D1 | **Schemas are classes** built with `class User extends Schema("users", {...fields}) {}`; associations are `static` members holding thunks. | Verified by spike. `const User = schema({ posts: hasMany(() => Post) })` and the same thing in a class `extends` clause both fail with TS7022/TS2506 on any circular association. Static initialisers resolve lazily. See `spikes/schema-typing.ts` (compiles under `--strict`) and `spikes/rejected-const-thunks.ts`. |
-| D2 | Rows are **instances of the schema class**, created by a generated factory that never runs user constructors. `new User({...})` is the equivalent of `%User{}`. | Named row types (`User`), user-defined getters/methods, stable hidden classes. |
-| D3 | Fields are **non-null by default**; `.nullable()` opts in. | Deviates from Ecto (everything nullable) because it is what TS users expect and gives better types. |
-| D4 | Field names are camelCase in TS and snake_case in the database by default; `.source("col")` overrides per field, `naming` option per schema. | Convention on both sides. |
+| D2 | Rows are **instances of the schema class**, created by a generated factory that never runs a constructor. The constructor is **not public API**: a row comes only from the database (a query, or a successful write). New records are described by changesets, `cast(User, params, [...])` and `change(User, values)`. Schema classes may carry getters and methods, never a constructor or field initialisers. | Named row types (`User`), user-defined getters/methods, stable hidden classes. A half-built row whose required fields are `undefined` cannot exist. |
+| D3 | Fields are **non-null by default**; `.nullable()` opts in. Confirmed by the owner (2026-10-13). `cast` rejects `null` for a non-nullable field and `repo.insert` reports a missing required field as a changeset error. | Deviates from Ecto (everything nullable) because it is what TS users expect and gives better types. |
+| D4 | Field names are camelCase in TS and snake_case in the database by default; `.column("col")` overrides per field, `naming` option per schema. | Convention on both sides. |
 | D5 | `belongsTo` does **not** define the foreign-key field; declare it in the fields object. | Fields and associations live in different places because of D1. |
 | D6 | Query bindings are **named** and passed to callbacks as one object: `.where(({ u, p }) => ...)`. | Ecto named bindings; positional bindings do not type well. |
 | D7 | Operators are methods on expressions (`u.age.gt(18)`), with free functions for n-ary and aggregate forms (`and`, `or`, `not`, `count`, `fragment`). | No operator overloading in TS; methods are discoverable. |
 | D8 | Binding objects are **prebuilt per (schema, alias) and cached**. No `Proxy` anywhere on a hot path. | Performance. |
 | D9 | Every literal in a query is a **bound parameter**. The only way to emit raw SQL text is the `fragment` tagged template, whose interpolations are also bound. | Injection safety by construction. |
-| D10 | Write operations return `Result<T, Changeset<T>>` (`{ ok: true, value } \| { ok: false, error }`); each has an `...OrThrow` twin. | Ecto's `{:ok, _} \| {:error, _}` and bang functions. |
+| D10 | Write operations return `Result<T, Changeset<T>>` (`{ success: true, data } \| { success: false, error }`); each has an `...OrThrow` twin. The word `ok` appears nowhere in the API: the helpers are `success(data)` and `failure(error)`. | A validation failure is an expected outcome, typed and impossible to confuse with a fault. Same shape as Zod's `safeParse`. |
 | D11 | Changesets are immutable and synchronous. Async validation is a separate, explicit `validateAsync`. | Keeps the common path allocation-light and predictable. |
-| D12 | **Kysely is the SQL back end**: our query AST is lowered to Kysely `OperationNode` trees, compiled by Kysely's dialect compilers, and executed through Kysely drivers. Kysely is never exposed in the public API and sits behind our own `Adapter` interface. | Postgres, MySQL and SQLite support, pooling and DDL without writing three compilers. Hidden behind `Adapter` so it can be replaced if step 02's spike shows unacceptable overhead. |
+| D12 | **Kysely is the SQL back end**: our query AST is lowered to Kysely `OperationNode` trees, compiled by Kysely's dialect compilers, and executed through Kysely drivers. Kysely is never exposed in the public API and sits behind our own `Adapter` interface (so `fromKyselyDialect` is future work, §11). | Postgres, MySQL and SQLite support, pooling and DDL without writing three compilers. Hidden behind `Adapter` so it can be replaced if step 02's spike shows unacceptable overhead. |
 | D13 | Postgres is tier 1 (every feature, every test). SQLite and MySQL are tier 2 (conformance suite, documented capability gaps). | Scope control. |
 | D14 | Node >= 22.12, TypeScript >= 5.5, **ESM only: no CommonJS build**. pnpm workspace. Vitest. Biome. | Current baseline. Kysely (D12) is ESM-only, so a CommonJS build could not load it on every supported Node. Node 22.12 is the first release in which a CommonJS project can `require()` an ES module, which is how such projects use the packages (ADR 0002). |
-| D15 | Validators are consumed through the Standard Schema interface (types vendored, no dependency). Zod is a dev/peer dependency of `@ectype/zod` only. | "Zod by default, anything else allowed" with zero coupling in core. |
+| D15 | Validators are consumed through the Standard Schema interface (types vendored, no dependency). Zod is a dev/peer dependency of `@egon-orm/zod` only. | "Zod by default, anything else allowed" with zero coupling in core. |
 
 ---
 
@@ -62,12 +69,12 @@ These are settled. Changing one requires an ADR (§9), not a unilateral edit.
 
 ```
 packages/
-  core/            -> "ectype"            schema, types, changeset, query, repo, adapter interface, Kysely bridge
-  postgres/        -> "@ectype/postgres"  Kysely PostgresDialect wiring, pg type mapping, error normalisation
-  sqlite/          -> "@ectype/sqlite"    (step 17)
-  mysql/           -> "@ectype/mysql"     (step 17)
-  zod/             -> "@ectype/zod"       derive Zod schemas from Ectype schemas (step 06)
-  cli/             -> "@ectype/cli"       migration runner and generators (step 18)
+  core/            -> "egon-orm"            schema, types, changeset, query, repo, adapter interface, Kysely bridge
+  postgres/        -> "@egon-orm/postgres"  Kysely PostgresDialect wiring, pg type mapping, error normalisation
+  sqlite/          -> "@egon-orm/sqlite"    (step 17)
+  mysql/           -> "@egon-orm/mysql"     (step 17)
+  zod/             -> "@egon-orm/zod"       derive Zod schemas from Egon schemas (step 06)
+  cli/             -> "@egon-orm/cli"       migration runner and generators (step 18)
 benchmarks/        comparative and micro benchmarks (step 19)
 examples/          blog (reference app used by docs and e2e tests)
 docs/
@@ -80,17 +87,20 @@ docs/
 
 ```
 contracts/     frozen shared interfaces (step 02)
-types/         EctoType implementations (03)
+types/         FieldType implementations (03)
 schema/        Schema(), field builder, associations, metadata (04)
 changeset/     changeset core (05), validators (06), nested (15)
 query/         ast.ts, expr.ts (07); builder.ts (08); advanced/ (09)
 compiler/      AST -> Kysely nodes, plan cache (10)
 adapter/       Adapter implementation over Kysely, telemetry (11)
 repo/          read (12), write (13), preload (14), transaction + sandbox (16)
-multi/         Multi (16)
+batch/         Batch (16)
 errors.ts
-index.ts       the only public entry point; everything else is internal
+index.ts       the public entry point; everything else is internal
 ```
+
+Public entry points for the first release are exactly two: `egon-orm` and
+`egon-orm/testing` (step 16). `egon-orm/migration` arrives with step 18.
 
 Each step file lists the paths it **owns**. Do not edit files outside your owned paths
 except to add an export line to `index.ts`. If you need a change elsewhere, write it in
@@ -104,25 +114,26 @@ This is the target surface. Step files specify each part exactly; this section e
 that every worker has the same picture.
 
 ```ts
-import { Schema, t, hasMany, belongsTo, timestamps, cast, from, count, createRepo } from "ectype";
-import { postgres } from "@ectype/postgres";
+import { Schema, t, hasMany, belongsTo, timestamps, cast, from, count, createRepo } from "egon-orm";
+import { postgres } from "@egon-orm/postgres";
 import { z } from "zod";
 
-// --- Schema (Ecto.Schema) --------------------------------------------------
+// --- Schema ------------------------------------------------------------------
 export class User extends Schema("users", {
-  id: t.id(),
-  email: t.string(),
+  id: t.integer().primaryKey(),               // database-generated unless { dbGenerated: false }
+  email: t.string(),                          // non-null by default
   name: t.string().nullable(),
   age: t.integer().nullable(),
   role: t.enum(["admin", "member"]).default("member"),
   password: t.string().virtual(),
   passwordHash: t.string().redact(),
-  ...timestamps(),
+  ...timestamps(),                            // createdAt, updatedAt
 }) {
   static posts = hasMany(() => Post, { foreignKey: "authorId" });
 
-  // Changeset functions are ordinary static methods, as in Ecto.
-  static changeset(user: User, params: unknown) {
+  // Changeset functions are ordinary static methods. Pass the class for a new record,
+  // a loaded row for an update.
+  static changeset(user: User | typeof User, params: unknown) {
     return cast(user, params, ["email", "name", "age", "password"])
       .validateRequired(["email"])
       .validate(z.object({ email: z.string().email(), age: z.number().int().min(13).nullish() }))
@@ -132,33 +143,35 @@ export class User extends Schema("users", {
 }
 
 export class Post extends Schema("posts", {
-  id: t.id(),
+  id: t.integer().primaryKey(),
   title: t.string(),
   published: t.boolean().default(false),
-  authorId: t.id(),
+  authorId: t.integer(),                      // a plain column; the association points at it
   ...timestamps(),
 }) {
   static author = belongsTo(() => User, { foreignKey: "authorId" });
 }
 
-// --- Repo (Ecto.Repo) ------------------------------------------------------
+// --- Repo --------------------------------------------------------------------
 const repo = createRepo({ adapter: postgres({ connectionString: process.env.DATABASE_URL }) });
 
-const result = await repo.insert(User.changeset(new User(), input));
-if (!result.ok) return result.error.errors;        // { email: [{ message: "has already been taken", ... }] }
-const user = result.value;                          // User
+const result = await repo.insert(User.changeset(User, input));
+if (!result.success) return result.error.errorMessages();   // { email: ["has already been taken"] }
+const user = result.data;                                   // User
 
-// --- Query (Ecto.Query) ----------------------------------------------------
+// --- Query -------------------------------------------------------------------
 const q = from(User, "u")
   .joinAssoc("u", "posts", "p")
   .where(({ u, p }) => u.age.gte(18).and(p.published))
   .groupBy(({ u }) => u.id)
-  .orderBy(({ u }) => u.insertedAt.desc())
+  .orderBy(({ u }) => u.createdAt.desc())
   .select(({ u, p }) => ({ id: u.id, email: u.email, posts: count(p.id) }));
 
 const rows = await repo.all(q);                     // { id: number; email: string; posts: number }[]
 
-const withPosts = await repo.all(from(User, "u").preload("posts"));
+const withPosts = await repo.all(
+  from(User, "u").preload("posts", (q) => q.orderBy(({ posts }) => posts.createdAt.desc()).limit(3)),
+);
 withPosts[0].posts[0].title;                        // typed: Loaded<typeof User, "posts">
 
 await repo.transaction(async (tx) => {
@@ -167,9 +180,9 @@ await repo.transaction(async (tx) => {
 });
 ```
 
-Ecto to Ectype naming is mechanical: `snake_case` functions become `camelCase`, `fun!`
-becomes `funOrThrow`, `fun?` becomes `isFun`/`hasFun`. The full mapping table is a
-deliverable of step 20 and each step contributes its rows.
+Naming is camelCase throughout; a throwing twin is `funOrThrow`; a predicate is
+`isFun`/`hasFun`. Names are chosen for people arriving from Drizzle, Sequelize and Prisma
+(§8, §11).
 
 ---
 
@@ -192,7 +205,7 @@ deliverable of step 20 and each step contributes its rows.
 | 13 Repo: writes | `13-repo-write.md` | 05, 12 | 09, 14 |
 | 14 Associations and preload | `14-associations-preload.md` | 12 | 13 |
 | 15 Nested changesets and embeds | `15-nested-changesets.md` | 13, 14 | 16 |
-| 16 Transactions, Multi, sandbox | `16-transactions-multi.md` | 13 | 14, 15 |
+| 16 Transactions, Batch, sandbox | `16-transactions-batch.md` | 13 | 14, 15 |
 | 17 SQLite and MySQL | `17-dialects.md` | 12–16 | 18 |
 | 18 Migrations and CLI (**follow-up, after 21**) | `18-migrations-cli.md` | 11, 21 | — |
 | 19 Performance | `19-performance.md` | harness after 01; final pass after 16 | — |
@@ -220,7 +233,7 @@ All of these apply to every step. Step files add specifics.
   feature per dialect. No database needed.
 - **Integration tests** (`*.itest.ts`): real databases from `docker compose`. Each test
   runs inside the sandbox (step 16; before that, a truncate helper from step 01).
-- **Property tests** (fast-check) where the input space is large: type cast/dump/load
+- **Property tests** (fast-check) where the input space is large: type cast/toDb/fromDb
   round trips, changeset invariants, and "no user-supplied string ever appears in emitted
   SQL text".
 - **Conformance suite** (`packages/core/test/conformance`): dialect-independent
@@ -253,7 +266,7 @@ Rules that follow from the budgets:
 - No `Proxy`, no `Object.defineProperty` per row, no `delete`, no spread of row objects on
   hot paths. Keep object shapes monomorphic: assign every field in the same order, always.
 - No per-call closures or arrays where a precomputed table on schema metadata will do.
-- Identity `load`/`dump` functions are skipped by reference check, not called.
+- Identity `fromDb`/`toDb` functions are skipped by reference check, not called.
 - Anything derivable from a schema or a query shape is computed once and cached on it.
 - Do not optimise without a benchmark that shows the win; commit the benchmark.
 
@@ -262,13 +275,21 @@ Rules that follow from the budgets:
 ## 8. Documentation standards
 
 - Every exported symbol has TSDoc: one-sentence summary, `@example`, `@throws` where
-  relevant, and "Ecto equivalent: `Ecto.Changeset.cast/4`" where one exists.
+  relevant.
+- **No Ecto positioning.** TSDoc, code comments and guide pages never say "Ecto
+  equivalent", "as in Ecto" or "differences from Ecto", and there is no "Coming from Ecto"
+  page or Ecto mapping table. Readers come from Drizzle, Sequelize and Prisma; comparisons
+  and migration guides are written for them. (These plan files may still cite Ecto as the
+  behavioural reference for workers. Where a step file asks for an "Ecto equivalent"
+  column or a "Differences from Ecto" box in *user* documentation, leave it out.)
 - Each step delivers its guide page(s) under `docs/site/guide/` as listed in its file.
   Step 20 assembles, edits and cross-links; it does not write other steps' content from scratch.
 - Every code block in the docs is extracted and type-checked in CI (step 20 builds the
   extractor; until then keep examples as real files under `docs/site/examples/` and
   include them by reference).
-- Deviations from Ecto are stated explicitly in a "Differences from Ecto" box on the page.
+- Behaviour that would surprise someone coming from another ORM (no lazy loading,
+  explicit transactions, non-null by default, results instead of exceptions) is stated in
+  a "Good to know" box on the page.
 
 ---
 
@@ -280,7 +301,7 @@ Rules that follow from the budgets:
 3. Build in this order: types and signatures, type tests, unit tests, implementation,
    integration tests, benchmarks, docs.
 4. If the spec is wrong, ambiguous, or blocked by another step: do not guess silently.
-   Choose the option closest to Ecto's documented behaviour, implement it, and record it
+   Choose the option closest to Ecto's documented behaviour (unless §11 says otherwise), implement it, and record it
    under "Decisions" in your status note. If it changes a frozen contract or a decision in
    §2, write `docs/adr/NNNN-title.md` (context, options, decision, consequences) and stop
    that part of the work until it is accepted.
@@ -348,8 +369,172 @@ Definition of done, common to all steps:
 
 ## 10. Owner decisions (2026-10-11)
 
-1. **Name:** `ectype` / `@ectype/*` for now. npm availability still unchecked (step 21 confirms).
+1. **Name:** superseded on 2026-10-12: **Egon ORM**, `egon-orm` / `@egon-orm/*`. The npm scope is still to be claimed (step 21 confirms).
 2. **Database tiers:** Postgres first (D13 stands). SQLite and MySQL follow in step 17.
 3. **Migrations and CLI:** wanted, but as a **follow-up**. Step 18 is not part of the first
    release; it starts after step 21. Until then tests and examples use plain SQL fixtures.
-4. **Nullable default (D3):** pending owner confirmation; non-null by default stands until told otherwise.
+4. **Nullable default (D3):** confirmed 2026-10-13: non-null by default.
+
+---
+
+## 11. Developer-API review (owner decisions, 2026-10-13)
+
+The owner walked through the whole developer API. These decisions are settled (changing
+one needs an ADR, as for §2) and the step files have been edited to match. Where a step
+file still disagrees with this section, this section wins; record the disagreement in
+your status note.
+
+### Repo and adapters (steps 11, 12, 17)
+
+- `planCacheSize` is an **adapter** option (`postgres({ planCacheSize })`), not a repo option.
+- No `types` option on an adapter. The schema field decides the runtime type.
+- Logging options live on the repo: `log: true | LoggerFn | { params: true }`. There is no
+  separate `logParams` or `debug` switch.
+- `warnOnRootUseInTransaction` is a development-only warning implemented with
+  `AsyncLocalStorage` (never in production; transactions stay explicit).
+- `repo.ping()` and `repo.poolStats()` pass through to the adapter. `repo.on(...)` forwards
+  the pool events (`connect`, `disconnect`, `poolExhausted`) as well as `query`.
+- **`prefix` is renamed `schema` everywhere**: the repo option, the per-call option, the
+  third argument of `Schema()`, and `.schema("tenant_1")` on a query. (In prose, "schema
+  class" or "model" is the class; "database schema" is this option.)
+- The adapter and the repo stay two objects.
+- Every adapter takes `connectionString` (MySQL's `uri` is gone) and has no `timezone`
+  option: the MySQL session is always UTC. SQLite turns `foreign_keys` on by default and
+  ignores row locks silently (single writer). SQLite and MySQL stay in the first release.
+
+### Schemas (steps 03, 04)
+
+- **No `t.id()`** (and no `types.id`). A key is `t.integer().primaryKey()`; a foreign key is
+  a plain `t.integer()` (or `t.uuid()`). `.primaryKey()` on an integer or bigint implies
+  database-generated; `.primaryKey({ dbGenerated: false })` opts out.
+- `t.bigint({ mode: "number" })` maps a 64-bit column to a JS `number` and throws
+  `CastError` beyond the safe range. Plain `t.bigint()` is a JS `bigint`.
+- **No public constructor** (D2). `new User(...)` is not written by developers.
+- `timestamps()` gives `createdAt` / `updatedAt`.
+- Renames: `utcDatetime` → `timestamp`, `naiveDatetime` → `localTimestamp`,
+  `.source()` → `.column()`, `.readAfterWrites()` → `.dbGenerated()`,
+  `EctoType` → `FieldType`, `load` / `dump` → `fromDb` / `toDb`. `t.map<T>()` is removed
+  (use `t.json<T>()`). `.redact()` stays.
+- **One namespace for types.** There is no public `types` object: wherever a type is
+  needed (`param`, `expr.cast`, `values`, schemaless changesets) pass a field builder,
+  `t.integer()`.
+- A custom type's `cast` returns `{ success: true, data } | { success: false, message }`.
+- `date` stays a `"YYYY-MM-DD"` string and `decimal` a string by default.
+- Class members: getters and methods only.
+
+### Associations (steps 04, 14)
+
+- The word is **association**; the loading verb is **preload**.
+- `foreignKey` is **required** on `hasOne` and `hasMany` (a default derived from the class
+  name breaks under minification). `belongsTo` keeps its default, `<property name>Id`.
+- `manyToMany` with a join table given as a string: `joinKeys` is **required** and holds the
+  join table's **column** names, `joinKeys: { owner: "user_id", target: "tag_id" }`. There
+  is no default. With a join schema class they are field names.
+- No `optional` on `belongsTo` (the foreign key's `.nullable()` decides) and no `onDelete`.
+- The association option `preloadOrder` is renamed `orderBy`.
+
+### Queries (steps 07, 08, 09)
+
+- The alias is **required**: `from(User, "u")`. There is no `"root"` default.
+- `from` takes a schema class or an explicit source wrapper (`subquery(q)`, `cte(...)`,
+  `values(...)`). It does not take a bare `Query`.
+- `orWhere` stays (`.where(a).where(b).orWhere(c)` is `(a AND b) OR c`). `neq` stays.
+- `.first()` and `.last()` are removed from the builder; `reverseOrder` stays.
+- `.lock("update" | "share" | "noKeyUpdate" | "keyShare", { skipLocked?, noWait? })`, or
+  `.lock(fragment\`...\`)`. No SQL strings.
+- `withCte` is a query method only: `from(cte("tree", Category), "t").withCte("tree", q, { recursive: true })`.
+- Bulk updates use **`.set(...)`**, an object or a callback returning one:
+  `.set({ published: true })`, `.set(({ p }) => ({ views: p.views.add(1) }))`. There is no
+  `inc` / `push` / `pull`; arrays get `append` and `remove` expression methods.
+- Update and delete queries declare `RETURNING` with **`.returning(...)`**, not `.select()`.
+- `parentAs` is replaced by `outerRef("u", User)`.
+- **Future work, not in the first release:** lateral joins, `VALUES` sources,
+  table-valued fragments, index hints, data-modifying CTEs, named server-side prepared
+  statements, `fromKyselyDialect`, `sortParam` / `dropParam` / index-keyed form params.
+
+### Repo reads (step 12)
+
+- Short names stay: `all`, `one`, `get`, `getBy`. Added: `repo.first(q)` (adds `LIMIT 1`,
+  returns `R | null`) and `repo.count(q)`.
+- Named parameters and options stay separate arguments: `repo.all(q, opts?)` when the
+  query has none, `repo.all(q, params, opts?)` when it has.
+- `repo.query` is renamed `repo.raw`. The per-call `telemetry` option is renamed `context`.
+
+### Changesets (steps 05, 06)
+
+- A new-record changeset has `cs.data === null` and `cs.model` (the class); `getField`
+  falls back to field defaults. `applyChanges()` exists only for changesets of loaded rows.
+- `.validate()` keeps **every** issue by default; `scope: "changed"` is the opt-in.
+- `cast` adds `can't be blank` when a non-nullable field is set to `null`, and
+  `repo.insert` returns the same error for a required field with no value.
+- `unsafeValidateUnique` is renamed `validateUniqueAsync`.
+- Default unique-constraint names accepted: `<table>_<cols>_key`, `_unique` and `_index`.
+- Placeholders are `{count}`; meta keys are camelCase (`constraintName`).
+- The default messages are unchanged (`can't be blank`, `has already been taken`, ...).
+
+### Writes (step 13)
+
+- `insert` takes a changeset only. `insert` returns a `Result`; `insertOrThrow` throws.
+  The same for `update`, `delete`, `insertOrUpdate` (name kept).
+- `insertAll` applies defaults, timestamps and autogenerated values (it still skips
+  validation).
+- `updateAll` has no options shorthand; the query carries `.set(...)`.
+- Unfiltered `updateAll` / `deleteAll` are allowed; there is no guard.
+- One upsert option: `onConflict: "nothing" | { target?, update: "all" | Field[] | { except: Field[] } }`,
+  where `target` is `Field[] | { constraint: string } | Fragment`. Throwing is the default
+  and has no spelling. `target` is optional because MySQL cannot take one.
+- With `onConflict: "nothing"` and a conflict, the result is `{ success: true, data: null }`
+  (typed nullable only for that option).
+
+### Preloads (steps 08, 14)
+
+- Forms: the short forms (`"posts"`, arrays, nested objects), the **callback form**
+  `preload("posts", (q) => q.where(({ posts }) => ...).orderBy(...).limit(3))`, and the
+  join form `{ posts: "p" }`. There is no custom-query form and no `preloadQuery`.
+- In a callback the binding is named after the association. `limit` and `offset` are
+  **per parent** and require an order (the callback's, or the association's `orderBy`).
+- A callback may `select`. The result is then plain objects of that shape, and the select
+  **must include the association's key** under its field name, or the query throws
+  `QueryError` when built (nothing is added or stripped automatically; many-to-many is
+  the exception, since its key is in the join table). Nested preloads and nested writes
+  need whole rows.
+- Join-form tie-break: a string is a binding alias only when the query has a binding of
+  that name joined through that association; otherwise it is a nested association.
+- Sibling associations load one at a time by default (`maxConcurrency: 1`).
+- `assocLoaded` is renamed `isLoaded`. `repo.preload(rows, "posts", (q) => ...)` takes
+  the same callback.
+
+### Nested writes (step 15)
+
+- `putAssoc` / `putEmbed` take plain objects, changesets or loaded rows; `buildAssoc`
+  returns a changeset.
+- `onReplace`: `"error"` (default) | `"invalid"` | `"setNull"` | `"update"` | `"delete"` | `"deleteIfExists"`.
+- To-many params are arrays only.
+
+### Transactions, Batch, sandbox (step 16)
+
+- `Multi` is renamed **`Batch`**: `createBatch()`, run with `repo.transaction(batch)`
+  (`repo.transaction` takes a callback or a batch; there is no `repo.transact`).
+- A batch failure is `{ step, error, completed }`.
+- The sandbox has no `mode: "shared"`.
+
+### Errors and logging (steps 02, 11, 12)
+
+- `EctypeError` → `EgonError`; `AdapterError` → `DatabaseError`; its sub-codes are
+  camelCase (`serializationFailure`). `MigrationError` is not exported until step 18.
+
+### Changes to merged code
+
+Steps 01 and 02 are merged and predate this review. One PR must bring them into line
+before step 03 starts:
+
+- the Ectype → Egon rename (package names, imports, `EctypeError`, `CLAUDE.md`,
+  `CONTRIBUTING.md`, docs skeleton), and the removal of "Ecto equivalent" from existing
+  TSDoc and of the "Ecto cheat sheet" nav stub;
+- contracts: `prefix` → `schema` (`SchemaMeta`, `RowMeta`, `compile*` arguments);
+  `Result` as `{ success, data }` with `success()` / `failure()`; `CastResult` likewise;
+  `EctoType` → `FieldType`; `load` / `dump` → `fromDb` / `toDb`; `readAfterWrites` →
+  `dbGenerated`; `AdapterError` → `DatabaseError` and camelCase codes; `MigrationError`
+  unexported; `preloadOrder` → `orderBy`; `optional` and `onDelete` dropped from
+  `AssocMeta`; placeholder syntax `{count}`;
+- `fixtures/blog.sql`: `inserted_at` → `created_at`.

@@ -52,7 +52,7 @@ mapping (the floor), Kysely, Drizzle, Prisma, TypeORM, MikroORM. Scenarios:
 Report throughput, latency percentiles, and allocated bytes per operation
 (`process.memoryUsage()` deltas over many iterations, with `--expose-gc`). Be fair: each
 library used the way its docs recommend, versions pinned and listed, the suite published
-so others can reproduce it. Results that make Ectype look bad are published too, with an issue filed.
+so others can reproduce it. Results that make Egon look bad are published too, with an issue filed.
 
 ## Part C — Optimisation pass
 
@@ -73,11 +73,11 @@ param binding, hydration, changeset cast, insert, preload stitching):
    - Whether asking the driver for array-mode rows is reachable through Kysely and worth it.
    - Server-side prepared statements for `prepare`d queries (latency and plan-cache effects).
    - Cost of `Result` object allocation on writes; cost of copy-on-write changesets.
-   - Startup cost: time to define 100 schemas and resolve associations; import time of `ectype` (target < 30 ms cold).
+   - Startup cost: time to define 100 schemas and resolve associations; import time of `egon-orm` (target < 30 ms cold).
 5. **Memory.** Per-row retained size for a 10-column row (target: within 1.2× of a plain
    object literal); no growth over 1M iterations of each e2e scenario (leak check); plan
    cache bounded under a workload of unique query shapes.
-6. **Bundle.** Size of `ectype` minified+gzipped with and without tree-shaking a
+6. **Bundle.** Size of `egon-orm` minified+gzipped with and without tree-shaking a
    changeset-only import; track in CI with a size budget; verify `sideEffects: false` holds.
 
 ## Part D — Guidance

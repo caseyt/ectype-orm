@@ -10,25 +10,26 @@ Read ADR 0002 first; this spec assumes Kysely is the back end (D12).
 ## Goal
 
 Implement the `Adapter` contract on top of Kysely's dialect/driver layer, and ship
-`@ectype/postgres`: connection pooling, execution, streaming, transactions primitives,
+`@egon-orm/postgres`: connection pooling, execution, streaming, transactions primitives,
 type overrides, error normalisation, telemetry.
 
 ## Public API
 
 ```ts
-import { postgres } from "@ectype/postgres";
+import { postgres } from "@egon-orm/postgres";
 
 const adapter = postgres({
   connectionString: process.env.DATABASE_URL,     // or host/port/user/password/database/ssl
   pool: { max: 10, idleTimeoutMs: 30_000, connectionTimeoutMs: 5_000 },
   // or bring your own: pool: existingPgPool
-  types: { bigint: "bigint" | "number" | "string", numeric: "string", date: "string" },
+  planCacheSize: 1000,                            // the plan cache lives in the adapter
   statementTimeoutMs: undefined,
   applicationName: "my-app",
 });
 
-// Escape hatch for any Kysely dialect (documented as advanced):
-import { fromKyselyDialect } from "ectype/adapter";
+// There is no `types` option: the schema field decides the runtime type (t.bigint() vs
+// t.bigint({ mode: "number" })). `fromKyselyDialect` is future work (plan README §11):
+// Kysely does not appear in the public API, and there is no "egon-orm/adapter" entry point.
 ```
 
 `createRepo({ adapter, ... })` is step 12; this step delivers everything beneath it.
@@ -53,28 +54,29 @@ import { fromKyselyDialect } from "ectype/adapter";
    cursor (`pg-cursor` through Kysely's stream support or directly). Early `break`/`return`
    closes the cursor and releases the connection; tested.
 5. **Type overrides (Postgres).** Supply codecs for logical types where `pg` does not
-   already return the app representation: `bigint` (int8 text → `bigint`; default
-   `"bigint"`), `decimal` (stays string), `date` (stay string; disable `pg`'s Date parsing
+   already return the app representation: `bigint` (int8 text → `bigint`, or → `number` for
+   `t.bigint({ mode: "number" })`, throwing `CastError` beyond the safe range), `decimal` (stays string), `date` (stay string; disable `pg`'s Date parsing
    for OID 1082 on **our pool only**, never by mutating global `pg.types`), `time`,
    `binary` (Buffer → Uint8Array view), arrays of these. Everything else `IDENTITY`.
-   `types.id()` columns (bigserial) load as `number` when within safe range; values beyond
-   it throw `CastError` suggesting `t.bigint()`.
+   There is no `id` type: an `int4` key is `t.integer()`, a `bigserial` key is
+   `t.bigint({ mode: "number" })`.
 6. **Error normalisation.** Map SQLSTATE to errors from `core/errors.ts`:
    `23505` unique, `23503` foreign key, `23514` check, `23P01` exclusion, `23502` not-null →
    `ConstraintError { type, constraint, table, column, detail }`; `40001`/`40P01` →
-   `AdapterError` with `retryable: true` and `code: "serialization_failure" | "deadlock"`;
-   connection failures → `AdapterError` with `code: "connection"`. Always keep the driver
-   error as `cause`, and attach the SQL (never the params, unless `debug: true`).
+   `DatabaseError` with `retryable: true` and `code: "serializationFailure" | "deadlock"`;
+   connection failures → `DatabaseError` with `code: "connection"`. Always keep the driver
+   error as `cause`, and attach the SQL (never the params, unless the repo has `log: { params: true }`).
 7. **Capabilities (Postgres):** everything true; lock modes listed; `ddlTransactions: true`.
 8. **Telemetry.** Adapter emits events through a tiny synchronous emitter (no
    EventEmitter overhead when there are no listeners; check a boolean first):
    `query` `{ sql, paramCount, durationMs, queueMs, rowCount, error, params, context }` (no
    `source`: the repo adds it, using the `context` it passed to `execute`),
-   `connect`, `disconnect`, `poolExhausted`. Step 12 exposes `repo.on("query", fn)` and a
-   `log: true | LoggerFn` option. Parameters are included only when `logParams: true`, and
+   `connect`, `disconnect`, `poolExhausted`. Step 12 exposes `repo.on(event, fn)` for all four events and a
+   `log: true | LoggerFn | { params: true }` option. Parameters are included only with
+   `log: { params: true }` (there is no separate `logParams` or `debug` switch), and
    redacted fields are never logged.
 9. **Timeouts and cancellation.** `execute(..., { signal?: AbortSignal, timeoutMs? })`:
-   abort issues a Postgres cancel request and rejects with `AdapterError { code: "aborted" }`.
+   abort issues a Postgres cancel request and rejects with `DatabaseError { code: "aborted" }`.
 10. **Health.** `adapter.ping()`; pool stats (`size`, `idle`, `waiting`).
 11. **Driver choice.** Use `pg` (peer dependency) via Kysely's `PostgresDialect`. Check
     whether a maintained postgres.js dialect is viable and, if so, expose
@@ -104,7 +106,7 @@ package runs it; step 17 runs it for SQLite and MySQL.
 
 `getting-started.md` (install, connect, first query — shared with step 12), `adapters.md`
 (options, pooling, bigint/numeric/date handling and why, errors, telemetry and logging,
-cancellation, bring-your-own pool, using another Kysely dialect).
+cancellation, bring-your-own pool).
 
 ## Acceptance
 

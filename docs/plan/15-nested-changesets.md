@@ -17,36 +17,37 @@ with Ecto's semantics for matching, replacing and ordering.
 ```ts
 // Associations from external params
 cast(post, params, ["title"])
-  .castAssoc("comments", { with: Comment.changeset, required: false, sortParam?: "commentsSort", dropParam?: "commentsDrop" })
+  .castAssoc("comments", { with: Comment.changeset, required: false })
 
-// Associations from trusted data (rows, changesets, or plain objects)
+// Associations from trusted data (loaded rows, changesets, or plain objects)
 change(post).putAssoc("tags", [tagA, tagB])
 change(comment).putAssoc("post", post)
 
 // Embeds
 cast(user, params, ["email"]).castEmbed("address", { with: Address.changeset, required: true })
-change(user).putEmbed("address", new Address({ city: "Oslo" }))
+change(user).putEmbed("address", { city: "Oslo" })              // a plain object; there are no constructed instances
 
 // Convenience
-buildAssoc(user, "posts", { title: "Hi" })      // new Post with authorId set (Ecto.build_assoc/3)
+buildAssoc(user, "posts", { title: "Hi" })      // Changeset<Post> for a new record with authorId set
 ```
 
 `onReplace` is declared on the association/embed (step 04):
-`"raise"` (default) | `"markAsInvalid"` | `"nilify"` | `"update"` (to-one only) | `"delete"` | `"deleteIfExists"`.
+`"error"` (default; was `"raise"`) | `"invalid"` | `"setNull"` | `"update"` (to-one only) | `"delete"` | `"deleteIfExists"`.
 
 ## Behaviour
 
 ### Casting (`castAssoc` / `castEmbed`)
 
 1. The association must be **loaded** on the parent data when the parent is `loaded`
-   (otherwise throw `NotLoadedError` telling the user to preload). `built` parents are treated as empty.
-2. Params for to-one: an object or `null`. For to-many: an array of objects, or an object
-   whose values are objects keyed by index (HTML forms), sorted by numeric key.
+   as whole rows (otherwise throw `NotLoadedError` telling the user to preload; an
+   association preloaded with a `select` does not count). A new-record parent is treated as empty.
+2. Params for to-one: an object or `null`. For to-many: an **array** of objects only
+   (index-keyed form objects are future work, plan README §11).
 3. **Matching** (to-many): each param item is matched to an existing child by primary key
    (cast with the key's type). Match → `with(existingChild, item)` → action `update`.
-   No match or no id → `with(new Child(), item)` → action `insert`.
+   No match or no id → `with(Child, item)` (the class: a new record) → action `insert`.
    Existing children absent from params → handled per `onReplace`:
-   `raise` throws; `markAsInvalid` adds `"is invalid"` on the parent field; `nilify` produces an
+   `error` throws; `invalid` adds `"is invalid"` on the parent field; `setNull` produces an
    update changeset setting the foreign key to `null`; `delete` produces a changeset with action `delete`.
 4. To-one: params with matching id → update; otherwise the old one is replaced per
    `onReplace` (`update` reuses the existing row regardless of id) and a new one is inserted.
@@ -54,7 +55,7 @@ buildAssoc(user, "posts", { title: "Hi" })      // new Post with authorId set (E
    is required (compile error where detectable, runtime error otherwise). It may take a
    third argument, the item's position.
 6. `required: true` adds `"can't be blank"` when the result is empty/null.
-   `sortParam`/`dropParam` behave as in Ecto 3.10+.
+   `sortParam`/`dropParam` are future work.
 7. Result: `cs.changes[assoc]` holds a child changeset (to-one) or an array of child
    changesets (to-many). The parent's `valid` is false if any child is invalid. Child
    errors stay on the children; `traverseErrors` descends into them and produces nested
@@ -64,8 +65,8 @@ buildAssoc(user, "posts", { title: "Hi" })      // new Post with authorId set (E
 
 ### `putAssoc` / `putEmbed`
 
-Accepts rows (`built` → insert, `loaded` → kept as-is, or update if wrapped in a
-changeset), changesets, or plain objects (→ `change(new Target(), obj)`; for objects with
+Accepts loaded rows (kept as-is, or updated if wrapped in a changeset), changesets
+(a new-record changeset → insert), or plain objects (→ `change(Target, obj)`; for objects with
 a primary key of an existing child → update). Replacement of existing children follows
 `onReplace`. Putting the same loaded rows that are already there is a no-op.
 
@@ -80,7 +81,7 @@ a primary key of an existing child → update). Replacement of existing children
 3. Each child goes through the normal insert/update/delete path, so its own nested
    changes, `prepareChanges`, constraints and optimistic locking all apply recursively.
 4. If any child fails (invalid, or a handled constraint), roll back and return
-   `err(parentChangeset)` with the failing child changeset in place carrying its errors
+   `failure(parentChangeset)` with the failing child changeset in place carrying its errors
    and `action`. Nothing is partially written.
 5. On success the returned parent row has the association loaded with the persisted
    children (deleted ones removed).
@@ -90,12 +91,12 @@ a primary key of an existing child → update). Replacement of existing children
 
 - `t.embedOne`/`t.embedMany` fields are stored in one `jsonb` column. The embed type
   (`types/embed.ts`) dumps each embedded row by dumping its fields with their own types
-  (dates as ISO strings, etc.) and loads by constructing embedded rows through the embedded
-  schema's factory. Nested embeds supported. Unknown keys in stored JSON are ignored;
+  (dates as ISO strings, etc.) and loads by building embedded rows through the embedded
+  schema's row factory (no constructor). Nested embeds supported. Unknown keys in stored JSON are ignored;
   missing keys get defaults.
 - Embedded schemas may declare `id: t.uuid().primaryKey().autogenerate()` to enable
   matching in `embedMany`; without a key, `castEmbed` on `embedMany` replaces the whole list.
-- `onReplace` for embeds: `raise` | `markAsInvalid` | `update` (one) | `delete`.
+- `onReplace` for embeds: `error` | `invalid` | `update` (one) | `delete`.
 - Any change inside an embed marks the parent field as changed and rewrites the whole column.
 - Querying inside embeds uses the JSON path operators from step 07
   (`u.address.path("city")`); add typed sugar `u.address.field("city")` → `Expr<string>`.
@@ -103,7 +104,7 @@ a primary key of an existing child → update). Replacement of existing children
 ## Use cases to cover in tests and docs
 
 - Blog post form with dynamic comment rows: add, edit, delete in one submit.
-- Tag picker: `putAssoc` with existing tags and find-or-create new ones inside a `Multi`.
+- Tag picker: `putAssoc` with existing tags and find-or-create new ones inside a `Batch`.
 - User with an embedded address and a list of embedded phone numbers.
 - Order with line items where removing an item deletes it (`onReplace: "delete"`).
 - API payload validated by one nested Zod schema, errors landing on the right child.
@@ -111,8 +112,8 @@ a primary key of an existing child → update). Replacement of existing children
 ## Tests
 
 - Unit: matching table (id present/absent/unknown/duplicate × existing/none) for each
-  `onReplace`; form-style indexed params; `required`; error traversal shape; put variants;
-  embed dump/load round trip (property test) including nested embeds and dates.
+  `onReplace`; `required`; error traversal shape; put variants;
+  embed toDb/fromDb round trip (property test) including nested embeds and dates.
 - Type tests: `castAssoc`/`putAssoc` names and value types; `with` signature; embed field
   types in `Row`, `InsertShape`, and query expressions.
 - Integration (conformance/nested, Postgres): each association kind inserted and updated
@@ -122,7 +123,7 @@ a primary key of an existing child → update). Replacement of existing children
 ## Docs
 
 `nested-changesets.md` (cast vs put, matching rules with a table, `onReplace` options with
-consequences, persistence order, error shapes, forms recipe) and `embeds.md`.
+consequences, persistence order, error shapes) and `embeds.md`.
 
 ## Acceptance
 

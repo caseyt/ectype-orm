@@ -13,20 +13,23 @@ and provide the bulk operations.
 ## Public API
 
 ```ts
-repo.insert(changesetOrRow, opts?)          // Promise<Result<Row, Changeset>>
+repo.insert(changeset, opts?)               // Promise<Result<Row, Changeset>>: { success: true, data } | { success: false, error }
 repo.update(changeset, opts?)
 repo.delete(rowOrChangeset, opts?)
-repo.insertOrUpdate(changeset, opts?)       // by row state: built -> insert, loaded -> update
+repo.insertOrUpdate(changeset, opts?)       // new-record changeset -> insert, loaded-row changeset -> update (not an upsert)
 repo.insertOrThrow / updateOrThrow / deleteOrThrow / insertOrUpdateOrThrow   // Row; throw InvalidChangesetError
 
 repo.insertAll(Schema, rows, opts?)         // { count: number; rows: R[] | null }
-repo.updateAll(query, params?, opts?)       // query built with .update(...) (step 09); also accepts { set, inc } shorthand in opts
+repo.updateAll(query, params?, opts?)       // query built with .set(...) (step 09); there is no options shorthand
 repo.deleteAll(queryable, params?, opts?)
 
 type InsertOptions = ReadOptions & {
   returning?: true | FieldName[];           // true = all fields
-  onConflict?: "raise" | "nothing" | "replaceAll" | { replace: FieldName[] } | { replaceAllExcept: FieldName[] } | Query;
-  conflictTarget?: FieldName[] | { constraint: string } | Fragment;
+  // One upsert option. Absent = the conflict raises (there is no "raise" spelling).
+  onConflict?: "nothing" | {
+    target?: FieldName[] | { constraint: string } | Fragment;   // optional: MySQL cannot take one (QueryError if given there)
+    update: "all" | FieldName[] | { except: FieldName[] };
+  };
   staleError?: { field: string; message?: string };
   allowStale?: boolean;
 };
@@ -36,27 +39,37 @@ type InsertOptions = ReadOptions & {
 
 ### insert
 
-1. Accepts a changeset or a bare row (wrapped with `change(row)`). If `cs.valid` is false,
-   return `err(cs with action "insert")` **without touching the database**.
+1. Accepts a **changeset only** (a new-record changeset from `cast(S, ...)` / `change(S, ...)`;
+   there are no bare built rows, plan README D2). If `cs.valid` is false, return
+   `failure(cs with action "insert")` **without touching the database**.
+   **Required fields:** before any SQL, every persisted, non-nullable field that has no
+   change, no default, no autogenerate and is not database-generated gets
+   `can't be blank` (`validation: "required"`); the changeset is returned as a failure. A
+   raw NOT NULL violation from the database is therefore a bug in the schema definition,
+   not a normal outcome.
 2. Run `prepareChanges` callbacks in order (they receive a changeset with `repo` and
    `action` set, inside the same transaction when nested writes exist).
-3. Compute the values to write: data fields that differ from "unset" + changes, then
-   autogenerate (`insertedAt`/`updatedAt` share one timestamp; uuid keys), skipping virtual
+3. Compute the values to write: the changes, then the field defaults (`.default(...)`,
+   calling function defaults) for fields with no change, then
+   autogenerate (`createdAt`/`updatedAt` share one timestamp; uuid keys), skipping virtual
    fields and fields with `writable: "never"`. Fields left `undefined` are **omitted** so
    database defaults apply; `null` is written as `NULL`.
-4. `dump` each value; compile with `compileInsert` (plan keyed by column set);
-   `RETURNING` primary key + `readAfterWrites` fields (+ `returning` option).
-5. On success return the row: data + changes + returned values, state `loaded`. Virtual
+4. `toDb` each value; compile with `compileInsert` (plan keyed by column set);
+   `RETURNING` primary key + `dbGenerated` fields (+ `returning` option).
+5. On success return the row (built by the row factory): defaults + changes + returned
+   values, state `loaded`. Virtual
    field changes are kept on the returned row.
-6. `onConflict`/`conflictTarget` as Ecto. With `"nothing"` and a conflict, the returned
-   row has no database-generated id (Ecto behaviour) — document it. Capability-gated per dialect.
+6. `onConflict` as in the options above. With `"nothing"` and a conflict, nothing was
+   inserted and the result is `{ success: true, data: null }`; `insertOrThrow` returns
+   `null`. The return type is nullable **only** when the call passes `onConflict: "nothing"`
+   (overload). Capability-gated per dialect.
 7. On dialects without `RETURNING`, read back `lastInsertId` for single auto-increment keys
-   and, when other `readAfterWrites` fields exist, re-select by primary key in the same connection.
+   and, when other `dbGenerated` fields exist, re-select by primary key in the same connection.
 
 ### update
 
 1. Requires a changeset whose data is `loaded` and has a primary key; otherwise `QueryError`.
-2. Invalid → `err`. **No changes → return `ok(data)` with no query** (Ecto behaviour), unless
+2. Invalid → `failure`. **No changes → return `success(data)` with no query** (Ecto behaviour), unless
    `force: true`. `updatedAt` is autogenerated only when something else changes.
 3. `UPDATE ... SET <changed columns> WHERE <pk> [AND <optimistic lock field> = old]`.
    Zero rows affected → `StaleEntryError` (or an error on `staleError.field`, or ignored with `allowStale`).
@@ -72,9 +85,10 @@ By primary key; zero rows → `StaleEntryError` (same options). Returned row has
 When the adapter raises `ConstraintError`, look for a matching declaration on the changeset:
 type matching (a declared `foreignKey` or `noAssoc` constraint matches a database
 `foreignKey` violation; the other types match their own; `notNull` matches nothing), and
-name matched per `match` (`exact` | `suffix` | `prefix`). If found, return
-`err(cs)` with the declared message on the declared field (`errorKey`), plus
-`constraint: type` and `constraint_name` in meta. If not found, **rethrow**
+name matched per `match` (`exact` | `suffix` | `prefix`; a unique constraint declared without a
+name matches any of its default names, `_key`, `_unique`, `_index`, step 05). If found, return
+`failure(cs)` with the declared message on the declared field (`errorKey`), plus
+`constraint: type` and `constraintName` in meta. If not found, **rethrow**
 `ConstraintError` with a message that tells the user exactly which call to add, e.g.:
 
 ```
@@ -84,28 +98,31 @@ The changeset has not defined this constraint. Add: .uniqueConstraint("email")
 ```
 
 Only one constraint error is reported per attempt (that is all the database reports);
-say so in the docs. Not-null violations are never converted (use `validateRequired`).
+say so in the docs. Not-null violations are never converted: the required-field check in
+insert item 1 catches them first.
 
-### `unsafeValidateUnique(fields, repo, opts)`
+### `validateUniqueAsync(fields, repo, opts)`
 
 Async changeset step: when the fields have changes and no errors, runs an `exists` query
 (excluding the row's own primary key on update) and adds
-`{ message: "has already been taken", validation: "unsafe_unique" }`. Documented as a UX
+`{ message: "has already been taken", validation: "uniqueAsync" }`. Documented as a UX
 nicety that must be paired with `uniqueConstraint`.
 
 ### Bulk
 
 - `insertAll(Schema, rows, opts)`: rows are plain objects of fields (typed `InsertShape`)
   or values may be expressions/subqueries per field; also accepts a `Query` as the source
-  (`INSERT ... SELECT`). No changesets, **no autogenerate, no timestamps** (as Ecto; state it loudly).
+  (`INSERT ... SELECT`). No changesets and no validation, but field defaults, `timestamps()`
+  and autogenerated values **are** applied to every row (a deliberate difference from Ecto;
+  not for the `INSERT ... SELECT` form, where the query supplies the columns).
   All rows are normalised to one column set (missing → `DEFAULT` where supported, else
   error listing the ragged keys). Chunk automatically to stay under the dialect's parameter
   limit (65,535 on Postgres) inside one transaction; `returning` gathers across chunks.
   `placeholders` option (Ecto) for values repeated across rows.
 - `updateAll` / `deleteAll`: compile with op `updateAll`/`deleteAll`; return
-  `{ count, rows }` where `rows` is non-null only if the query has a select (RETURNING).
-  `updateAll` on a query without `.update(...)` and without `set`/`inc` options throws.
-  `deleteAll(User)` with no `where` is allowed (as Ecto) — mention the foot-gun in docs only.
+  `{ count, rows }` where `rows` is non-null only if the query has `.returning(...)`.
+  `updateAll` on a query without `.set(...)` throws. Unfiltered `deleteAll(User)` and
+  `updateAll` are allowed with no guard (owner decision); mention the foot-gun in docs.
 
 ### Cross-cutting
 
@@ -122,15 +139,16 @@ nicety that must be paired with `uniqueConstraint`.
 autogenerated uuid and timestamps, read-after-writes; update no-op/partial/forced; delete;
 stale detection and optimistic locking under a real concurrent update; each constraint
 type converted and unconverted (message snapshot); every `onConflict` form; `insertAll`
-with 1, ragged, 10k rows (chunking) and from a query; `updateAll` with set/inc/push/pull
-and returning; `deleteAll` with joins.
+with 1, ragged, 10k rows (chunking) and from a query; `updateAll` with `.set` (literals, arithmetic, array `append`/`remove`)
+and `.returning`; `deleteAll` with joins.
 
 ## Tests
 
 - Unit (fake adapter): value computation rules (omit undefined, write null, skip virtual,
   writable modes), plan reuse across identical column sets, constraint matching
   (exact/suffix/prefix, custom names, `errorKey`), no-query-on-invalid, no-query-on-no-changes.
-- Type tests: `Result` narrowing; `insertAll` row typing; `returning` typing; update requires a changeset.
+- Type tests: `Result` narrowing on `success`; `insertAll` row typing; `returning` typing; insert and
+  update require a changeset; `data` is nullable only with `onConflict: "nothing"`.
 - Integration: the conformance suite on Postgres.
 - Benchmarks: `insert` one row vs raw `pg` (budget < 20%); `update` one field;
   `insertAll` 1,000 rows vs a hand-written multi-values insert.
@@ -150,4 +168,4 @@ constraint function, naming conventions, the "one error per attempt" rule, the u
 
 ## Out of scope
 
-Nested writes (15). Transactions and Multi (16). Tier-2 dialect behaviour (17).
+Nested writes (15). Transactions and Batch (16). Tier-2 dialect behaviour (17).
