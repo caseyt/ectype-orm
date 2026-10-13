@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, test } from "vitest";
-import { META } from "../contracts/schema.js";
+import { META, ROW } from "../contracts/schema.js";
 import { formatStruct, formatValue, omitRedacted, REDACTED, redactFields } from "./inspect.js";
 
 const SECRET = "s3cr3t-value";
@@ -307,7 +307,9 @@ describe("formatValue", () => {
       { a: 1 },
       {
         getOwnPropertyDescriptor: (target, key) =>
-          asked++ === 0 ? Reflect.getOwnPropertyDescriptor(target, key) : undefined,
+          typeof key === "symbol" || asked++ === 0
+            ? Reflect.getOwnPropertyDescriptor(target, key)
+            : undefined,
       },
     );
     expect(formatValue(fickle)).toBe("{ a: undefined }");
@@ -433,11 +435,12 @@ function schemaBase(fields: readonly { name: string; redact: boolean }[]): new (
   Object.defineProperty(Base, META, { value: { fields } });
   return Base;
 }
-class User extends schemaBase([
+const USER_FIELDS = [
   { name: "id", redact: false },
   { name: "email", redact: false },
   { name: "passwordHash", redact: true },
-]) {
+];
+class User extends schemaBase(USER_FIELDS) {
   constructor(
     readonly id: number,
     readonly email: string,
@@ -619,6 +622,67 @@ describe("redaction of rows, at any depth", () => {
     // Well-formed metadata with nothing redacted prints everything.
     expect(formatValue(odd([]))).toBe("Odd { y: 2 }");
     expect(formatValue(odd([{ name: "y", redact: false }]))).toBe("Odd { y: 2 }");
+  });
+
+  // Three shapes that are still `instanceof` a schema class but whose immediate prototype
+  // does not name it (review round 3, finding 35).
+  test("a row is recognised along the whole prototype chain", () => {
+    const hidden = '{ id: 1, email: "a@b.c", passwordHash: **redacted** }';
+    let ran = false;
+
+    // 1. `constructor` deleted from the class's prototype.
+    class NoConstructor extends schemaBase(USER_FIELDS) {
+      id = 1;
+      email = "a@b.c";
+      passwordHash = "S3CRET";
+    }
+    Reflect.deleteProperty(NoConstructor.prototype, "constructor");
+    expect(new NoConstructor()).toBeInstanceOf(NoConstructor);
+    expect(formatValue(new NoConstructor())).toBe(`Object ${hidden}`);
+
+    // 2. `constructor` replaced by an accessor, which must not run.
+    class AccessorConstructor extends schemaBase(USER_FIELDS) {
+      id = 1;
+      email = "a@b.c";
+      passwordHash = "S3CRET";
+    }
+    Object.defineProperty(AccessorConstructor.prototype, "constructor", {
+      get: () => {
+        ran = true;
+        return Object;
+      },
+    });
+    expect(formatValue(new AccessorConstructor())).toBe(`Object ${hidden}`);
+    expect(formatStruct("User", new AccessorConstructor(), new Set())).toBe(`User ${hidden}`);
+
+    // 3. An extra prototype layer between the object and the class's prototype.
+    const layered = Object.assign(Object.create(Object.create(User.prototype)) as object, {
+      id: 1,
+      email: "a@b.c",
+      passwordHash: "S3CRET",
+    });
+    expect(layered).toBeInstanceOf(User);
+    expect(formatValue(layered)).toBe(`Object ${hidden}`);
+    expect(formatValue({ nested: [layered] })).not.toContain("S3CRET");
+    expect(ran).toBe(false);
+  });
+
+  test("an object with the ROW marker but no findable schema has every value redacted", () => {
+    const orphan = {
+      id: 1,
+      passwordHash: "S3CRET",
+      [ROW]: { state: "loaded", source: "users", prefix: undefined },
+    };
+    expect(formatValue(orphan)).toBe("{ id: **redacted**, passwordHash: **redacted** }");
+    expect(formatStruct("Row", orphan, new Set())).toBe(
+      "Row { id: **redacted**, passwordHash: **redacted** }",
+    );
+    const detached = Object.assign(Object.create(null) as object, orphan);
+    Object.defineProperty(detached, ROW, { value: orphan[ROW] });
+    expect(formatValue(detached)).not.toContain("S3CRET");
+    // A real row carries the marker too and is redacted field by field, as before.
+    const row = Object.assign(new User(1, "a@b.c", "s3cret-hash"), { [ROW]: orphan[ROW] });
+    expect(formatValue(row)).toBe('User { id: 1, email: "a@b.c", passwordHash: **redacted** }');
   });
 
   test("a plain object holding field values is NOT recognised: the caller passes the names", () => {

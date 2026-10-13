@@ -6,7 +6,7 @@
  * @module
  */
 import type { FieldMeta, SchemaMeta } from "../contracts/schema.js";
-import { META } from "../contracts/schema.js";
+import { META, ROW } from "../contracts/schema.js";
 
 /**
  * What stands in for the value of a redacted field.
@@ -142,16 +142,16 @@ function redactedNames(fields: unknown): Set<string> | undefined {
 }
 
 /**
- * Which fields of a row are redacted, found through its class: a schema class holds its
- * metadata under `META`, and the metadata lists the fields. Anything whose class chain
- * has no `META` is not a row and has nothing redacted.
+ * Which fields the rows of a class have redacted: a schema class holds its metadata
+ * under `META`, and the metadata lists the fields. `undefined` when the class chain has
+ * no `META` (it is not a schema class).
  *
  * The metadata is read as own data properties only, so that no code of the value runs
  * (the contract requires `META`, `fields`, `name` and `redact` to be such properties).
  * If `META` is there but is an accessor, or what it holds is not that plain shape, the
  * answer is {@link EVERYTHING_REDACTED}.
  */
-function redactionOf(ctor: unknown): Redaction {
+function redactionOfClass(ctor: unknown): Redaction | undefined {
   // A class extends the base that `Schema()` returned, so the metadata is an own static
   // of an ancestor: walk the constructor chain.
   let descriptor: PropertyDescriptor | undefined;
@@ -162,7 +162,7 @@ function redactionOf(ctor: unknown): Redaction {
   ) {
     descriptor = Object.getOwnPropertyDescriptor(c, META);
   }
-  if (descriptor === undefined) return NOTHING_REDACTED;
+  if (descriptor === undefined) return undefined;
   const meta: unknown = "value" in descriptor ? descriptor.value : undefined;
   if (typeof meta !== "object" || meta === null) return EVERYTHING_REDACTED;
   const known = redactionByMeta.get(meta);
@@ -171,6 +171,27 @@ function redactionOf(ctor: unknown): Redaction {
     redactedNames(ownData(meta, "fields" satisfies keyof SchemaMeta)) ?? EVERYTHING_REDACTED;
   redactionByMeta.set(meta, redaction);
   return redaction;
+}
+
+/**
+ * Which fields of `value` are redacted. The schema class is looked for along the whole
+ * prototype chain, not only on the immediate prototype: an object that is an instance of
+ * a schema class is a row even when a prototype was put in between, or when the
+ * `constructor` of its immediate prototype was deleted or replaced by an accessor
+ * (accessors are skipped, never run). If no class with `META` is found but the object
+ * carries the {@link ROW} marker, it claims to be a row whose schema cannot be
+ * determined, so every value is redacted.
+ */
+function redactionOf(value: object): Redaction {
+  for (
+    let proto: unknown = Object.getPrototypeOf(value);
+    typeof proto === "object" && proto !== null && proto !== Object.prototype;
+    proto = Object.getPrototypeOf(proto)
+  ) {
+    const found = redactionOfClass(ownData(proto, "constructor"));
+    if (found !== undefined) return found;
+  }
+  return Object.getOwnPropertyDescriptor(value, ROW) === undefined ? NOTHING_REDACTED : EVERYTHING_REDACTED;
 }
 
 function formatPrimitive(value: string | number | bigint | boolean | symbol | undefined): string {
@@ -241,7 +262,7 @@ function format(value: unknown, depth: number, seen: Set<object>): string {
   const name = proto === null || proto === Object.prototype ? "" : `${functionName(ctor) || "Object"} `;
   if (depth >= MAX_DEPTH) return name === "" ? "[Object]" : `[${name.trimEnd()}]`;
   // A nested row hides its own redacted fields, wherever it sits.
-  const redacted = redactionOf(ctor);
+  const redacted = redactionOf(value);
   seen.add(value);
   const keys = Object.keys(value);
   const parts: string[] = [];
@@ -308,7 +329,7 @@ export function formatValue(value: unknown): string {
 export function formatStruct(name: string, values: object, redacted: ReadonlySet<string>): string {
   const parts: string[] = [];
   try {
-    const own = redactionOf(constructorOf(values));
+    const own = redactionOf(values);
     const seen = new Set<object>([values]);
     for (const key of Object.keys(values)) {
       // Hidden when either the caller or the row's own schema says so.
