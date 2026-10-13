@@ -15,7 +15,10 @@ import type {
   FieldValueOf,
   InsertShape,
   Loaded,
+  LoadedAs,
   LoadedUnchecked,
+  PreloadElement,
+  PreloadKey,
   PreloadSpec,
   PrimaryKeyNames,
   PrimaryKeyOf,
@@ -35,11 +38,17 @@ declare const t: {
   enum<const V extends string>(values: readonly V[]): FieldBuilder<V>;
 };
 declare function Schema<const F extends FieldsShape>(source: string, fields: F): SchemaClass<F>;
-declare function hasMany<T>(
+// A literal `foreignKey` is captured as the third parameter of `Assoc`, as for `belongsTo`.
+declare function hasMany<T, const FK extends string>(
   target: () => T,
-  options?: { foreignKey?: string },
-): Assoc<"hasMany", T, undefined>;
-declare function hasOne<T>(target: () => T, options?: { foreignKey?: string }): Assoc<"hasOne", T, undefined>;
+  options: { foreignKey: FK },
+): Assoc<"hasMany", T, FK>;
+declare function hasMany<T>(target: () => T): Assoc<"hasMany", T, undefined>;
+declare function hasOne<T, const FK extends string>(
+  target: () => T,
+  options: { foreignKey: FK },
+): Assoc<"hasOne", T, FK>;
+declare function hasOne<T>(target: () => T): Assoc<"hasOne", T, undefined>;
 declare function manyToMany<T>(
   target: () => T,
   options: { joinThrough: string },
@@ -63,7 +72,7 @@ class User extends Schema("users", {
   createdAt: t.string().autogenerate(),
 }) {
   static posts = hasMany(() => Post, { foreignKey: "authorId" });
-  static profile = hasOne(() => Profile);
+  static profile = hasOne(() => Profile, { foreignKey: "userId" });
   static manager = belongsTo(() => User);
   static tags = manyToMany(() => Tag, { joinThrough: "users_tags" });
   static notAnAssociation = 42;
@@ -518,5 +527,79 @@ describe("schema-derived types on AnySchema", () => {
     rows[0]!.anything;
     const generic = <S extends AnySchema>(row: Row<S>): Row<S> => row;
     expectTypeOf(generic<typeof User>({} as User)).toEqualTypeOf<User>();
+  });
+});
+
+describe("LoadedAs, PreloadKey and PreloadElement (a preload whose callback selects)", () => {
+  type Shape = { authorId: number; title: string };
+
+  test("a to-many association is an array of the given element", () => {
+    type L = LoadedAs<typeof User, "posts", Shape>;
+    expectTypeOf<L["posts"]>().toEqualTypeOf<Shape[]>();
+    expectTypeOf<L["email"]>().toEqualTypeOf<string>();
+    expectTypeOf<LoadedAs<typeof User, "tags", { name: string | null }>["tags"]>().toEqualTypeOf<
+      { name: string | null }[]
+    >();
+  });
+
+  test("a to-one association is the element, nullable as in Loaded", () => {
+    type E = { id: number };
+    expectTypeOf<LoadedAs<typeof User, "profile", E>["profile"]>().toEqualTypeOf<E | null>();
+    expectTypeOf<LoadedAs<typeof Post, "author", E>["author"]>().toEqualTypeOf<E>();
+    expectTypeOf<LoadedAs<typeof Post, "editor", E>["editor"]>().toEqualTypeOf<E | null>();
+  });
+
+  test("with the target's row as the element it is Loaded", () => {
+    expectTypeOf<LoadedAs<typeof User, "posts", Post>["posts"]>().toEqualTypeOf<
+      Loaded<typeof User, "posts">["posts"]
+    >();
+  });
+
+  test("nesting is the element's own type", () => {
+    type Inner = Loaded<typeof Post, "comments">;
+    type L = LoadedAs<typeof User, "posts", Inner>;
+    expectTypeOf<L["posts"][number]["comments"]>().toEqualTypeOf<Comment[]>();
+  });
+
+  test("does not add other associations, and rejects an unknown one", () => {
+    const u = {} as LoadedAs<typeof User, "posts", Shape>;
+    // @ts-expect-error profile was not loaded
+    void u.profile;
+    // @ts-expect-error not an association
+    expectTypeOf<LoadedAs<typeof User, "nope", Shape>>();
+    expectTypeOf<LoadedAs<typeof User, "posts", Shape>>().not.toBeAny();
+  });
+
+  test("PreloadKey is the literal foreign key of a hasOne or hasMany, and never otherwise", () => {
+    expectTypeOf<PreloadKey<typeof User, "posts">>().toEqualTypeOf<"authorId">();
+    expectTypeOf<PreloadKey<typeof User, "profile">>().toEqualTypeOf<"userId">();
+    expectTypeOf<PreloadKey<typeof Post, "comments">>().toBeNever();
+    expectTypeOf<PreloadKey<typeof Post, "author">>().toBeNever();
+    expectTypeOf<PreloadKey<typeof User, "tags">>().toBeNever();
+  });
+
+  test("PreloadElement keeps a shape that has the key and rejects one that lacks it", () => {
+    expectTypeOf<PreloadElement<typeof User, "posts", Shape>>().toEqualTypeOf<Shape>();
+    expectTypeOf<PreloadElement<typeof User, "posts", Post>>().toEqualTypeOf<Post>();
+    expectTypeOf<PreloadElement<typeof User, "posts", { title: string }>>().toBeNever();
+  });
+
+  test("PreloadElement accepts anything where the key is not known to the types", () => {
+    expectTypeOf<PreloadElement<typeof Post, "author", { name: string }>>().toEqualTypeOf<{ name: string }>();
+    expectTypeOf<PreloadElement<typeof User, "tags", { name: string }>>().toEqualTypeOf<{ name: string }>();
+  });
+
+  test("a generic preload function infers the element from its callback", () => {
+    function preloadAs<S extends AnySchema, K extends AssocKeys<S>, E>(
+      _schema: S,
+      _name: K,
+      _fn: () => E & PreloadElement<S, K, E>,
+    ): LoadedAs<S, K, E> {
+      return {} as LoadedAs<S, K, E>;
+    }
+    const loaded = preloadAs(User, "posts", () => ({ authorId: 1, title: "t" }));
+    expectTypeOf(loaded.posts).toEqualTypeOf<{ authorId: number; title: string }[]>();
+    // @ts-expect-error the selected shape lacks the key, authorId
+    preloadAs(User, "posts", () => ({ title: "t" }));
   });
 });

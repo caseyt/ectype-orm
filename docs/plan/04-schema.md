@@ -191,7 +191,7 @@ Casting params (05). Loading associations (14). Writing associations and embeds 
 Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
 
 - Implement `FieldBuilder`'s flags exactly as the contract types them.
-- `belongsTo` must capture a literal `foreignKey` as the third parameter of `Assoc`.
+- `belongsTo` must capture a literal `foreignKey` as the third parameter of `Assoc`, and so must `hasOne` and `hasMany` (the contract's `PreloadKey` reads it, to make a preload `select` without its key a compile error).
 - Reserve the static names `fields` and `[META]`.
 - List embed fields in both `fields` and `embeds`.
 - Row inspection: `formatValue` finds a row's redacted fields through `Class[META].fields`, read as own data properties.

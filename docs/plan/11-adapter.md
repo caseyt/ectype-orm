@@ -80,7 +80,8 @@ const adapter = postgres({
    `log: { params: true }` (there is no separate `logParams` or `debug` switch), and
    redacted fields are never logged.
 9. **Timeouts and cancellation.** `execute(..., { signal?: AbortSignal, timeoutMs? })`:
-   abort issues a Postgres cancel request and rejects with `DatabaseError { code: "aborted" }`.
+   abort issues a Postgres cancel request and rejects with `DatabaseError { code: "aborted" }`;
+    exceeding `timeoutMs` cancels the same way and rejects with `code: "timeout"`.
 10. **Health.** `adapter.ping()`; pool stats (`size`, `idle`, `waiting`).
 11. **Driver choice.** Use `pg` (peer dependency) directly. Check
     whether a second wrapper over postgres.js is worth its upkeep and, if so, expose

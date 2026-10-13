@@ -116,8 +116,9 @@ callback form covers both. Several `.preload()` calls on one query merge.
    `force: true`. Accepts `null`/empty input and returns it. Mixed schemas in one array throw.
 8. **Types.** `preload(spec)` maps to the loaded type for strings, arrays, nested
    objects and alias strings, and `preload(name, fn)` to the callback's result type (whole
-   rows, or the selected shape; this needs `Loaded` to carry an element type per
-   association, a contract refinement to record). The argument is first mapped to a
+   rows, or the selected shape): `LoadedAs<S, K, E>`, with the callback's result
+   intersected with `PreloadElement<S, K, E>` so that a select without the key does not
+   compile (`contracts/schema.ts`). The argument is first mapped to a
    `PreloadSpec` (an alias becomes `true`, `$from` is dropped), then
    checked with `ValidPreload` and typed with `LoadedUnchecked` (`contracts/schema.ts`). `repo.preload` over `Loaded<S, A>` with `B`
    returns `Loaded<S, A | B>`. Unknown association names are compile errors at any depth.
