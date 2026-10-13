@@ -81,7 +81,9 @@ to those safe kinds), `param(name, type)`, `fragment`.
    level so the query's required params object is inferred (plumbed through in step 08).
 6. **Shape hash.** Every node contributes to the incremental `shape` hash by kind,
    operator, column identity, and param **type**, never by param **value**. Two expressions
-   that differ only in bound values have equal shapes. Decided in `contracts/query.ts`:
+   that differ only in bound values have equal shapes. That list is not complete: the
+   full one is in `contracts/query.ts` ("Shape") and also has literal values, a
+   parameter's `redact` flag, and each schema's name and declared prefix. Decided in `contracts/query.ts`:
    `shape` is length-agnostic, and the lengths of the `list` params are kept beside it in
    `QueryAst.listLengths`, which the compiler adds to the cache key on dialects that expand.
 7. **Param collection.** Each `Expr` knows its params in **canonical order** (depth-first,

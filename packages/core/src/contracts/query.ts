@@ -72,7 +72,8 @@
  * plan, which is what the plan cache of step 10 assumes.
  *
  * What contributes: every node's kind, operators, function names, identifiers (source,
- * alias, column, prefix; for a table source also the prefix its schema declares),
+ * alias, column, prefix; wherever a node holds a schema's `meta` (a table or CTE source,
+ * a whole-binding select) also that schema's `name` and the prefix it declares),
  * boolean and enumerated properties (`distinct`, `direction`, `asText`, `recursive`, …),
  * the `value` of a {@link LiteralNode} (it becomes SQL text),
  * the **type** and the **`redact`** flag of a parameter (both end up in the slots of the
@@ -94,6 +95,9 @@
  * can collide. In that comparison two sources are the same only if they have the **same
  * `meta` object**: a plan holds the schema metadata of the rows it builds (and each
  * table's resolved prefix), so it can be shared only by queries over the same schemas.
+ * The schema's name is in the hash so that this is rare and not routine: two schema
+ * classes over one table (a read model next to a write model) would otherwise hash alike
+ * and keep evicting each other from one cache entry, each time counted as a collision.
  * On a dialect that expands lists (`capabilities.arrayParams` false) the SQL depends on
  * the list lengths, so the cache key there is `shape` combined with `listLengths`; on
  * Postgres `listLengths` is ignored.

@@ -141,10 +141,10 @@ export interface OutputPreload {
  *   (see "Prefixes" on {@link Adapter}). The tables of one statement can resolve
  *   differently, so each leaf carries its own, and the decoder stamps each row from its
  *   own leaf: `leaf.meta.rowMeta("loaded", leaf.prefix)`. That goes for the child leaves
- *   of join preloads too. For a binding whose source is a subquery or a CTE, it is the
- *   prefix a plain table source of that schema would have resolved to in the same query
- *   (the schema's declared prefix, else the query's, else the argument), so that writing
- *   the row back goes to its schema's table.
+ *   of join preloads too. For a binding whose source is not a table (a subquery, a CTE,
+ *   a values list, a fragment), see "Rows that do not come straight from a table" on
+ *   {@link Adapter}: the leaf takes the prefix of the table the rows were really read
+ *   from where there is one.
  *   `preloads` lists the associations the row carries (empty for an ordinary row). A row
  *   with preloads is built with `meta.createWith(preloads.map((p) => p.assoc))`.
  * - `constant`: no column. The value is `constants[index]` of the query's `SelectNode`,
@@ -740,6 +740,48 @@ export interface AdapterEvents {
  * Each row is written back to the table it was read from, because a write uses the
  * row's own prefix as its argument, and the argument is the strongest source for a write.
  *
+ * ### Rows that do not come straight from a table
+ *
+ * A binding can yield rows of a schema without being a table source: its source is a
+ * subquery or a CTE (`cte("tree", Category)`), a values list or a fragment. Its `row`
+ * leaf still needs a prefix, and it must be the prefix of the table the rows were
+ * **really read from**, or a later `update`, `delete` or `reload` goes elsewhere. The
+ * compiler decides in this order:
+ *
+ * 1. **The inner query selects the row whole from one of its own sources.** The outer
+ *    leaf takes the prefix that inner source resolved to. If that inner source is itself
+ *    a subquery or a CTE, the rule is applied to it in turn, as deep as it goes.
+ * 2. **The inner query is a set operation** (`UNION`, `INTERSECT`, `EXCEPT`). Rule 1 is
+ *    applied to its **first branch** (the query that holds the `combinations`), whatever
+ *    the other branches resolve to. When every branch reads the same table this is exact.
+ *    When they do not (a union of `tenant_1.posts` and `archive.posts`), the origin of a
+ *    given row is not known: every row gets the first branch's prefix, and writing such a
+ *    row back uses that prefix, so rows of the other branches would be written to the
+ *    first branch's table. Select the prefix as a column if rows of such a union are to
+ *    be written back.
+ * 3. **A recursive CTE** is a set operation whose later branch reads the CTE itself, so
+ *    rule 2 gives the prefix of its anchor (first) branch, which is the table the
+ *    recursion walks.
+ * 4. **There is no inner source to follow:** the inner query builds the row from
+ *    expressions instead of selecting a source binding whole; or the source is a values
+ *    list, a fragment, or a CTE whose body is a fragment. The leaf takes the prefix a
+ *    plain table source of that schema would have resolved to in the **outer** query (the
+ *    schema's declared prefix, else the outer query's, else the argument). Such rows were
+ *    not read from that table as rows; writing one back uses that prefix, which is the
+ *    place the schema's rows normally live.
+ *
+ * Example of rule 1: repo default `tenant_1`; `Post` declares no prefix; a subquery
+ * `from(Post, "p")` whose source `p` has the per-source prefix `archive` (the same holds
+ * when the inner query sets `archive` as its query prefix), used as the source of an
+ * outer binding `s` that is selected whole:
+ *
+ * | Binding | Resolved by | Read from | Row's `RowMeta.prefix` | `update` / `delete` | `reload` |
+ * |---|---|---|---|---|---|
+ * | `s` (rows of `Post` through the subquery) | the inner source `p` | `archive.posts` | `archive` | `archive.posts` | `archive.posts` |
+ *
+ * Without rule 1 the leaf would have taken the outer argument, `tenant_1`, and the row
+ * would have been written to a table it never came from.
+ *
  * What follows from the same rule elsewhere:
  *
  * - **Join preloads:** the child leaves have their own `prefix`; children are stamped
@@ -759,7 +801,7 @@ export interface AdapterEvents {
  * - **Streams** use the same decoder, so the same leaves.
  * - **The plan cache:** a plan is determined by the query's structure and the `prefix`
  *   argument together. The per-source prefixes, the query prefix and each table's schema
- *   (and so its declared prefix) are part of the structure; see "Shape" in `query.ts`.
+ *   (its name and its declared prefix) are part of the structure; see "Shape" in `query.ts`.
  *
  * The repo never rewrites an AST to apply a prefix, so a module-level query keeps its
  * identity in the plan cache. The `prefix` argument is part of the plan-cache key. What

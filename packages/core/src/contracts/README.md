@@ -53,7 +53,8 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
   read will look; the tables of cases are on `Adapter`. The tables of one statement can
   resolve differently, so every `row` leaf of the output plan carries its own table's
   prefix and each decoded row is stamped from its leaf (`SchemaMeta.rowMeta`);
-  `CompiledQuery.prefix` is the target or root table's, used for row-level writes.
+  `CompiledQuery.prefix` is the target or root table's, used for row-level writes. A row
+  read through a subquery or a CTE takes the prefix of the inner table it was read from.
 - **A row decoder is stateless.** It turns one result row into one value. Merging the
   parents of a join preload happens after decoding, in the repo (`OutputPlan`, "Join
   preloads").
