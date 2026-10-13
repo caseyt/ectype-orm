@@ -4,14 +4,18 @@ A TypeScript ORM modelled on Elixir's Ecto: **schemas**, **changesets**, an Ecto
 **query builder**, and a **Repo**. Heavily tested, performance-first, fully documented.
 
 > The project is **Egon ORM**: packages `egon-orm` and `@egon-orm/*` (owner decision,
-> 2026-10-12). It was called Ectype while steps 01 and 02 were built, so the merged code,
-> the status notes and the GitHub repository still use that name until the rename PR
-> lands (§11, "Changes to merged code").
+> 2026-10-12). It was called Ectype while steps 01 and 02 were built; the code was renamed
+> in PR #4. Only the GitHub repository (`caseyt/ectype-orm`) still carries the old name.
 >
 > Ecto is the design reference for behaviour. It is **not** how the library is presented:
 > users come from Drizzle, Sequelize and Prisma, so public names, TSDoc and guides do not
-> mention Ecto (§8). **§11 records the developer-API review of 2026-10-13; where an older
-> sentence in this plan disagrees with §11, §11 wins.**
+> mention Ecto (§8).
+>
+> **Order of authority for the public API:** the guide pages under `docs/site/guide/`
+> first, then §11 (the developer-API review of 2026-10-13), then the step files. The
+> guide was written before the code and describes what developers will see; the step
+> files say how to build and test it. If you find a disagreement, follow the higher
+> source and record it in your status note.
 
 This file is the shared context for every step. **Every worker reads this file in full,
 then their own step file.** Step files do not repeat what is here.
@@ -282,11 +286,17 @@ Rules that follow from the budgets:
   and migration guides are written for them. (These plan files may still cite Ecto as the
   behavioural reference for workers. Where a step file asks for an "Ecto equivalent"
   column or a "Differences from Ecto" box in *user* documentation, leave it out.)
-- Each step delivers its guide page(s) under `docs/site/guide/` as listed in its file.
-  Step 20 assembles, edits and cross-links; it does not write other steps' content from scratch.
-- Every code block in the docs is extracted and type-checked in CI (step 20 builds the
-  extractor; until then keep examples as real files under `docs/site/examples/` and
-  include them by reference).
+- **The guide pages already exist** (PR #5) and define the public API. A step does not
+  create the page(s) listed in its file: it implements what the page says, then updates
+  the page where the implementation taught us something (in the same PR, called out in
+  the status note), and adds the plan details the page lacks. A change to the API itself
+  is a change to the page first, agreed with the owner.
+- Every code block in the docs is type-checked in CI once its feature exists. The pages
+  were written before the code, so their blocks are hand-written today. **The step that
+  implements a feature converts that page's blocks** to regions of real files under
+  `docs/site/examples/`, included by reference. Step 20 builds the extractor and the lint
+  that forbids the remaining hand-written blocks.
+- Step 20 assembles, edits and cross-links, and applies its page template in the final pass.
 - Behaviour that would surprise someone coming from another ORM (no lazy loading,
   explicit transactions, non-null by default, results instead of exceptions) is stated in
   a "Good to know" box on the page.
@@ -436,8 +446,8 @@ your status note.
 ### Queries (steps 07, 08, 09)
 
 - The alias is **required**: `from(User, "u")`. There is no `"root"` default.
-- `from` takes a schema class or an explicit source wrapper (`subquery(q)`, `cte(...)`,
-  `values(...)`). It does not take a bare `Query`.
+- `from` takes a schema class or an explicit source wrapper (`subquery(q)`, `cte(...)`;
+  `values(...)` is future work). It does not take a bare `Query`.
 - `orWhere` stays (`.where(a).where(b).orWhere(c)` is `(a AND b) OR c`). `neq` stays.
 - `.first()` and `.last()` are removed from the builder; `reverseOrder` stays.
 - `.lock("update" | "share" | "noKeyUpdate" | "keyShare", { skipLocked?, noWait? })`, or
@@ -525,16 +535,9 @@ your status note.
 
 ### Changes to merged code
 
-Steps 01 and 02 are merged and predate this review. One PR must bring them into line
-before step 03 starts:
-
-- the Ectype → Egon rename (package names, imports, `EctypeError`, `CLAUDE.md`,
-  `CONTRIBUTING.md`, docs skeleton), and the removal of "Ecto equivalent" from existing
-  TSDoc and of the "Ecto cheat sheet" nav stub;
-- contracts: `prefix` → `schema` (`SchemaMeta`, `RowMeta`, `compile*` arguments);
-  `Result` as `{ success, data }` with `success()` / `failure()`; `CastResult` likewise;
-  `EctoType` → `FieldType`; `load` / `dump` → `fromDb` / `toDb`; `readAfterWrites` →
-  `dbGenerated`; `AdapterError` → `DatabaseError` and camelCase codes; `MigrationError`
-  unexported; `preloadOrder` → `orderBy`; `optional` and `onDelete` dropped from
-  `AssocMeta`; placeholder syntax `{count}`;
-- `fixtures/blog.sql`: `inserted_at` → `created_at`.
+Done in PR #4: steps 01 and 02 were brought into line with this section (the Egon rename,
+`schema`, `Result` as `{ success, data }`, `FieldType`, `fromDb` / `toDb`, `dbGenerated`,
+`DatabaseError`, `orderBy`, the dropped association options, `{count}` placeholders,
+`created_at` in the fixtures). The step 01 and 02 status notes were removed in the same
+PR; the requests they addressed to later steps are now in those step files, under
+"Carried over from steps 01 and 02".

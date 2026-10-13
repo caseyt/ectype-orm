@@ -117,3 +117,11 @@ type (Money example end to end), parameterized types, why dates and decimals are
 
 Field options (`nullable`, `default`): step 04. Dialect overrides: steps 11 and 17.
 Embedded schemas as types: step 15.
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- `resolveCodec(type, adapter)` calls `adapter.typeOverrides(type)` and caches per adapter instance.
+- The deep-equality helper this spec places in `internal/` is this step's to add there.
+- A `custom` `DbType`'s `sql` must be developer-written; a parameterized type may assemble it only from developer-written options.

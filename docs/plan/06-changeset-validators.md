@@ -70,6 +70,9 @@ await cs.validateAsync(async (v) => (await isDisposable(v.email)) ? [{ path: "em
    (`applyChanges`-like, without constructing a row instance), using app-level values
    (already cast: `Date`, numbers, enums). Virtual fields are included. `only` narrows the
    object to those keys. Build the object once per call, in field order.
+   `ctx.data` is never `null` (owner decision, 2026-10-13): for a loaded row it is the row;
+   for a new record, where `cs.data` is `null`, it is a plain object of the field defaults
+   (fields without a default are `undefined`).
 3. **Scope** decides which issues are kept, by `path[0]`:
    - `"all"` (default): every issue is kept, for new records and loaded rows alike. A
      cross-field rule must not be dropped because the field it reports on did not change.
@@ -120,7 +123,7 @@ type CreateUser = z.infer<typeof CreateUser>;   // { email: string; name?: strin
 - Modes: `"row"` (exact row), `"insert"` (optional where `InsertShape` is optional),
   `"update"` (all optional). `pick`/`omit` are typed.
 - The inferred Zod type must equal `Row<S>` / `InsertShape<S>` (type tests with `expectTypeOf().toEqualTypeOf`).
-- Optional sugar: `castWith(data, params, zodSchema)` = `cast` with permitted keys taken from the schema's keys, then `.validate(schema)`.
+- Optional sugar: `castWith(target, params, zodSchema)` = `cast` with permitted keys taken from the schema's keys, then `.validate(schema)`.
 
 ## Tests
 
@@ -137,8 +140,7 @@ type CreateUser = z.infer<typeof CreateUser>;   // { email: string; name?: strin
 
 ## Docs (`guide/validation.md`)
 
-Choosing between built-in validations, Zod schemas and functions; the scope rule with a
-worked insert vs update example; cross-field rules; transforms with `apply`; async
+Choosing between built-in validations, Zod schemas and functions; the `scope` option (why `"all"` is the default, and when `"changed"` helps); cross-field rules; transforms with `apply`; async
 validation and why it is separate; using Valibot/ArkType/Yup; deriving schemas with
 `@egon-orm/zod`; writing a reusable validator.
 
@@ -153,3 +155,9 @@ validation and why it is separate; using Valibot/ArkType/Yup; deriving schemas w
 ## Out of scope
 
 Routing issues into nested changesets beyond the hook described in item 4 (finished in 15).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- Add a type test in `@egon-orm/zod` that a Zod schema is assignable to the vendored `StandardSchemaV1` (it was only checked by hand in step 02).

@@ -107,9 +107,11 @@ callback form covers both. Several `.preload()` calls on one query merge.
    plan that has preloads are created by a factory variant that pre-declares those
    properties (one hidden class per (schema, preload set)); `repo.preload` on existing rows
    returns **new** row objects (inputs are not mutated) built with that variant.
-6. **Identity.** No identity map: the same post reached through two parents is two
-   objects unless loaded by the same preload query, in which case children of a
-   `belongsTo` share one instance per key (documented).
+6. **Identity.** No identity map, with no exceptions (owner decision, 2026-10-13): every
+   attached association value is its own object. When several parents point at the same
+   `belongsTo` target, the preload fetches that row once and gives **each parent its own
+   instance** (build one per parent from the fetched values), so mutating one never
+   shows through another.
 7. **`repo.preload(rows, spec, opts)`.** Skips associations already loaded unless
    `force: true`. Accepts `null`/empty input and returns it. Mixed schemas in one array throw.
 8. **Types.** `preload(spec)` maps to the loaded type for strings, arrays, nested

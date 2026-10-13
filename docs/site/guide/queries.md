@@ -162,6 +162,9 @@ from(Post, "p").pipe(published).pipe((q) => paginate(q, 2));
 
 The scope is a compile error on a query that has no binding `p` for `Post`.
 
+`hasNamedBinding(q, "p")` is the runtime check, and narrows the query's type, for code
+that receives a query it did not build.
+
 ## Named parameters
 
 `param(name, type)` leaves a placeholder that is filled in when the query runs:

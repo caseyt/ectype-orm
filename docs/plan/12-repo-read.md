@@ -31,7 +31,7 @@ repo.getByOrThrow(queryable, clauses, opts?)
 repo.exists(queryable, params?, opts?)         // boolean
 repo.count(queryable, params?, opts?)          // number         shorthand for aggregate(q, "count")
 repo.aggregate(queryable, "count" | "sum" | "avg" | "min" | "max", field?, opts?)
-repo.stream(queryable, params?, { batchSize = 500, ...opts })   // AsyncIterable<R>; needs a transaction on Postgres
+repo.stream(queryable, params?, { batchSize = 500, ...opts })   // AsyncIterable<R>; on Postgres a cursor needs a transaction, so outside one stream opens its own (step 16 item 8)
 repo.reload(row | rows, opts?)                 // fresh copy or null if gone
 repo.reloadOrThrow(row)
 repo.toSql(queryable, params?)                 // { sql, params }
@@ -129,3 +129,10 @@ semantics, streaming, raw queries, logging and telemetry, `toSql`/`explain`.
 
 Writes (13). Preload execution (14) — provide the hook `afterDecode(rows, plan, ctx)` it plugs into.
 Transactions (16).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- `PrimaryKeyOf<S>` exists in the contract for `repo.get`.
+- The decoder is stored on `CompiledQuery.decoder` and takes `(row, constants)`.

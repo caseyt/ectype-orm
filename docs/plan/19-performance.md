@@ -106,3 +106,11 @@ results, how to reproduce, generated from the latest results JSON.
 ## Out of scope
 
 Optimising other libraries' usage beyond their documented best practice. Database tuning.
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- `benchmarks/src/harness.ts` and `run.ts` are this step's to replace; feature steps only need `bench`, `group`, `doNotOptimize` and `runBenchmarks()` to keep working.
+- `benchmarks/micro/internal.bench.ts` shows how to benchmark non-public code from `dist/internal.js`.
+- The step 02 cost numbers came from one machine, with Postgres behind a VM boundary.

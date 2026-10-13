@@ -141,9 +141,11 @@ are step 15.
    logic. Implement with a generated function (`new Function`) when available and a loop
    fallback when CSP forbids eval (detect once; option `{ codegen: false }` forces the
    fallback; both paths tested).
-5. **`toJSON` and inspect.** Rows serialise as plain objects of their fields; redacted
+5. **`toJSON` and inspect.** Rows serialise as plain objects of their fields plus any
+   preloaded associations (recursively; owner decision, 2026-10-13); redacted
    fields are omitted from `toJSON` and shown as `**redacted**` in `util.inspect`.
-   `toJSON` lives on the prototype (not per row).
+   `toJSON` lives on the prototype (not per row). Redaction applies at every level of a
+   preloaded tree.
 6. **Helpers.** `meta(S)`, `isSchema(x)`, `isRow(x)`, `stateOf(row)`, `primaryKeyOf(row)`,
    `fieldNames(S)`, `S.fields` for reflection.
 7. **Reference schemas.** Implement the full blog domain from step 01 in
@@ -183,3 +185,13 @@ keys); embedded schemas (pointer to step 15 page); deriving types (`Row`, `Inser
 ## Out of scope
 
 Casting params (05). Loading associations (14). Writing associations and embeds (15).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- Implement `FieldBuilder`'s flags exactly as the contract types them.
+- `belongsTo` must capture a literal `foreignKey` as the third parameter of `Assoc`.
+- Reserve the static names `fields` and `[META]`.
+- List embed fields in both `fields` and `embeds`.
+- Row inspection: `formatValue` finds a row's redacted fields through `Class[META].fields`, read as own data properties.

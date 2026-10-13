@@ -119,3 +119,12 @@ cancellation, bring-your-own pool).
 ## Out of scope
 
 Repo API, hydration (12). Transactions API and sandbox (16). Other dialects (17). DDL (18).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- In the contract already: `Executor` / `Connection` (with `destroy`), `typeOverrides`, `on(event)`, `ExecuteOptions.slots` / `context` / `statementName`, `RawResult.insertId`, the `DatabaseError` codes and the `ConstraintError` fields.
+- Not in the contract: `ping()` and pool statistics. Add them to the concrete adapter.
+- The spike did not exercise streaming or cancellation through Kysely's Postgres driver (streaming needs `pg-cursor`).
+- `@egon-orm/postgres` builds ESM only.
