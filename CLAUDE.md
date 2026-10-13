@@ -19,9 +19,9 @@ pnpm lint                # Biome (pnpm format to fix)
 pnpm typecheck           # tsc -b, plus the docs/plan/spikes checks
 pnpm test:unit           # *.test.ts with coverage thresholds (95% lines/branches in core, postgres)
 pnpm test:types          # *.test-d.ts
-pnpm build               # tsup: ESM + CJS + .d.ts per package
+pnpm build               # tsup: ESM + .d.ts per package (ESM-only, no CommonJS build)
 pnpm lint:packages       # publint + attw on built packages
-pnpm smoke               # ESM and CJS consumers in examples/smoke
+pnpm smoke               # ESM consumer, plus a CommonJS consumer that require()s the ES modules
 pnpm bench [filter]      # benchmarks/micro/*.bench.ts -> benchmarks/results/<git-sha>.json
 pnpm docs:dev            # VitePress site (docs:build to build)
 pnpm db:down             # stop databases, discard data (db:reset = down + up)
@@ -42,7 +42,7 @@ benchmarks/micro         <area>.bench.ts, one per feature area; harness in bench
 docs/plan                plan and step specs. Do not edit, except to add status/NN.md
 docs/adr                 architecture decision records
 docs/site                VitePress; guide pages in guide/, checked example sources in examples/
-examples/smoke           ESM + CJS smoke consumers
+examples/smoke           ESM consumer + CommonJS consumer that require()s the ES modules
 ```
 
 ## Rules
@@ -81,7 +81,7 @@ Budgets: build a 3-clause query < 1.5 µs; compile with plan-cache hit < 0.3 µs
 
 ## Toolchain constraints
 
-Node >= 22 (decision D14) and pnpm 12; use the versions pinned in `.nvmrc` and
+Node >= 22.12 (decision D14) and pnpm 12; use the versions pinned in `.nvmrc` and
 `"packageManager"`. TypeScript is held at 6 because tsup's declaration bundler does not
 work with TypeScript 7, and Kysely is pinned to one minor (`~0.29`) on purpose. See
 `docs/plan/status/01.md` before bumping either.
