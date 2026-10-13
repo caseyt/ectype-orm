@@ -97,22 +97,29 @@ export type ParamSlot =
 export type Dump = (value: unknown) => unknown;
 
 /**
- * A preloaded association that a `row` leaf of an {@link OutputPlan} carries, for a join
- * preload (step 14): the association's rows come from columns of the same result row.
+ * A preloaded association that a `row` leaf of an {@link OutputPlan} carries (step 14).
+ * The compiler lists every association the query preloads on that row, taken from
+ * `QueryAst.preloads` (preload names are part of `shape`, so they belong to the plan).
+ *
+ * - With `row`, it is a **join preload**: the child is built from columns of the same
+ *   result row, as `row` says.
+ * - With `row` undefined, the association is loaded by a **separate query** after
+ *   decoding; the plan only reserves the property.
  *
  * @example
  * ```ts
  * declare const posts: OutputPlan & { kind: "row" };
- * const preload: OutputPreload = { assoc: "posts", cardinality: "many", row: posts };
+ * const joined: OutputPreload = { assoc: "posts", cardinality: "many", row: posts };
+ * const separate: OutputPreload = { assoc: "profile", cardinality: "one", row: undefined };
  * ```
  */
 export interface OutputPreload {
   /** The association name: the property the children are stored under. */
   readonly assoc: string;
-  /** `"many"` collects an array per parent; `"one"` keeps the first child or `null`. */
+  /** `"many"` holds an array of children; `"one"` holds a child or `null`. */
   readonly cardinality: "one" | "many";
-  /** How to build one child from the result row; a `row` leaf, which may nest further. */
-  readonly row: OutputPlan;
+  /** How to build one child from the result row (a `row` leaf, which may nest further); `undefined` for a separate-query preload. */
+  readonly row: OutputPlan | undefined;
 }
 
 /**
@@ -124,14 +131,32 @@ export interface OutputPreload {
  * - `row`: a schema row; `aliases[i]` is the output column of `meta.persisted[i]`.
  *   `nullable` is true when the binding can be absent from a result row (it is on the
  *   optional side of an outer join): the decoder then yields `null` instead of a row
- *   when every primary-key column is `null`.
- *   `preloads` lists the associations filled from joined columns of the same result row
- *   (empty for an ordinary row). With preloads, several result rows make one parent: the
- *   decoder de-duplicates parents by primary key and builds them with
- *   `meta.createWith(…)`.
+ *   when every `key` column is `null`.
+ *   `key` holds the output columns of the primary key, in `meta.primaryKey` order
+ *   (empty for a schema without one): what identifies the row in the result.
+ *   `preloads` lists the associations the row carries (empty for an ordinary row). A row
+ *   with preloads is built with `meta.createWith(preloads.map((p) => p.assoc))`.
  * - `constant`: no column. The value is `constants[index]` of the query's `SelectNode`,
  *   returned as it is; it was never sent to the database.
  * - `object` / `tuple`: an object or array of the nested plans.
+ *
+ * ## Join preloads: who does what
+ *
+ * A {@link RowDecoder} sees one result row, is generated once per plan and is shared by
+ * every execution of it, so it holds no state and **cannot de-duplicate parents**. With a
+ * join preload several result rows describe one parent, and the work is split:
+ *
+ * 1. **The decoder, per result row,** builds the parent with the child of *that* row in
+ *    place: for a join preload with cardinality `many`, an array holding the one child
+ *    (empty when the child's `key` columns are all `null`); with cardinality `one`, the
+ *    child or `null`. A separate-query preload starts as an empty array or `null`.
+ * 2. **The repo's post-decode stage** (step 12's `afterDecode(rows, plan, ctx)` hook,
+ *    implemented by step 14) merges the decoded values: parents with equal primary keys
+ *    become the first one seen, in first-seen order; their `many` children are
+ *    concatenated and de-duplicated by the child's primary key; the same is applied to
+ *    each child's own join preloads. It needs nothing but the plan: the `row` leaves say
+ *    where parents and children are, `meta.primaryKey` names the key fields to compare on
+ *    the decoded rows, and `preloads` names the properties and their cardinality.
  *
  * @example
  * ```ts
@@ -153,6 +178,7 @@ export type OutputPlan =
       readonly kind: "row";
       readonly meta: SchemaMeta;
       readonly aliases: readonly string[];
+      readonly key: readonly string[];
       readonly nullable: boolean;
       readonly preloads: readonly OutputPreload[];
     }
@@ -161,7 +187,10 @@ export type OutputPlan =
   | { readonly kind: "tuple"; readonly items: readonly OutputPlan[] };
 
 /**
- * Turns one raw result row into the value the query selected. Generated once per plan.
+ * Turns one raw result row into the value the query selected. Generated once per plan and
+ * shared by every execution of it, so it is a pure function of its arguments: it keeps no
+ * state between rows. Anything that spans rows (merging the parents of a join preload) is
+ * done after decoding; see {@link OutputPlan}.
  * `constants` is the `constants` array of the executed query's `SelectNode` (an empty
  * array when it has none): a plan is shared by every query of one shape, so the values
  * of selected constants come from the query, never from the plan.
@@ -636,15 +665,32 @@ export interface AdapterEvents {
  * ## Prefixes
  *
  * Every `compile*` method that names a table takes `prefix`: the schema (Postgres) or
- * database (MySQL) that applies to a table for which nothing more specific is set.
- * The compiler resolves each table to the first of: the source's own prefix
- * (`TableSourceNode.prefix`), the query's (`QueryAst.prefix`), this argument, and the
- * schema's (`SchemaMeta.prefix`). For a row-level write the order is this argument, then
- * the schema's. The repo computes the argument from its own option and the per-call one
- * (and, for an update or delete, from the row's `RowMeta.prefix`); it never rewrites an
- * AST to apply a prefix, so a module-level query keeps its identity in the plan cache.
- * The prefix is part of the plan-cache key, and the prefix the root table resolved to
- * comes back as {@link CompiledQuery.prefix}.
+ * database (MySQL) for tables that nothing more specific places. It is the weakest
+ * source: the repo passes the per-call `prefix` option if there is one, else its own
+ * default, else `undefined`.
+ *
+ * For a query, the compiler resolves each table to the first that is set of, in Ecto's
+ * order:
+ *
+ * 1. the source's own prefix (`TableSourceNode.prefix`: the prefix given to `from` or a join);
+ * 2. the prefix the schema declares (`SchemaMeta.prefix`);
+ * 3. the query's prefix (`QueryAst.prefix`);
+ * 4. the `prefix` argument (per-call option, else repo default).
+ *
+ * So a schema that declares a prefix keeps it whatever the query, the call or the repo
+ * say, and a per-call prefix does not override a query's own. A CTE reference
+ * (`CteSourceNode`) never takes a prefix.
+ *
+ * For a row-level write (`compileInsert`, `compileUpdate`, `compileDelete`) there is no
+ * query: the table is the `prefix` argument if set, else the schema's. The repo computes
+ * the argument as the per-call option, else (for an update or delete) the row's
+ * `RowMeta.prefix`, else its default.
+ *
+ * The repo never rewrites an AST to apply a prefix, so a module-level query keeps its
+ * identity in the plan cache. The `prefix` argument is part of the plan-cache key, and
+ * the prefix the root table resolved to comes back as {@link CompiledQuery.prefix}.
+ *
+ * Ecto equivalent of the order: "Query prefix" in the `Ecto.Query` documentation.
  *
  * Ecto equivalent: the `Ecto.Adapter` behaviours (`Queryable`, `Schema`, `Transaction`).
  *

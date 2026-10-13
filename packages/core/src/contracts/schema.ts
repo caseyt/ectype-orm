@@ -21,6 +21,15 @@ import type { AnyEctoType } from "./type.js";
  *
  * Created with `Symbol.for`, so two installed copies of the package agree on the key.
  *
+ * **It must be an own data property** of the base class that `Schema()` returns (a plain
+ * `static` value, not a getter), holding an object whose `fields` is an own data property
+ * with a plain array of {@link FieldMeta} objects, whose `name` and `redact` are own data
+ * properties too. Code that must not run anything belonging to the value it inspects
+ * (the redaction-aware formatter in `internal/inspect.ts`) reads the metadata through
+ * property descriptors; where it finds an accessor it cannot tell which fields are
+ * redacted, and prints none of the row's values. Laziness belongs inside the metadata
+ * (`assocs()` is a method), not in front of it.
+ *
  * @example
  * ```ts
  * declare const User: AnySchema;
@@ -355,6 +364,7 @@ export interface SchemaMeta {
   readonly name: string;
   /** The table name; `null` for an embedded schema. */
   readonly source: string | null;
+  /** The prefix the schema declares. In a query it wins over the query's, the call's and the repo's. */
   readonly prefix: string | undefined;
   /** Every field in declaration order. This order is the row shape: rows assign their properties in it. */
   readonly fields: readonly FieldMeta[];
@@ -565,6 +575,7 @@ export type RowOf<F> = { -readonly [K in keyof F]: FieldType<F[K]> };
  * ```
  */
 export interface SchemaStatic<F extends FieldsShape = FieldsShape> {
+  /** An own data property (see {@link META}), never an accessor. */
   readonly [META]: SchemaMeta;
   /** The field builders the class was defined with, for type inference and reflection. */
   readonly fields: F;

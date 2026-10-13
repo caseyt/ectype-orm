@@ -72,8 +72,11 @@
  * plan, which is what the plan cache of step 10 assumes.
  *
  * What contributes: every node's kind, operators, function names, identifiers (source,
- * alias, column, prefix), flags, the `value` of a {@link LiteralNode} (it becomes SQL
- * text), the **type** of a parameter, and of each preload its `assoc`, its `from` and its
+ * alias, column, prefix), boolean and enumerated properties (`distinct`, `direction`,
+ * `asText`, `recursive`, …), the `value` of a {@link LiteralNode} (it becomes SQL text),
+ * the **type** and the **`redact`** flag of a parameter (both end up in the slots of the
+ * shared plan, so two queries that differ in either must not share one), and of each
+ * preload its `assoc`, its `from` and its
  * nested preloads (a join preload adds columns to the select list, and any preload
  * changes how rows are built). What never contributes: the `value` of a {@link ParamNode}
  * or {@link ListNode}, the length of a list, a select constant, and the `query` of a
@@ -570,7 +573,7 @@ export interface TableSourceNode {
   readonly source: string;
   /** The schema the binding was created from; `undefined` for a schemaless table. */
   readonly meta: SchemaMeta | undefined;
-  /** A prefix for this source alone; it wins over the query's and the repo's. */
+  /** A prefix for this source alone; it wins over every other (see "Prefixes" on `Adapter`). */
   readonly prefix: string | undefined;
   /** The binding alias. */
   readonly alias: string;
@@ -961,7 +964,7 @@ export interface QueryAst {
   readonly preloads: readonly PreloadNode[];
   /** The assignments of an `updateAll`; empty for every other operation. */
   readonly updates: readonly UpdateNode[];
-  /** The query-level prefix (Postgres schema, MySQL database). */
+  /** The query-level prefix (Postgres schema, MySQL database). It does not override a prefix that a schema declares. */
   readonly prefix: string | undefined;
   /** Table hints, each a fragment. */
   readonly hints: readonly FragmentNode[];

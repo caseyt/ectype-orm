@@ -283,7 +283,7 @@ describe("CompiledQuery and OutputPlan", () => {
       keys: ["id", "author", "pair"],
       values: [
         { kind: "value", alias: "c0", type: undefined },
-        { kind: "row", meta, aliases: ["c1", "c2"], nullable: false, preloads: [] },
+        { kind: "row", meta, aliases: ["c1", "c2"], key: ["c1"], nullable: false, preloads: [] },
         { kind: "tuple", items: [{ kind: "value", alias: "c3", type: undefined }] },
       ],
     };
@@ -343,6 +343,8 @@ describe("what steps 08 to 17 need from the contract", () => {
       options: { prefix?: string },
       repoPrefix: string | undefined,
     ) {
+      // The argument is the weakest prefix: the per-call option, else the repo default. A
+      // prefix on the source, on the schema or on the query wins over it in the compiler.
       const compiled = adapter.compile(query, "all", options.prefix ?? repoPrefix);
       const raw = await adapter.execute(compiled.sql, bindParams(compiled.slots, query.params), {
         slots: compiled.slots,
@@ -453,43 +455,127 @@ describe("what steps 08 to 17 need from the contract", () => {
     void [output, leaked];
   });
 
-  test("step 14: a join preload is part of the output plan and rows come from a factory variant", () => {
-    const posts: OutputPreload = {
-      assoc: "posts",
-      cardinality: "many",
-      row: { kind: "row", meta, aliases: ["c2", "c3"], nullable: false, preloads: [] },
+  test("step 14: join preloads are decoded per row and merged after decoding, from the plan alone", () => {
+    type RowLeaf = Extract<OutputPlan, { kind: "row" }>;
+    type Raw = Readonly<Record<string, unknown>>;
+    const comments: RowLeaf = {
+      kind: "row",
+      meta,
+      aliases: ["c4", "c5"],
+      key: ["c4"],
+      nullable: true,
+      preloads: [],
     };
-    const users: OutputPlan = {
+    const posts: RowLeaf = {
+      kind: "row",
+      meta,
+      aliases: ["c2", "c3"],
+      key: ["c2"],
+      nullable: true,
+      preloads: [{ assoc: "comments", cardinality: "many", row: comments }],
+    };
+    const users: RowLeaf = {
       kind: "row",
       meta,
       aliases: ["c0", "c1"],
+      key: ["c0"],
       nullable: false,
-      preloads: [posts],
+      preloads: [
+        { assoc: "posts", cardinality: "many", row: posts },
+        // Loaded by a separate query after decoding: the plan only reserves the property.
+        { assoc: "profile", cardinality: "one", row: undefined },
+      ],
     };
-    if (users.kind === "row") {
-      const create = users.meta.createWith(users.preloads.map((preload) => preload.assoc));
-      expectTypeOf(create).toEqualTypeOf<
-        (values: readonly unknown[], loaded: readonly unknown[], row: RowMeta) => object
-      >();
+
+    // 1. The decoder: one result row in, one parent out, with that row's child in place.
+    //    A pure function of the plan and the row: no state between rows.
+    function decodeRow(leaf: RowLeaf, row: Raw, rowMeta: RowMeta): object | null {
+      if (leaf.nullable && leaf.key.every((alias) => row[alias] === null)) return null;
+      const values = leaf.aliases.map((alias) => row[alias]);
+      if (leaf.preloads.length === 0) return leaf.meta.create(values, rowMeta);
+      const loaded = leaf.preloads.map((preload) => {
+        const child = preload.row?.kind === "row" ? decodeRow(preload.row, row, rowMeta) : null;
+        if (preload.cardinality === "one") return child;
+        return child === null ? [] : [child];
+      });
+      return leaf.meta.createWith(leaf.preloads.map((preload) => preload.assoc))(values, loaded, rowMeta);
     }
+
+    // 2. The post-decode stage (step 12's afterDecode hook, implemented by step 14): merges
+    //    parents with equal primary keys, first seen first, and their children likewise.
+    function mergeParents(leaf: RowLeaf, decoded: readonly object[]): object[] {
+      const byKey = new Map<string, Record<string, unknown>>();
+      for (const item of decoded as readonly Record<string, unknown>[]) {
+        const key = JSON.stringify(leaf.meta.primaryKey.map((field) => item[field.name]));
+        const seen = byKey.get(key);
+        if (seen === undefined) {
+          byKey.set(key, item);
+          continue;
+        }
+        for (const preload of leaf.preloads) {
+          if (preload.cardinality === "many" && preload.row !== undefined) {
+            (seen[preload.assoc] as object[]).push(...(item[preload.assoc] as object[]));
+          }
+        }
+      }
+      const parents = [...byKey.values()];
+      for (const parent of parents) {
+        for (const preload of leaf.preloads) {
+          if (preload.cardinality === "many" && preload.row?.kind === "row") {
+            parent[preload.assoc] = mergeParents(preload.row, parent[preload.assoc] as object[]);
+          }
+        }
+      }
+      return parents;
+    }
+
+    const rowMeta = users.meta.rowMeta("loaded", undefined);
+    const decoder: RowDecoder = (row) => decodeRow(users, row, rowMeta);
+    const afterDecode = (rows: readonly unknown[]): object[] =>
+      mergeParents(users, rows.filter((row) => row !== null) as object[]);
+    expectTypeOf(decoder).toEqualTypeOf<RowDecoder>();
+    expectTypeOf(afterDecode).returns.toEqualTypeOf<object[]>();
+    expectTypeOf(users.meta.createWith(["posts", "profile"])).toEqualTypeOf<
+      (values: readonly unknown[], loaded: readonly unknown[], row: RowMeta) => object
+    >();
+    expectTypeOf(users.preloads[1]!.row).toEqualTypeOf<OutputPlan | undefined>();
+
     // @ts-expect-error not a cardinality
-    const bad: OutputPreload = { ...posts, cardinality: "several" };
-    void bad;
+    const bad: OutputPreload = { ...users.preloads[0]!, cardinality: "several" };
+    // @ts-expect-error a separate-query preload says so with `row: undefined`, not by omission
+    const omitted: OutputPreload = { assoc: "profile", cardinality: "one" };
+    // @ts-expect-error a decoder takes one row: it cannot see the others to de-duplicate
+    const resultLevel: RowDecoder = (rows: readonly Raw[]) => rows;
+    void [bad, omitted, resultLevel];
   });
 
   test("steps 08 and 12: a whole binding from an outer join decodes to null", () => {
-    const profile: OutputPlan = { kind: "row", meta, aliases: ["c2", "c3"], nullable: true, preloads: [] };
+    // `key` holds the output columns of the primary key. (`FieldMeta.index` is a position
+    // in `fields`, not in `aliases`, which is aligned with `persisted`.)
+    const profile: OutputPlan = {
+      kind: "row",
+      meta,
+      aliases: ["c2", "c3"],
+      key: ["c2"],
+      nullable: true,
+      preloads: [],
+    };
     const decode = (row: Readonly<Record<string, unknown>>): object | null => {
       if (profile.kind !== "row") return null;
-      const absent =
-        profile.nullable &&
-        profile.meta.primaryKey.every((key) => row[profile.aliases[key.index] ?? ""] === null);
-      return absent ? null : profile.meta.create([], profile.meta.rowMeta("loaded", undefined));
+      const absent = profile.nullable && profile.key.every((alias) => row[alias] === null);
+      return absent
+        ? null
+        : profile.meta.create(
+            profile.aliases.map((alias) => row[alias]),
+            profile.meta.rowMeta("loaded", undefined),
+          );
     };
     expectTypeOf(decode).returns.toEqualTypeOf<object | null>();
     // @ts-expect-error whether the row can be absent must be stated
-    const unstated: OutputPlan = { kind: "row", meta, aliases: [], preloads: [] };
-    void unstated;
+    const unstated: OutputPlan = { kind: "row", meta, aliases: [], key: [], preloads: [] };
+    // @ts-expect-error the key columns must be stated
+    const keyless: OutputPlan = { kind: "row", meta, aliases: [], nullable: false, preloads: [] };
+    void [unstated, keyless];
   });
 
   test("steps 09 and 12: explain and named prepared statements go through the contract", () => {
