@@ -100,7 +100,9 @@ Actions: `applyAction(cs, action)` → `Result<Row, Changeset>` (sets `action`; 
    because fields are non-null by default (D3).
 5. **Error identity.** `ChangesetError` objects are plain, serialisable, and contain no
    values from redacted fields.
-6. **`toJSON` / inspect.** A changeset inspects as `Changeset<User> { action, changes, errors, valid }` with redaction applied.
+6. **`toJSON` / inspect.** A changeset inspects as `Changeset<User> { action, changes, errors, valid }` with redaction applied:
+   `changes` is a plain object, so it is formatted with `formatStruct` and the schema's
+   redacted field names (`internal/inspect.ts` redacts rows by itself, not plain objects).
 
 ## Use cases to cover in tests and docs
 

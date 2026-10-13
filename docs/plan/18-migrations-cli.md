@@ -76,7 +76,8 @@ ectype db create | drop | reset     # dev conveniences; refuse when NODE_ENV=pro
 ## Behaviour
 
 1. **DDL generation** goes through Kysely's schema builder nodes and dialect compilers
-   (per ADR 0002), with raw fragments for anything missing. Capability-gated features
+   (per ADR 0002), with raw fragments for anything missing. The `Adapter` contract has no
+   DDL method yet: this step adds one (`compileFragment` covers `m.execute`). Capability-gated features
    (`concurrently`, exclusion constraints, partial indexes) throw `MigrationError` on dialects without them.
 2. **`change` reversal.** Record operations; `down` replays inverses in reverse order.
    Operations lacking enough information to reverse (`remove` without a type, `execute`

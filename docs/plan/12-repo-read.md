@@ -16,7 +16,7 @@ const repo = createRepo({
   adapter,
   prefix?: string,                    // default schema/database prefix
   log?: boolean | ((event: QueryEvent) => void),
-  planCacheSize?: number,
+  planCacheSize?: number,             // the cache lives in the adapter: used only when the repo creates the adapter, and forwarded to it
   codegen?: boolean,                  // default true; false disables new Function (CSP)
 });
 
@@ -52,7 +52,8 @@ interface so that the transaction-scoped repo (step 16) is the same type.
    The array returned is a fresh mutable array of fresh rows.
 2. **Row decoder (`hydrate.ts`).** Built once per compiled plan from its `OutputPlan` and
    stored on the plan:
-   - Whole-row leaf → `meta.create([r.c0, load3(r.c3), …])`, applying `load` only for
+   - The decoder is called with `(row, constants)`; a `constant` leaf yields `constants[index]`.
+   - Whole-row leaf → `meta.create([r.c0, load3(r.c3), …], rowMeta)`, applying `load` only for
      non-`IDENTITY` codecs and passing `null` through untouched.
    - Object/tuple select → an object literal / array with fixed key order.
    - Single expression → the value itself.
@@ -72,7 +73,9 @@ interface so that the transaction-scoped repo (step 16) is the same type.
    aggregate typing.
 5. **`stream`.** Uses `adapter.stream`; decodes lazily; honours early exit. Preloads are
    not supported in streams (throw with the suggestion to batch).
-6. **Options precedence.** Per-call `prefix` > query prefix > repo prefix (see step 10).
+6. **Options precedence.** Query prefix > per-call `prefix` > repo prefix: a per-call prefix
+   does not override a query's own, and neither overrides a per-source prefix or a schema's
+   declared prefix (as in Ecto; the full order is in step 10).
 7. **Errors.** Adapter errors pass through normalised. `NoResultsError` and
    `MultipleResultsError` carry the query's `toString()` rendering.
 8. **Telemetry.** Forward adapter events, adding `source` (root schema), `operation`

@@ -68,7 +68,8 @@ Anything not listed fails with `{ ok: false }` (the changeset turns that into `"
 - Dialect differences (int8 and numeric arriving as strings, SQLite booleans as 0/1,
   dates as text, JSON as text) are **not** handled here. Types expose their logical
   `db` kind and the adapter supplies overrides (`Adapter.typeOverrides`, step 11). Provide
-  the hook: `resolveCodec(type, adapter) -> { load, dump }`, memoised per (type, dialect).
+  the hook: `resolveCodec(type, adapter) -> { load, dump }`, memoised per (type, adapter instance): two adapters of one
+  dialect can be configured to load a type differently.
 - `enum` with a mapping dumps to the mapped value and loads back.
 - `array(inner)` composes inner load/dump, and is `IDENTITY` when inner is.
 
