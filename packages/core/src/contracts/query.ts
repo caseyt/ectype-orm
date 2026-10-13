@@ -72,8 +72,9 @@
  * plan, which is what the plan cache of step 10 assumes.
  *
  * What contributes: every node's kind, operators, function names, identifiers (source,
- * alias, column, prefix; wherever a node holds a schema's `meta` (a table or CTE source,
- * a whole-binding select) also that schema's `name` and the prefix it declares),
+ * alias, column, the prefix of every source and of every query, nested ones included;
+ * wherever a node holds a schema's `meta` (a table or CTE source, a whole-binding
+ * select) also that schema's `name` and the prefix it declares),
  * boolean and enumerated properties (`distinct`, `direction`, `asText`, `recursive`, …),
  * the `value` of a {@link LiteralNode} (it becomes SQL text),
  * the **type** and the **`redact`** flag of a parameter (both end up in the slots of the
@@ -972,7 +973,11 @@ export interface QueryAst {
   readonly preloads: readonly PreloadNode[];
   /** The assignments of an `updateAll`; empty for every other operation. */
   readonly updates: readonly UpdateNode[];
-  /** The query-level prefix (Postgres schema, MySQL database). It does not override a prefix that a schema declares. */
+  /**
+   * The query-level prefix (Postgres schema, MySQL database). It does not override a
+   * prefix that a schema declares. A query nested in this one (a subquery, a CTE body, a
+   * set-operation branch) that sets none inherits it ("Prefixes" on `Adapter`, rule 1).
+   */
   readonly prefix: string | undefined;
   /** Table hints, each a fragment. */
   readonly hints: readonly FragmentNode[];

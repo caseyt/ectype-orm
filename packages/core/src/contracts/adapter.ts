@@ -691,9 +691,10 @@ export interface AdapterEvents {
  * `source.prefix ?? schemaMeta.prefix ?? query.prefix ?? argument`
  *
  * where `source.prefix` is the prefix given to that `from` or join, `schemaMeta.prefix`
- * the one the schema declares, `query.prefix` that of the query the source sits in, and
- * `argument` the `prefix` parameter of the `compile*` call. Nothing else in the compiler
- * decides a prefix.
+ * the one the schema declares, `query.prefix` the prefix of the nearest enclosing query
+ * that sets one (the query the source sits in, else the one around it, and so on
+ * outward), and `argument` the `prefix` parameter of `compile` and `compileExplain`.
+ * Nothing else in the compiler decides a prefix.
  *
  * **Rule 2, provenance.** A `row` leaf of the {@link OutputPlan} carries the resolved
  * prefix of the table source its rows originate from. The value travels upward unchanged
@@ -704,7 +705,9 @@ export interface AdapterEvents {
  *
  * **To step 10:** implement this as one resolve function, called where a table source is
  * lowered, plus propagation of the leaf's value; there must be no prefix logic per node
- * kind.
+ * kind. The enclosing query's prefix is just the value handed down when a nested query
+ * (a subquery, a CTE body, a set-operation branch) is lowered: its own if it sets one,
+ * else the one it was handed.
  *
  * ### What the repo passes
  *
@@ -712,9 +715,15 @@ export interface AdapterEvents {
  *   else the repo default. It is the weakest position.
  * - **A row-level write** (`compileInsert`, `compileUpdate`, `compileDelete`): the
  *   statement has one table source and no query, and its `prefix` parameter is that
- *   source's own prefix, the strongest position. The repo passes the per-call option,
- *   else the row's `RowMeta.prefix`, else its default. (`insertAll` has no row and uses
- *   the schema's declared prefix in the row's place, which is what a built row holds.)
+ *   source's `source.prefix`, the strongest position (there is no `argument`). The repo
+ *   passes the per-call option, else the row's `RowMeta.prefix`, else its default.
+ *   (`insertAll` has no row and uses the schema's declared prefix in the row's place,
+ *   which is what a built row holds.)
+ * - **`reload`:** the repo puts the row's `RowMeta.prefix` on the source of the query it
+ *   builds (`source.prefix`), with rows of different prefixes in separate queries.
+ * - **A separate-query preload (step 14):** the repo passes the parents'
+ *   `RowMeta.prefix` as `argument`, with parents of different prefixes in separate
+ *   queries.
  *
  * A decoded row is stamped from its leaf: `leaf.meta.rowMeta("loaded", leaf.prefix)`.
  * The repo never rewrites an AST to apply a prefix.
@@ -724,8 +733,8 @@ export interface AdapterEvents {
  * - A schema that declares a prefix keeps it whatever the query, the call or the repo
  *   say; a per-call prefix on a read does not override a query's own; a per-call prefix
  *   on a write overrides everything.
- * - A row is written back, and reloaded, where it was read: a write passes the row's own
- *   prefix in the strongest position, and `reload` puts it on its query's source.
+ * - A row is written back, and reloaded, where it was read: both put the row's own
+ *   prefix in the strongest position.
  * - The tables of one statement can resolve differently, so rows of one result can carry
  *   different prefixes (second table below). Children of a join preload carry theirs.
  * - A row read through a subquery or a CTE carries the prefix of the inner table (third
@@ -736,15 +745,18 @@ export interface AdapterEvents {
  *   when they differ. Rows built from expressions, from a values list or from a fragment
  *   have none. With no provenance the row holds its schema's declared prefix and is
  *   written back like a built row; select the prefix as a column to do otherwise.
- * - A separate-query preload (step 14) is a query of its own: its children are stamped
- *   from its own leaves. Its `argument` is the parents' `RowMeta.prefix`, with parents of
- *   different prefixes loaded in separate queries.
+ * - A separate-query preload is a query of its own: its children are stamped from its
+ *   own leaves.
+ * - A nested query that sets no prefix reads where its enclosing query reads (fourth
+ *   table below), so the branches of a set operation normally agree.
  * - `updateAll` and `deleteAll` are queries: every table resolves by rule 1, `RETURNING`
  *   rows are stamped from their leaves, and {@link CompiledQuery.prefix} is the target's.
  *   `compileExplain` resolves as `compile` does. Streams use the same decoder.
- * - The plan cache key is the query's structure plus the `prefix` parameter. The
- *   per-source prefixes, the query prefix and each schema (its name and declared prefix)
- *   are part of the structure; see "Shape" in `query.ts`.
+ * - The plan cache key is the top-level query's structure plus the `prefix` parameter.
+ *   The per-source prefixes, the prefix of the query and of every query nested in it, and
+ *   each schema (its name and declared prefix) are part of the structure; see "Shape" in
+ *   `query.ts`. A nested query has no plan of its own: what it compiles to depends on the
+ *   prefix it inherits.
  *
  * ### Checks
  *
@@ -772,6 +784,14 @@ export interface AdapterEvents {
  * | Binding | Rule 1, at the inner source | Rule 2 | Read from | Row's prefix | `update` / `delete` | `reload` |
  * |---|---|---|---|---|---|---|
  * | `s` | `archive` | the outer leaf is the inner leaf's | `archive.posts` | `archive` | `archive.posts` | `archive.posts` |
+ *
+ * Inherited query prefix. Repo default `tenant_1`; `Post` declares none; no per-source
+ * prefix anywhere:
+ *
+ * | Query | `query.prefix` at the inner source | Read from | Row's prefix |
+ * |---|---|---|---|
+ * | a subquery `from(Post, "p")` with no prefix, as the source of an outer query whose prefix is `archive` | `archive`, inherited from the outer query | `archive.posts` | `archive` |
+ * | `from(Post, "p")` with prefix `archive`, `unionAll` a branch `from(Post, "p")` with none | `archive` in both: the branch inherits it | `archive.posts`, both branches | `archive` (the branches agree, so there is provenance) |
  *
  * Ecto equivalent of the order: "Query prefix" in the `Ecto.Query` documentation.
  *
