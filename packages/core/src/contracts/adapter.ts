@@ -137,6 +137,14 @@ export interface OutputPreload {
  *   all `NULL` cannot be told from an absent one, which is a limit of keyless schemas).
  *   `key` holds the output columns of the primary key, in `meta.primaryKey` order
  *   (empty for a schema without one): what identifies the row in the result.
+ *   `prefix` is the prefix **this leaf's** table resolved to under the precedence rule
+ *   (see "Prefixes" on {@link Adapter}). The tables of one statement can resolve
+ *   differently, so each leaf carries its own, and the decoder stamps each row from its
+ *   own leaf: `leaf.meta.rowMeta("loaded", leaf.prefix)`. That goes for the child leaves
+ *   of join preloads too. For a binding whose source is a subquery or a CTE, it is the
+ *   prefix a plain table source of that schema would have resolved to in the same query
+ *   (the schema's declared prefix, else the query's, else the argument), so that writing
+ *   the row back goes to its schema's table.
  *   `preloads` lists the associations the row carries (empty for an ordinary row). A row
  *   with preloads is built with `meta.createWith(preloads.map((p) => p.assoc))`.
  * - `constant`: no column. The value is `constants[index]` of the query's `SelectNode`,
@@ -182,6 +190,7 @@ export type OutputPlan =
       readonly meta: SchemaMeta;
       readonly aliases: readonly string[];
       readonly key: readonly string[];
+      readonly prefix: string | undefined;
       readonly nullable: boolean;
       readonly preloads: readonly OutputPreload[];
     }
@@ -234,8 +243,18 @@ export interface CompiledQuery {
   /** What the result rows hold; `undefined` when the rows are returned raw or there are none. */
   readonly output: OutputPlan | undefined;
   /**
-   * The prefix the statement's root table resolved to (see "Prefixes" on {@link Adapter}).
-   * The repo stamps it on the rows it builds: `meta.rowMeta("loaded", plan.prefix)`.
+   * The prefix the statement's **target or root table** resolved to (see "Prefixes" on
+   * {@link Adapter}): the table written by a row-level write, an `updateAll` or a
+   * `deleteAll`; the root source of a query when that is a table; `undefined` otherwise
+   * (a fragment, or a root that is a subquery, a CTE or a values list).
+   *
+   * It is what the repo stamps on the row it returns from a **row-level write**
+   * (`meta.rowMeta("loaded", plan.prefix)`), where there is one table and no output-plan
+   * leaf to ask, and what telemetry reports. Rows decoded from a query's
+   * {@link OutputPlan} are **not** stamped with it: each takes the prefix of its own
+   * `row` leaf, because a joined table can resolve to another prefix than the root. For a
+   * query whose root is a table it equals the root leaf's `prefix`; it is kept, although
+   * redundant there, so that writes and queries report their table the same way.
    */
   readonly prefix: string | undefined;
   /** Set by the repo, not by the adapter. */
@@ -703,9 +722,49 @@ export interface AdapterEvents {
  * A per-call prefix on a write overrides all of these, the schema's included; on a read
  * it is the weakest source, like the repo default.
  *
+ * ### Several tables in one statement
+ *
+ * The tables of one query can resolve to different prefixes, so a row's prefix is the
+ * one of **its own** table: every `row` leaf of the {@link OutputPlan} carries the prefix
+ * its table resolved to, and the decoder stamps each row from its leaf. Take a repo with
+ * default `tenant_1`, `User` declaring no prefix, `Org` declaring `global`, and
+ * `from(User, "u").join(Org, "o", …).join(Post, "p", …)` with the per-source prefix
+ * `archive` on the `Post` join, selecting all three bindings:
+ *
+ * | Binding | Resolved by | Read from | Row's `RowMeta.prefix` | `update` / `delete` of that row |
+ * |---|---|---|---|---|
+ * | `u` (`User`, no declared prefix) | the argument (repo default) | `tenant_1.users` | `tenant_1` | `tenant_1.users` |
+ * | `o` (`Org`, declares `global`) | the schema | `global.orgs` | `global` | `global.orgs` |
+ * | `p` (`Post`, source prefix `archive`) | the source | `archive.posts` | `archive` | `archive.posts` |
+ *
+ * Each row is written back to the table it was read from, because a write uses the
+ * row's own prefix as its argument, and the argument is the strongest source for a write.
+ *
+ * What follows from the same rule elsewhere:
+ *
+ * - **Join preloads:** the child leaves have their own `prefix`; children are stamped
+ *   with theirs, not the parent's.
+ * - **Separate-query preloads (step 14):** the children are decoded by the association
+ *   query's own plan, so by its own leaves. That query is compiled with the parent rows'
+ *   `RowMeta.prefix` as its `prefix` argument (parents with different prefixes are loaded
+ *   in separate queries), so children of a tenant's rows come from that tenant unless the
+ *   child schema declares a prefix of its own.
+ * - **`reload`:** re-reads a row from the table it came from: the query's source carries
+ *   the row's `RowMeta.prefix` as its per-source prefix (the strongest source for a read),
+ *   and rows with different prefixes are reloaded in separate queries.
+ * - **`updateAll` / `deleteAll`:** compiled like a query. The target (root) table and
+ *   every joined table resolve by the query order; {@link CompiledQuery.prefix} is the
+ *   target's, and rows from `RETURNING` take their leaf's.
+ * - **`compileExplain`** resolves exactly as `compile` does for the same arguments.
+ * - **Streams** use the same decoder, so the same leaves.
+ * - **The plan cache:** a plan is determined by the query's structure and the `prefix`
+ *   argument together. The per-source prefixes, the query prefix and each table's schema
+ *   (and so its declared prefix) are part of the structure; see "Shape" in `query.ts`.
+ *
  * The repo never rewrites an AST to apply a prefix, so a module-level query keeps its
- * identity in the plan cache. The `prefix` argument is part of the plan-cache key, and
- * the prefix the root table resolved to comes back as {@link CompiledQuery.prefix}.
+ * identity in the plan cache. The `prefix` argument is part of the plan-cache key. What
+ * each table resolved to comes back in the plan: per `row` leaf for the rows of a query,
+ * and as {@link CompiledQuery.prefix} for the target or root table.
  *
  * Ecto equivalent of the order: "Query prefix" in the `Ecto.Query` documentation.
  *

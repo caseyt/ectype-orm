@@ -390,11 +390,12 @@ export interface SchemaMeta {
   assocs(): ReadonlyMap<string, AssocMeta>;
   /**
    * The shared, frozen {@link RowMeta} for rows of this schema in `state`, read from or
-   * written to `prefix`. The same object is returned for the same arguments, so a decoder
-   * looks it up once per execution and every row of the result points at it. `prefix` is
-   * the prefix the statement actually ran in, which may differ from
-   * {@link SchemaMeta.prefix} (a per-call, per-query or repo-level prefix). A built row
-   * is created with `rowMeta("built", meta.prefix)`.
+   * written to `prefix`. The same object is returned for the same arguments, so every row
+   * of a result that comes from one table points at one object. `prefix` is the prefix the
+   * row's own table resolved to in the statement: for a decoded row, the `prefix` of its
+   * output-plan leaf; for the row returned by a row-level write, `CompiledQuery.prefix`.
+   * It may differ from {@link SchemaMeta.prefix} (a per-source, per-call, per-query or
+   * repo-level prefix). A built row is created with `rowMeta("built", meta.prefix)`.
    */
   rowMeta(state: RowState, prefix: string | undefined): RowMeta;
   /**

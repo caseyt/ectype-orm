@@ -283,7 +283,15 @@ describe("CompiledQuery and OutputPlan", () => {
       keys: ["id", "author", "pair"],
       values: [
         { kind: "value", alias: "c0", type: undefined },
-        { kind: "row", meta, aliases: ["c1", "c2"], key: ["c1"], nullable: false, preloads: [] },
+        {
+          kind: "row",
+          meta,
+          aliases: ["c1", "c2"],
+          key: ["c1"],
+          prefix: undefined,
+          nullable: false,
+          preloads: [],
+        },
         { kind: "tuple", items: [{ kind: "value", alias: "c3", type: undefined }] },
       ],
     };
@@ -352,7 +360,8 @@ describe("what steps 08 to 17 need from the contract", () => {
       });
       const output = compiled.output;
       if (output === undefined || output.kind !== "row") return [];
-      const rowMeta = output.meta.rowMeta("loaded", compiled.prefix);
+      // The row's prefix is its own leaf's, not the statement's.
+      const rowMeta = output.meta.rowMeta("loaded", output.prefix);
       expectTypeOf(rowMeta).toEqualTypeOf<RowMeta>();
       return raw.rows.map((row) =>
         output.meta.create(
@@ -363,6 +372,45 @@ describe("what steps 08 to 17 need from the contract", () => {
     }
     expectTypeOf(all).returns.resolves.toEqualTypeOf<object[]>();
     expectTypeOf(plan.prefix).toEqualTypeOf<string | undefined>();
+  });
+
+  test("steps 12 and 13: rows of a mixed-prefix join are each written back where they were read", () => {
+    type RowLeaf = Extract<OutputPlan, { kind: "row" }>;
+    // repo default "tenant_1"; User declares none; Org declares "global"; Post is joined
+    // with the per-source prefix "archive". One statement, three resolved prefixes.
+    const leaf = (prefix: string | undefined, aliases: string[]): RowLeaf => ({
+      kind: "row",
+      meta,
+      aliases,
+      key: [aliases[0] ?? ""],
+      prefix,
+      nullable: false,
+      preloads: [],
+    });
+    const output: OutputPlan = {
+      kind: "tuple",
+      items: [leaf("tenant_1", ["c0"]), leaf("global", ["c1"]), leaf("archive", ["c2"])],
+    };
+    function decode(row: Readonly<Record<string, unknown>>): object[] {
+      if (output.kind !== "tuple") return [];
+      return output.items.flatMap((item) =>
+        item.kind === "row"
+          ? [
+              item.meta.create(
+                item.aliases.map((alias) => row[alias]),
+                item.meta.rowMeta("loaded", item.prefix),
+              ),
+            ]
+          : [],
+      );
+    }
+    // Writing any of them back: the row's own prefix is the argument of the write.
+    function updatePlan(adapter: Adapter, row: { readonly [ROW]: RowMeta }) {
+      return adapter.compileUpdate(meta, [field], meta.primaryKey, [], row[ROW].prefix);
+    }
+    expectTypeOf(decode).returns.toEqualTypeOf<object[]>();
+    expectTypeOf(updatePlan).returns.toEqualTypeOf<CompiledQuery>();
+    expectTypeOf<RowLeaf["prefix"]>().toEqualTypeOf<string | undefined>();
   });
 
   test("step 13: an insert goes to the built row's prefix, like an update or a delete", () => {
@@ -482,6 +530,7 @@ describe("what steps 08 to 17 need from the contract", () => {
       meta,
       aliases: ["c4", "c5"],
       key: ["c4"],
+      prefix: "archive",
       nullable: true,
       preloads: [],
     };
@@ -490,6 +539,7 @@ describe("what steps 08 to 17 need from the contract", () => {
       meta,
       aliases: ["c2", "c3"],
       key: ["c2"],
+      prefix: "global",
       nullable: true,
       preloads: [{ assoc: "comments", cardinality: "many", row: comments }],
     };
@@ -498,6 +548,7 @@ describe("what steps 08 to 17 need from the contract", () => {
       meta,
       aliases: ["c0", "c1"],
       key: ["c0"],
+      prefix: "tenant_1",
       nullable: false,
       preloads: [
         { assoc: "posts", cardinality: "many", row: posts },
@@ -508,12 +559,15 @@ describe("what steps 08 to 17 need from the contract", () => {
 
     // 1. The decoder: one result row in, one parent out, with that row's child in place.
     //    A pure function of the plan and the row: no state between rows.
-    function decodeRow(leaf: RowLeaf, row: Raw, rowMeta: RowMeta): object | null {
+    //    Every row is stamped from its OWN leaf: a child can live in another prefix than
+    //    its parent (here users in "tenant_1", posts in "global", comments in "archive").
+    function decodeRow(leaf: RowLeaf, row: Raw): object | null {
+      const rowMeta = leaf.meta.rowMeta("loaded", leaf.prefix);
       if (leaf.nullable && leaf.key.every((alias) => row[alias] === null)) return null;
       const values = leaf.aliases.map((alias) => row[alias]);
       if (leaf.preloads.length === 0) return leaf.meta.create(values, rowMeta);
       const loaded = leaf.preloads.map((preload) => {
-        const child = preload.row?.kind === "row" ? decodeRow(preload.row, row, rowMeta) : null;
+        const child = preload.row?.kind === "row" ? decodeRow(preload.row, row) : null;
         if (preload.cardinality === "one") return child;
         return child === null ? [] : [child];
       });
@@ -548,8 +602,7 @@ describe("what steps 08 to 17 need from the contract", () => {
       return parents;
     }
 
-    const rowMeta = users.meta.rowMeta("loaded", undefined);
-    const decoder: RowDecoder = (row) => decodeRow(users, row, rowMeta);
+    const decoder: RowDecoder = (row) => decodeRow(users, row);
     const afterDecode = (rows: readonly unknown[]): object[] =>
       mergeParents(users, rows.filter((row) => row !== null) as object[]);
     expectTypeOf(decoder).toEqualTypeOf<RowDecoder>();
@@ -576,6 +629,7 @@ describe("what steps 08 to 17 need from the contract", () => {
       meta,
       aliases: ["c2", "c3"],
       key: ["c2"],
+      prefix: undefined,
       nullable: true,
       preloads: [],
     };
@@ -588,15 +642,24 @@ describe("what steps 08 to 17 need from the contract", () => {
         ? null
         : profile.meta.create(
             profile.aliases.map((alias) => row[alias]),
-            profile.meta.rowMeta("loaded", undefined),
+            profile.meta.rowMeta("loaded", profile.prefix),
           );
     };
     expectTypeOf(decode).returns.toEqualTypeOf<object | null>();
     // @ts-expect-error whether the row can be absent must be stated
-    const unstated: OutputPlan = { kind: "row", meta, aliases: [], key: [], preloads: [] };
+    const unstated: OutputPlan = { kind: "row", meta, aliases: [], key: [], prefix: undefined, preloads: [] };
     // @ts-expect-error the key columns must be stated
-    const keyless: OutputPlan = { kind: "row", meta, aliases: [], nullable: false, preloads: [] };
-    void [unstated, keyless];
+    const keyless: OutputPlan = {
+      kind: "row",
+      meta,
+      aliases: [],
+      prefix: undefined,
+      nullable: false,
+      preloads: [],
+    };
+    // @ts-expect-error the prefix the leaf's table resolved to must be stated, even as undefined
+    const unplaced: OutputPlan = { kind: "row", meta, aliases: [], key: [], nullable: false, preloads: [] };
+    void [unstated, keyless, unplaced];
   });
 
   test("steps 09 and 12: explain and named prepared statements go through the contract", () => {

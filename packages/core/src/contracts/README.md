@@ -50,8 +50,10 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
   source's prefix, then the schema's declared prefix, then the query's, then that argument.
   For a write the argument is the per-call option, else the row's own prefix (a built row
   holds its schema's declared prefix), else the repo default, so an insert lands where a
-  read will look; the table of cases is on `Adapter`. The plan reports the prefix it
-  resolved to, and the repo stamps it on the rows (`SchemaMeta.rowMeta`).
+  read will look; the tables of cases are on `Adapter`. The tables of one statement can
+  resolve differently, so every `row` leaf of the output plan carries its own table's
+  prefix and each decoded row is stamped from its leaf (`SchemaMeta.rowMeta`);
+  `CompiledQuery.prefix` is the target or root table's, used for row-level writes.
 - **A row decoder is stateless.** It turns one result row into one value. Merging the
   parents of a join preload happens after decoding, in the repo (`OutputPlan`, "Join
   preloads").
@@ -79,7 +81,7 @@ consumer is most likely to trip over:
   `dump` and `redact`.
 - `CompiledQuery` has `output` (the `OutputPlan`) and `prefix` next to `decoder`.
 - `OutputPlan` has a `constant` leaf (the value comes from `SelectNode.constants`, passed
-  to the decoder), and its `row` leaf has `key`, `nullable` and `preloads` (every preload
+  to the decoder), and its `row` leaf has `key`, `prefix`, `nullable` and `preloads` (every preload
   of the row; `row: undefined` marks one loaded by a separate query).
 - Every `compile*` method takes a `prefix` argument. There are also `compileFragment`
   (for `repo.query`) and `compileExplain`.

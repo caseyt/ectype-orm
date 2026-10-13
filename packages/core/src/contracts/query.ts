@@ -72,8 +72,9 @@
  * plan, which is what the plan cache of step 10 assumes.
  *
  * What contributes: every node's kind, operators, function names, identifiers (source,
- * alias, column, prefix), boolean and enumerated properties (`distinct`, `direction`,
- * `asText`, `recursive`, …), the `value` of a {@link LiteralNode} (it becomes SQL text),
+ * alias, column, prefix; for a table source also the prefix its schema declares),
+ * boolean and enumerated properties (`distinct`, `direction`, `asText`, `recursive`, …),
+ * the `value` of a {@link LiteralNode} (it becomes SQL text),
  * the **type** and the **`redact`** flag of a parameter (both end up in the slots of the
  * shared plan, so two queries that differ in either must not share one), and of each
  * preload its `assoc`, its `from` and its
@@ -90,9 +91,12 @@
  * of `hashInt` calls per builder method.
  *
  * The plan cache uses `shape` as a key and confirms a hit structurally, because hashes
- * can collide. On a dialect that expands lists (`capabilities.arrayParams` false) the
- * SQL depends on the list lengths, so the cache key there is `shape` combined with
- * `listLengths`; on Postgres `listLengths` is ignored.
+ * can collide. In that comparison two sources are the same only if they have the **same
+ * `meta` object**: a plan holds the schema metadata of the rows it builds (and each
+ * table's resolved prefix), so it can be shared only by queries over the same schemas.
+ * On a dialect that expands lists (`capabilities.arrayParams` false) the SQL depends on
+ * the list lengths, so the cache key there is `shape` combined with `listLengths`; on
+ * Postgres `listLengths` is ignored.
  *
  * @module
  */
