@@ -1,0 +1,237 @@
+/**
+ * `defineType` and `parameterized`: how every type is made, the built-in ones included.
+ *
+ * @module
+ */
+import type { AnyFieldType, CastResult, DbType, FieldType } from "../contracts/type.js";
+import { CUSTOM_SQL_TYPE, IDENTITY } from "../contracts/type.js";
+import { SchemaDefinitionError } from "../errors.js";
+
+/**
+ * The conversions of a {@link TypeDefinition}. They may be left out only when the
+ * application value and the driver value are the same type.
+ */
+type Conversions<TApp, TDb> = [TApp] extends [TDb]
+  ? [TDb] extends [TApp]
+    ? { readonly fromDb?: (value: TDb) => TApp; readonly toDb?: (value: TApp) => TDb }
+    : { readonly fromDb: (value: TDb) => TApp; readonly toDb: (value: TApp) => TDb }
+  : { readonly fromDb: (value: TDb) => TApp; readonly toDb: (value: TApp) => TDb };
+
+/**
+ * What {@link defineType} takes: a type's name, its column type and its conversions.
+ * `TApp` is the value in application code; `TDb` is what the driver sends and receives.
+ *
+ * `fromDb` and `toDb` are optional when `TApp` and `TDb` are the same type, and required
+ * otherwise. `equal` is always optional.
+ *
+ * @example
+ * ```ts
+ * const definition: TypeDefinition<string, string> = {
+ *   name: "slug",
+ *   db: { kind: "text" },
+ *   cast: (input) =>
+ *     typeof input === "string" ? { success: true, data: input.toLowerCase() } : { success: false },
+ * };
+ * ```
+ */
+export type TypeDefinition<TApp, TDb = TApp> = {
+  /** Shown in error messages. */
+  readonly name: string;
+  /** The logical column type. A `custom` type's `sql` must be a constant you wrote, never user data. */
+  readonly db: DbType;
+  /** Untrusted input to an application value. It must never throw. */
+  readonly cast: (input: unknown) => CastResult<TApp>;
+  /** Whether two values are the same. Defaults to `Object.is`. */
+  readonly equal?: (a: TApp, b: TApp) => boolean;
+} & Conversions<TApp, TDb>;
+
+function describe(value: unknown): string {
+  return value === null ? "null" : Array.isArray(value) ? "an array" : typeof value;
+}
+
+function checkDbType(typeName: string, db: unknown, path: string): void {
+  if (typeof db !== "object" || db === null || typeof (db as { kind?: unknown }).kind !== "string") {
+    throw new SchemaDefinitionError(
+      `Type "${typeName}": ${path} must be a column type such as { kind: "text" }, but it is ${describe(db)}.`,
+    );
+  }
+  const dbType = db as DbType;
+  if (dbType.kind === "array") {
+    checkDbType(typeName, dbType.of, `${path}.of`);
+  } else if (dbType.kind === "custom") {
+    // Trusted developer input (decision D9). The compiler checks it again before emitting it.
+    if (typeof dbType.sql !== "string" || !CUSTOM_SQL_TYPE.test(dbType.sql)) {
+      throw new SchemaDefinitionError(
+        `Type "${typeName}": ${path}.sql must be a plain SQL type name such as "citext", "numeric(10, 2)" or "public.mood[]". It is written into the SQL text, so it must be a constant and can never come from user data.`,
+      );
+    }
+  }
+}
+
+/**
+ * Creates a type: how one kind of value is accepted from untrusted input, read from the
+ * database, written to it and compared.
+ *
+ * Leave `fromDb` and `toDb` out when the driver's value is already the value you want;
+ * the library then skips the call entirely when it reads rows. `equal` defaults to
+ * `Object.is`. The functions are called on their own, never as methods, so they must not
+ * use `this`.
+ *
+ * @example
+ * ```ts
+ * const Cents = defineType<bigint, string>({
+ *   name: "cents",
+ *   db: { kind: "decimal" },
+ *   cast: (input) =>
+ *     typeof input === "string" && /^\d+$/.test(input)
+ *       ? { success: true, data: BigInt(input) }
+ *       : { success: false, message: "is not a whole amount" },
+ *   fromDb: (stored) => BigInt(stored),
+ *   toDb: (cents) => cents.toString(),
+ * });
+ * ```
+ *
+ * @throws SchemaDefinitionError when the definition is malformed: no name, a `cast` that
+ * is not a function, or a `custom` column type that is not a plain SQL type name.
+ */
+export function defineType<TApp, TDb = TApp>(definition: TypeDefinition<TApp, TDb>): FieldType<TApp, TDb> {
+  const { name, db, cast, equal } = definition;
+  const { fromDb, toDb } = definition as {
+    readonly fromDb?: (value: TDb) => TApp;
+    readonly toDb?: (value: TApp) => TDb;
+  };
+  if (typeof name !== "string" || name === "") {
+    throw new SchemaDefinitionError(
+      `defineType needs a non-empty name (it appears in error messages), but got ${describe(name)}.`,
+    );
+  }
+  checkDbType(name, db, "db");
+  if (typeof cast !== "function") {
+    throw new SchemaDefinitionError(
+      `Type "${name}": cast must be a function that returns { success: true, data } or { success: false }, but it is ${describe(cast)}.`,
+    );
+  }
+  for (const [member, fn] of [
+    ["fromDb", fromDb],
+    ["toDb", toDb],
+    ["equal", equal],
+  ] as const) {
+    if (fn !== undefined && typeof fn !== "function") {
+      throw new SchemaDefinitionError(
+        `Type "${name}": ${member} must be a function or be left out, but it is ${describe(fn)}.`,
+      );
+    }
+  }
+  // One shape for every type, in the order of the FieldType interface: the hydration and
+  // parameter loops read `fromDb` and `toDb` from many different types.
+  const type: FieldType<TApp, TDb> = Object.freeze({
+    name,
+    db,
+    cast,
+    fromDb: fromDb ?? (IDENTITY as (value: TDb) => TApp),
+    toDb: toDb ?? (IDENTITY as (value: TApp) => TDb),
+    equal: equal ?? Object.is,
+  });
+  definedTypes.add(type);
+  return type;
+}
+
+/** Every type made by {@link defineType}: in the options of a parameterized type, it is compared by identity. */
+const definedTypes = new WeakSet<object>();
+
+const identities = new Map<symbol, number>();
+const objectIdentities = new WeakMap<object, number>();
+let nextIdentity = 1;
+
+function identityKey(value: object | symbol): string {
+  const ids = typeof value === "symbol" ? identities : objectIdentities;
+  let id = (ids as Map<unknown, number>).get(value);
+  if (id === undefined) {
+    id = nextIdentity++;
+    (ids as Map<unknown, number>).set(value, id);
+  }
+  return `#${id}`;
+}
+
+/**
+ * A string that is equal for two option values exactly when they are structurally equal.
+ * Plain objects compare by content whatever their key order, arrays by content in order,
+ * primitives by value. Anything else (a type, a function, a class instance) compares by
+ * identity.
+ */
+function optionsKey(value: unknown): string {
+  switch (typeof value) {
+    case "string":
+      return JSON.stringify(value);
+    case "number":
+      return Object.is(value, -0) ? "-0" : String(value);
+    case "bigint":
+      return `${value}n`;
+    case "boolean":
+      return value ? "true" : "false";
+    case "undefined":
+      return "undefined";
+    case "symbol":
+    case "function":
+      return identityKey(value);
+    default:
+      break;
+  }
+  if (value === null) return "null";
+  const object = value as object;
+  if (Array.isArray(object)) {
+    let key = "[";
+    for (let i = 0; i < object.length; i++) key += `${optionsKey(object[i])},`;
+    return `${key}]`;
+  }
+  const prototype = Object.getPrototypeOf(object);
+  if ((prototype !== Object.prototype && prototype !== null) || definedTypes.has(object)) {
+    return identityKey(object);
+  }
+  const record = object as Record<string, unknown>;
+  let key = "{";
+  for (const name of Object.keys(record).sort()) {
+    key += `${JSON.stringify(name)}:${optionsKey(record[name])},`;
+  }
+  return `${key}}`;
+}
+
+/**
+ * Builds a family of types from options, and remembers the result per option set: calling
+ * the returned function twice with equal options gives the same type object. That matters
+ * because types are compared by identity when plans and codecs are cached.
+ *
+ * Options are compared by content: plain objects whatever their key order, arrays in
+ * order, primitives by value. A type, a function or a class instance inside the options
+ * is compared by identity.
+ *
+ * @example
+ * ```ts
+ * const fixedString = parameterized((opts: { length: number }) =>
+ *   defineType<string>({
+ *     name: `char(${opts.length})`,
+ *     db: { kind: "custom", sql: `char(${opts.length})` },
+ *     cast: (input) =>
+ *       typeof input === "string" && input.length === opts.length
+ *         ? { success: true, data: input }
+ *         : { success: false, message: "should be {count} character(s)", meta: { count: opts.length } },
+ *   }),
+ * );
+ *
+ * fixedString({ length: 2 }) === fixedString({ length: 2 }); // true
+ * ```
+ */
+export function parameterized<TOptions, TType extends AnyFieldType>(
+  build: (options: TOptions) => TType,
+): (options: TOptions) => TType {
+  const cache = new Map<string, TType>();
+  return (options) => {
+    const key = optionsKey(options);
+    let type = cache.get(key);
+    if (type === undefined) {
+      type = build(options);
+      cache.set(key, type);
+    }
+    return type;
+  };
+}
