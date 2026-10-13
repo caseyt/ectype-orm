@@ -137,14 +137,10 @@ export interface OutputPreload {
  *   all `NULL` cannot be told from an absent one, which is a limit of keyless schemas).
  *   `key` holds the output columns of the primary key, in `meta.primaryKey` order
  *   (empty for a schema without one): what identifies the row in the result.
- *   `prefix` is the prefix **this leaf's** table resolved to under the precedence rule
- *   (see "Prefixes" on {@link Adapter}). The tables of one statement can resolve
- *   differently, so each leaf carries its own, and the decoder stamps each row from its
- *   own leaf: `leaf.meta.rowMeta("loaded", leaf.prefix)`. That goes for the child leaves
- *   of join preloads too. For a binding whose source is not a table (a subquery, a CTE,
- *   a values list, a fragment), see "Rows that do not come straight from a table" on
- *   {@link Adapter}: the leaf takes the prefix of the table the rows were really read
- *   from where there is one.
+ *   `prefix` is the resolved prefix of the table source the rows originate from, or the
+ *   schema's declared prefix when they have no single origin ("Prefixes" on
+ *   {@link Adapter}, rule 2). The decoder stamps each row from its own leaf:
+ *   `leaf.meta.rowMeta("loaded", leaf.prefix)`.
  *   `preloads` lists the associations the row carries (empty for an ordinary row). A row
  *   with preloads is built with `meta.createWith(preloads.map((p) => p.assoc))`.
  * - `constant`: no column. The value is `constants[index]` of the query's `SelectNode`,
@@ -686,127 +682,96 @@ export interface AdapterEvents {
  *
  * ## Prefixes
  *
- * Every `compile*` method that names a table takes `prefix`: the schema (Postgres) or
- * database (MySQL) for tables that nothing more specific places. It is the weakest
- * source: the repo passes the per-call `prefix` option if there is one, else its own
- * default, else `undefined`.
+ * A prefix is the schema (Postgres) or database (MySQL) a table lives in. Two rules
+ * decide every prefix; everything after them is a consequence.
  *
- * For a query, the compiler resolves each table to the first that is set of, in Ecto's
- * order:
+ * **Rule 1, resolution.** A prefix is decided in exactly one place: where a table source
+ * is lowered. It is the first that is set of, in Ecto's order,
  *
- * 1. the source's own prefix (`TableSourceNode.prefix`: the prefix given to `from` or a join);
- * 2. the prefix the schema declares (`SchemaMeta.prefix`);
- * 3. the query's prefix (`QueryAst.prefix`);
- * 4. the `prefix` argument (per-call option, else repo default).
+ * `source.prefix ?? schemaMeta.prefix ?? query.prefix ?? argument`
  *
- * So a schema that declares a prefix keeps it whatever the query, the call or the repo
- * say, and a per-call prefix does not override a query's own. A CTE reference
- * (`CteSourceNode`) never takes a prefix.
+ * where `source.prefix` is the prefix given to that `from` or join, `schemaMeta.prefix`
+ * the one the schema declares, `query.prefix` that of the query the source sits in, and
+ * `argument` the `prefix` parameter of the `compile*` call. Nothing else in the compiler
+ * decides a prefix.
  *
- * For a row-level write (`compileInsert`, `compileUpdate`, `compileDelete`) there is no
- * query: the table is the `prefix` argument if set, else the schema's. The repo computes
- * the argument, for an insert as much as for an update or a delete, as the per-call
- * option, else the row's `RowMeta.prefix`, else its default. A built row holds the
- * prefix its schema declares, so the repo default reaches a write only when the schema
- * declares none; `insertAll`, which has no row, uses the schema's declared prefix in that
- * place.
+ * **Rule 2, provenance.** A `row` leaf of the {@link OutputPlan} carries the resolved
+ * prefix of the table source its rows originate from. The value travels upward unchanged
+ * through whatever wraps that source (a subquery, a CTE, a join preload, `RETURNING`),
+ * because an outer leaf is built from the inner leaf and never resolved again. A row with
+ * no single originating table source has no provenance, and its leaf takes the prefix
+ * its schema declares: the value a newly built row holds (`RowMeta.prefix`).
  *
- * With no per-call option, every operation therefore lands on the same table:
+ * **To step 10:** implement this as one resolve function, called where a table source is
+ * lowered, plus propagation of the leaf's value; there must be no prefix logic per node
+ * kind.
+ *
+ * ### What the repo passes
+ *
+ * - **A query** (`compile`, `compileExplain`): `argument` is the per-call `prefix` option,
+ *   else the repo default. It is the weakest position.
+ * - **A row-level write** (`compileInsert`, `compileUpdate`, `compileDelete`): the
+ *   statement has one table source and no query, and its `prefix` parameter is that
+ *   source's own prefix, the strongest position. The repo passes the per-call option,
+ *   else the row's `RowMeta.prefix`, else its default. (`insertAll` has no row and uses
+ *   the schema's declared prefix in the row's place, which is what a built row holds.)
+ *
+ * A decoded row is stamped from its leaf: `leaf.meta.rowMeta("loaded", leaf.prefix)`.
+ * The repo never rewrites an AST to apply a prefix.
+ *
+ * ### Consequences
+ *
+ * - A schema that declares a prefix keeps it whatever the query, the call or the repo
+ *   say; a per-call prefix on a read does not override a query's own; a per-call prefix
+ *   on a write overrides everything.
+ * - A row is written back, and reloaded, where it was read: a write passes the row's own
+ *   prefix in the strongest position, and `reload` puts it on its query's source.
+ * - The tables of one statement can resolve differently, so rows of one result can carry
+ *   different prefixes (second table below). Children of a join preload carry theirs.
+ * - A row read through a subquery or a CTE carries the prefix of the inner table (third
+ *   table below). A CTE reference (`CteSourceNode`) is not a table source: rule 1 does
+ *   not apply to it, and its leaf is the CTE's own, including inside a recursive CTE,
+ *   where the self-reference adds nothing to the anchor's provenance.
+ * - A set operation has provenance when all its branches agree on the prefix, and none
+ *   when they differ. Rows built from expressions, from a values list or from a fragment
+ *   have none. With no provenance the row holds its schema's declared prefix and is
+ *   written back like a built row; select the prefix as a column to do otherwise.
+ * - A separate-query preload (step 14) is a query of its own: its children are stamped
+ *   from its own leaves. Its `argument` is the parents' `RowMeta.prefix`, with parents of
+ *   different prefixes loaded in separate queries.
+ * - `updateAll` and `deleteAll` are queries: every table resolves by rule 1, `RETURNING`
+ *   rows are stamped from their leaves, and {@link CompiledQuery.prefix} is the target's.
+ *   `compileExplain` resolves as `compile` does. Streams use the same decoder.
+ * - The plan cache key is the query's structure plus the `prefix` parameter. The
+ *   per-source prefixes, the query prefix and each schema (its name and declared prefix)
+ *   are part of the structure; see "Shape" in `query.ts`.
+ *
+ * ### Checks
+ *
+ * One table, no per-call option. Every operation lands on the same table:
  *
  * | Schema declares | Repo default | insert | get / all | update | delete |
  * |---|---|---|---|---|---|
- * | `auth` | none | `auth` (the built row's prefix) | `auth` (schema) | `auth` (the row's) | `auth` |
+ * | `auth` | none | `auth` (built row) | `auth` (schema) | `auth` (the row's) | `auth` |
  * | none | `tenant_1` | `tenant_1` (repo default) | `tenant_1` (argument) | `tenant_1` (the row's) | `tenant_1` |
- * | `auth` | `tenant_1` | `auth` (the built row's prefix) | `auth` (schema beats the argument) | `auth` (the row's) | `auth` |
+ * | `auth` | `tenant_1` | `auth` (built row) | `auth` (schema before argument) | `auth` (the row's) | `auth` |
  *
- * A per-call prefix on a write overrides all of these, the schema's included; on a read
- * it is the weakest source, like the repo default.
+ * Several tables. Repo default `tenant_1`; `User` declares none; `Org` declares `global`;
+ * `Post` is joined with the per-source prefix `archive`; all three bindings selected:
  *
- * ### Several tables in one statement
- *
- * The tables of one query can resolve to different prefixes, so a row's prefix is the
- * one of **its own** table: every `row` leaf of the {@link OutputPlan} carries the prefix
- * its table resolved to, and the decoder stamps each row from its leaf. Take a repo with
- * default `tenant_1`, `User` declaring no prefix, `Org` declaring `global`, and
- * `from(User, "u").join(Org, "o", …).join(Post, "p", …)` with the per-source prefix
- * `archive` on the `Post` join, selecting all three bindings:
- *
- * | Binding | Resolved by | Read from | Row's `RowMeta.prefix` | `update` / `delete` of that row |
+ * | Binding | Rule 1 stops at | Read from | Row's `RowMeta.prefix` | `update` / `delete` of that row |
  * |---|---|---|---|---|
- * | `u` (`User`, no declared prefix) | the argument (repo default) | `tenant_1.users` | `tenant_1` | `tenant_1.users` |
- * | `o` (`Org`, declares `global`) | the schema | `global.orgs` | `global` | `global.orgs` |
- * | `p` (`Post`, source prefix `archive`) | the source | `archive.posts` | `archive` | `archive.posts` |
+ * | `u` (`User`) | the argument | `tenant_1.users` | `tenant_1` | `tenant_1.users` |
+ * | `o` (`Org`) | the schema | `global.orgs` | `global` | `global.orgs` |
+ * | `p` (`Post`) | the source | `archive.posts` | `archive` | `archive.posts` |
  *
- * Each row is written back to the table it was read from, because a write uses the
- * row's own prefix as its argument, and the argument is the strongest source for a write.
+ * Through a subquery. Repo default `tenant_1`; `Post` declares none; a subquery over
+ * `Post` whose source has the per-source prefix `archive` (or whose query prefix is
+ * `archive`), used as the source of an outer binding `s` that is selected whole:
  *
- * ### Rows that do not come straight from a table
- *
- * A binding can yield rows of a schema without being a table source: its source is a
- * subquery or a CTE (`cte("tree", Category)`), a values list or a fragment. Its `row`
- * leaf still needs a prefix, and it must be the prefix of the table the rows were
- * **really read from**, or a later `update`, `delete` or `reload` goes elsewhere. The
- * compiler decides in this order:
- *
- * 1. **The inner query selects the row whole from one of its own sources.** The outer
- *    leaf takes the prefix that inner source resolved to. If that inner source is itself
- *    a subquery or a CTE, the rule is applied to it in turn, as deep as it goes.
- * 2. **The inner query is a set operation** (`UNION`, `INTERSECT`, `EXCEPT`). Rule 1 is
- *    applied to its **first branch** (the query that holds the `combinations`), whatever
- *    the other branches resolve to. When every branch reads the same table this is exact.
- *    When they do not (a union of `tenant_1.posts` and `archive.posts`), the origin of a
- *    given row is not known: every row gets the first branch's prefix, and writing such a
- *    row back uses that prefix, so rows of the other branches would be written to the
- *    first branch's table. Select the prefix as a column if rows of such a union are to
- *    be written back.
- * 3. **A recursive CTE** is a set operation whose later branch reads the CTE itself, so
- *    rule 2 gives the prefix of its anchor (first) branch, which is the table the
- *    recursion walks.
- * 4. **There is no inner source to follow:** the inner query builds the row from
- *    expressions instead of selecting a source binding whole; or the source is a values
- *    list, a fragment, or a CTE whose body is a fragment. The leaf takes the prefix a
- *    plain table source of that schema would have resolved to in the **outer** query (the
- *    schema's declared prefix, else the outer query's, else the argument). Such rows were
- *    not read from that table as rows; writing one back uses that prefix, which is the
- *    place the schema's rows normally live.
- *
- * Example of rule 1: repo default `tenant_1`; `Post` declares no prefix; a subquery
- * `from(Post, "p")` whose source `p` has the per-source prefix `archive` (the same holds
- * when the inner query sets `archive` as its query prefix), used as the source of an
- * outer binding `s` that is selected whole:
- *
- * | Binding | Resolved by | Read from | Row's `RowMeta.prefix` | `update` / `delete` | `reload` |
- * |---|---|---|---|---|---|
- * | `s` (rows of `Post` through the subquery) | the inner source `p` | `archive.posts` | `archive` | `archive.posts` | `archive.posts` |
- *
- * Without rule 1 the leaf would have taken the outer argument, `tenant_1`, and the row
- * would have been written to a table it never came from.
- *
- * What follows from the same rule elsewhere:
- *
- * - **Join preloads:** the child leaves have their own `prefix`; children are stamped
- *   with theirs, not the parent's.
- * - **Separate-query preloads (step 14):** the children are decoded by the association
- *   query's own plan, so by its own leaves. That query is compiled with the parent rows'
- *   `RowMeta.prefix` as its `prefix` argument (parents with different prefixes are loaded
- *   in separate queries), so children of a tenant's rows come from that tenant unless the
- *   child schema declares a prefix of its own.
- * - **`reload`:** re-reads a row from the table it came from: the query's source carries
- *   the row's `RowMeta.prefix` as its per-source prefix (the strongest source for a read),
- *   and rows with different prefixes are reloaded in separate queries.
- * - **`updateAll` / `deleteAll`:** compiled like a query. The target (root) table and
- *   every joined table resolve by the query order; {@link CompiledQuery.prefix} is the
- *   target's, and rows from `RETURNING` take their leaf's.
- * - **`compileExplain`** resolves exactly as `compile` does for the same arguments.
- * - **Streams** use the same decoder, so the same leaves.
- * - **The plan cache:** a plan is determined by the query's structure and the `prefix`
- *   argument together. The per-source prefixes, the query prefix and each table's schema
- *   (its name and its declared prefix) are part of the structure; see "Shape" in `query.ts`.
- *
- * The repo never rewrites an AST to apply a prefix, so a module-level query keeps its
- * identity in the plan cache. The `prefix` argument is part of the plan-cache key. What
- * each table resolved to comes back in the plan: per `row` leaf for the rows of a query,
- * and as {@link CompiledQuery.prefix} for the target or root table.
+ * | Binding | Rule 1, at the inner source | Rule 2 | Read from | Row's prefix | `update` / `delete` | `reload` |
+ * |---|---|---|---|---|---|---|
+ * | `s` | `archive` | the outer leaf is the inner leaf's | `archive.posts` | `archive` | `archive.posts` | `archive.posts` |
  *
  * Ecto equivalent of the order: "Query prefix" in the `Ecto.Query` documentation.
  *

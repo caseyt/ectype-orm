@@ -45,16 +45,13 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
   clauses were added. The invariant is `ast.params` equals `collectParams(ast)`. The
   builder, not the AST, keeps the per-clause counts and hashes that make adding a clause
   O(size of the clause).
-- **A prefix never rewrites an AST.** Every `compile*` method takes the weakest prefix (the
-  per-call option, else the repo default). A table resolves, in Ecto's order, to its
-  source's prefix, then the schema's declared prefix, then the query's, then that argument.
-  For a write the argument is the per-call option, else the row's own prefix (a built row
-  holds its schema's declared prefix), else the repo default, so an insert lands where a
-  read will look; the tables of cases are on `Adapter`. The tables of one statement can
-  resolve differently, so every `row` leaf of the output plan carries its own table's
-  prefix and each decoded row is stamped from its leaf (`SchemaMeta.rowMeta`);
-  `CompiledQuery.prefix` is the target or root table's, used for row-level writes. A row
-  read through a subquery or a CTE takes the prefix of the inner table it was read from.
+- **Prefixes follow two rules** ("Prefixes" on `Adapter`). Resolution happens in one
+  place, where a table source is lowered: `source.prefix ?? schemaMeta.prefix ??
+  query.prefix ?? argument`. Provenance: a `row` leaf of the output plan carries the
+  resolved prefix of the table source its rows come from, unchanged through subqueries,
+  CTEs and join preloads; a row with no single origin takes its schema's declared prefix,
+  like a built row. Each decoded row is stamped from its leaf, a write passes the row's
+  own prefix, and the repo never rewrites an AST to apply one.
 - **A row decoder is stateless.** It turns one result row into one value. Merging the
   parents of a join preload happens after decoding, in the repo (`OutputPlan`, "Join
   preloads").
