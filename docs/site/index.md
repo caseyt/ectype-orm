@@ -1,25 +1,25 @@
 ---
 layout: home
 hero:
-  name: Ectype
-  text: Ecto's ideas, in TypeScript
-  tagline: Schemas, changesets, composable queries and a Repo, typed end to end with no code generation.
+  name: Egon ORM
+  text: Typed data access for TypeScript
+  tagline: Schemas, changesets, composable queries and a repo, typed end to end with no code generation.
   actions:
     - theme: brand
-      text: Guide
+      text: Introduction
       link: /guide/
     - theme: alt
-      text: Ecto cheat sheet
-      link: /ecto/
+      text: Getting started
+      link: /guide/getting-started
 features:
   - title: Data, changes, queries and execution are separate
-    details: Schema structs, immutable changesets, immutable query values and a Repo that runs them, as in Ecto.
+    details: Rows are plain typed objects, changes are described by changesets, queries are immutable values, and a repo runs them.
   - title: Types from the schema
     details: Row types, preloaded associations and select results are all inferred from the schema definition.
-  - title: Performance is tested
-    details: Hot paths carry micro-benchmarks and budgets that CI enforces.
+  - title: Nothing implicit
+    details: No lazy loading, no hidden transactions, no query you did not write. Every value in SQL is a bound parameter.
 ---
 
 ::: warning Work in progress
-Ectype is under construction and nothing is published yet. These pages are a skeleton.
+Egon ORM is under construction and nothing is published yet.
 :::
