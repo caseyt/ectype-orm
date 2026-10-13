@@ -133,9 +133,16 @@ Errors are plain, serialisable objects and never contain the value of a redacted
 |---|---|
 | `getField(field)` | The change if there is one, else the current value, else the field's default. |
 | `getChange(field)` | The change, or `undefined`. |
-| `fetchField(field)` | `{ from: "changes" \| "data"; value }`. |
+| `fetchField(field)` | `{ from: "changes" \| "data"; value }`, or `undefined`. |
+| `fetchChange(field)` | `{ value }` when the field has a change, else `undefined`. Tells a change to `undefined` apart from no change. |
+| `fieldMissing(field)` | Whether the field has no value in the changes or the data. |
 | `isChanged(field, { from?, to? })` | Whether the field has a change. |
-| `applyChanges()` | The row with the changes applied, without validating. **Only for a changeset of a loaded row.** |
+| `applyChanges()` | The data with the changes applied, without validating. |
+| `applyAction(cs, action)` | A [result](/guide/repo#writing): the data with the changes applied if the changeset is valid, else the changeset. No database. |
+
+`applyChanges` and `applyAction` work on a changeset of a loaded row and on a changeset
+[without a schema](#without-a-schema). They are not available on a new-record changeset:
+a row that the database never returned cannot exist.
 
 ```ts
 const normalizeEmail = (cs: Changeset<typeof User>) =>

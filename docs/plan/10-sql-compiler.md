@@ -144,3 +144,11 @@ performance-minded users.
 ## Out of scope
 
 Executing queries, decoding rows (12). Advanced node kinds (09). Tier-2 expected output (17).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- Follow the lowering rules in ADR 0002, including the `CUSTOM_SQL_TYPE` check (the contract defines the pattern; nothing enforces it yet).
+- Number parameters by visiting the AST in canonical order and counting, as the spike does.
+- Canonical numbering was verified only for the spike's node kinds, not the contract's full node set.

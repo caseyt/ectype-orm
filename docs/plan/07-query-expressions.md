@@ -125,3 +125,10 @@ explicit `val`/`cast`, named parameters.
 ## Out of scope
 
 Query clauses (08). Subquery, window and CTE construction (09), beyond defining their node kinds. SQL text (10).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- `collectParams` defines the canonical order for every node kind and for a whole `QueryAst`; test that `ast.params` equals `collectParams(ast)`.
+- Expression node fields in `contracts/query.ts` are this step's to refine until it merges.

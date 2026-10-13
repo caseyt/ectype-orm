@@ -45,8 +45,8 @@ Changes: `putChange(field, value)`, `forceChange(field, value)`, `deleteChange(f
 Reads (not chainable): `getField(field, default?)`, `getChange(field, default?)`,
 `fetchField(field)` → `{ from: "changes" | "data"; value } | undefined`, `fetchChange(field)`,
 `isChanged(field, { from?, to? })`, `applyChanges()` → row with changes applied (no validation;
-**only on a changeset of a loaded row**: a compile error and a runtime `QueryError` on a
-new-record changeset, because a partial row must never exist),
+**only on a changeset of a loaded row or a schemaless changeset**: a compile error and a
+runtime `QueryError` on a new-record changeset, because a partial row must never exist),
 `fieldMissing(field)`.
 
 Validations — each runs **only if the field has a change** unless noted:
@@ -84,6 +84,9 @@ Repo integration hooks (stored, used by step 13): `optimisticLock(field, increme
 as racy, lives here for API parity but is implemented in step 13).
 
 Actions: `applyAction(cs, action)` → `Result<Row, Changeset>` (sets `action`; no database).
+Like `applyChanges`, it is available on a changeset of a loaded row and on a schemaless
+changeset (where it returns the plain data object), and is a compile error and a runtime
+`QueryError` on a new-record changeset.
 
 ## Behaviour
 
@@ -94,7 +97,7 @@ Actions: `applyAction(cs, action)` → `Result<Row, Changeset>` (sets `action`; 
 1. **`cast`.**
    - `params` must be a plain object or `null`/`undefined` (treated as `{}`); anything else throws `CastError`. Keys are field names; unknown and non-permitted keys are ignored silently. Symbol keys ignored. Never read from the prototype chain (`Object.hasOwn`).
    - `permitted` is typed as `(keyof Row)[]` and checked at runtime; an unknown field throws.
-   - For each permitted key present: values in `emptyValues` (default `[""]`) become `null`; `null` is recorded as a change to `null` without calling the type; otherwise `field.type.cast(value)`. Failure adds `{ message: "is invalid", validation: "cast", meta: { type } }` (plus any message/meta the type returned) and records **no** change.
+   - For each permitted key present: values in `emptyValues` (default `[""]`) become `null`; `null` is recorded as a change to `null` without calling the type when the field is nullable (for a non-nullable field see item 4: an error, and no change); otherwise `field.type.cast(value)`. Failure adds `{ message: "is invalid", validation: "cast", meta: { type } }` (plus any message/meta the type returned) and records **no** change.
    - A cast value `equal` to the current data value is not a change (`forceChanges: true` overrides). Uses the type's `equal`.
    - Casting a field declared as an association or embed throws, pointing at `castAssoc`/`castEmbed`.
    - Re-casting an existing changeset merges params and changes and keeps errors.
@@ -153,3 +156,10 @@ schemaless changesets, a "Good to know" box (no constructor: pass the class; non
 
 Standard Schema / Zod / function validators (06). `castAssoc`, `putAssoc`, `castEmbed` (15).
 Constraint enforcement and `validateUniqueAsync` execution (13).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- `Changeset` must satisfy the contract's `ChangesetLike`.
+- Format `changes` with `formatStruct` and the schema's redacted field names.

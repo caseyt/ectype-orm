@@ -96,6 +96,10 @@ for await (const user of repo.stream(from(User, "u"), { batchSize: 500 })) {
 Rows are fetched in batches with a server-side cursor. Leaving the loop early closes the
 cursor. Streams do not support preloads.
 
+On Postgres a cursor needs a transaction. Inside `repo.transaction`, stream on `tx`.
+Outside one, the repo opens a transaction for the life of the stream, which holds one
+connection until the loop ends.
+
 ### Raw SQL
 
 ```ts
@@ -145,7 +149,8 @@ undeclared constraint, a stale row.
 - Values written: the changes, then field defaults, then generated values (`createdAt`,
   `updatedAt`, UUID keys). A field with no value is left out of the statement, so a
   database default applies.
-- The returned row includes what the database generated.
+- The returned row includes what the database generated. `{ returning: true }`, or a list
+  of fields, also reads back columns that a trigger or default changed.
 
 ### Update
 
@@ -201,7 +206,9 @@ await repo.deleteAll(from(Post, "p").where({ published: false }));
 - **`insertAll(Schema, rows, opts?)`** applies field defaults, timestamps and generated
   values to every row, and splits large inserts under the database's parameter limit
   inside one transaction. It accepts `onConflict` and `returning` (`true` or a list of
-  fields), and a query in place of `rows` for `INSERT ... SELECT`.
+  fields), and a query in place of `rows` for `INSERT ... SELECT`. A field's value may be
+  an expression or a subquery, and the `placeholders` option binds a value once and reuses
+  it across rows.
 - **`updateAll(query)`** needs a query with [`.set(...)`](/guide/queries-advanced#bulk-updates-and-deletes).
 - **`deleteAll(queryable)`** deletes every row the query matches. `repo.deleteAll(User)`
   deletes every user; there is no guard.

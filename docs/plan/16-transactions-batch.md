@@ -146,3 +146,9 @@ running against Docker).
 ## Out of scope
 
 Implicit transaction propagation. Distributed transactions. Test data factories.
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- `RollbackError` is not defined yet. `errors.ts` is this step's to extend; add its code to `ErrorCode`.

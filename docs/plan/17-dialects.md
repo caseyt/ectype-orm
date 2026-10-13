@@ -104,3 +104,12 @@ Dialect sections in `adapters.md`: install, options, type mapping table, caveats
 
 MSSQL, CockroachDB, PlanetScale/serverless drivers (future work, together with
 `fromKyselyDialect`).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- The spike compiled the `?` placeholder path but never executed it. Run it against real MySQL and SQLite, and check what those Kysely drivers read from the query object (the Postgres driver reads only `sql`, `parameters` and `queryId`).
+- `QueryAst.listLengths` is the extra plan-cache key component on these dialects.
+- Add SQLite to `Dialect` / `withDatabase` in the test support, and MySQL and SQLite variants of the blog fixture.
+- The guide's dialect-support page states two things this file does not, which the owner confirmed as intended (2026-10-13). Implement and test them: MySQL has no `.returning(...)` on bulk writes, and SQLite has no joins in `updateAll` / `deleteAll`.

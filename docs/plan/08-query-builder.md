@@ -136,3 +136,9 @@ dynamic filters; select shapes and their result types; debugging with `toString`
 
 Subqueries, CTEs, set operations, windows, lateral joins, `dynamic`, update/delete
 expressions (09). SQL generation (10). Executing preloads (14).
+
+## Carried over from steps 01 and 02
+
+Requests that the (now removed) status notes of steps 01 and 02 addressed to this step.
+
+- Keep `params`, `listLengths` and `shape` canonical; the `Query` object owns the per-property counts and hashes.

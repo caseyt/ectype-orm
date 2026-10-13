@@ -171,6 +171,9 @@ from(User, "u")
 A string is read as a binding alias only when the query has a binding of that name joined
 through that association. Otherwise it is the name of a nested association.
 
+Join preloads nest: `{ posts: { $from: "p", comments: "c" } }` fills `posts` from the
+binding `p` and each post's `comments` from the binding `c`.
+
 A join returns one row per parent-child pair, so a parent with many children is sent
 many times. Prefer the separate-query forms unless you are filtering on the join anyway.
 
@@ -203,7 +206,8 @@ On a plain `User`, `user.posts` does not exist and is a compile error. `isLoaded
 
 ### Things to know
 
-- **No identity map.** The same post reached through two parents is two objects.
+- **No identity map.** The same record reached through two parents is two objects. Ten
+  posts by the same author each get their own `User` object.
 - **Sibling associations load one at a time.** `maxConcurrency` on the repo call raises
   that; inside a transaction they are always sequential.
 - **Streams do not support preloads.** Load in batches instead.

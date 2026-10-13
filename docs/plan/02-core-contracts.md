@@ -1,8 +1,7 @@
 # Step 02 — Core contracts and the Kysely bridge spike
 
 > **Merged before the API review.** This file is edited to the names decided in plan
-> README §11; the merged code still has the old ones (`prefix`, `ok`/`err`, `EctoType`,
-> `load`/`dump`, `AdapterError`) until the follow-up PR listed there lands.
+> README §11, and PR #4 brought the merged code into line with them.
 
 **Depends on:** 01. **Blocks:** everything else.
 **Owns:** `packages/core/src/contracts/`, `packages/core/src/errors.ts`,

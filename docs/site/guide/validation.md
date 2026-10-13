@@ -51,11 +51,13 @@ cs.validate((values, { isChanged }) =>
 ```ts
 type ValidatorFn<T> = (
   values: Readonly<T>,
-  ctx: { changes: Readonly<Partial<T>>; data: Readonly<T> | null; isChanged(field: keyof T): boolean; action: Action | null },
+  ctx: { changes: Readonly<Partial<T>>; data: Readonly<T>; isChanged(field: keyof T): boolean; action: Action | null },
 ) => ValidationIssue[] | void | Promise<ValidationIssue[] | void>;
 
 type ValidationIssue = { path: PropertyKey | readonly PropertyKey[]; message: string; meta?: Record<string, unknown> };
 ```
+
+`ctx.data` is the record before the changes. For a new record it holds the field defaults.
 
 ## What the validator receives
 

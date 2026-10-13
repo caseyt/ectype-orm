@@ -10,6 +10,13 @@ final pass (content changes that alter meaning go back to the owning step as rev
 Documentation good enough that someone arriving from Drizzle, Sequelize or Prisma is
 productive in ten minutes and someone new to ORMs in thirty, with every example guaranteed to compile.
 
+> The guide and reference pages for every feature were written ahead of the code (PR #5)
+> and define the public API (plan README, "Order of authority"). They do not yet follow
+> the page template below and their code blocks are hand-written; feature steps convert
+> the blocks as they implement, and Part C applies the template. Pages this step still
+> has to write from scratch: tutorial, the "Coming from" guides, recipes, framework
+> integration, FAQ and internals.
+
 ## Part A — Tooling (right after step 01)
 
 1. **Site.** VitePress with local search, dark mode, edit links, versioned base path.

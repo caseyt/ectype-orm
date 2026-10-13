@@ -27,7 +27,7 @@ const adapter = postgres({
 | `statementTimeoutMs` | none | A server-side limit for every statement. |
 | `applicationName` | none | Shown in `pg_stat_activity`. |
 
-The adapter connects on first use.
+The adapter connects on first use. Postgres 14 and later are supported.
 
 ## SQLite
 
