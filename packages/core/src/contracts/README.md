@@ -45,9 +45,17 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
   clauses were added. The invariant is `ast.params` equals `collectParams(ast)`. The
   builder, not the AST, keeps the per-clause counts and hashes that make adding a clause
   O(size of the clause).
-- **A prefix never rewrites an AST.** Every `compile*` method takes the effective default
-  prefix; the plan reports the prefix it resolved to, and the repo stamps it on the rows
+- **A prefix never rewrites an AST.** Every `compile*` method takes the weakest prefix (the
+  per-call option, else the repo default). A table resolves, in Ecto's order, to its
+  source's prefix, then the schema's declared prefix, then the query's, then that argument.
+  The plan reports the prefix it resolved to, and the repo stamps it on the rows
   (`SchemaMeta.rowMeta`).
+- **A row decoder is stateless.** It turns one result row into one value. Merging the
+  parents of a join preload happens after decoding, in the repo (`OutputPlan`, "Join
+  preloads").
+- **Schema metadata is plain data.** `[META]`, `fields` and the members of a `FieldMeta`
+  are own data properties, never getters. The redaction-aware formatter reads them
+  without running code, and hides every value of a row whose metadata it cannot read.
 - **Raw SQL text has three sources and no others** (ADR 0002, rule 2): the compiler's own
   tables, the static strings of a `fragment`, and the `sql` of a `custom` `DbType`, which
   is trusted developer input and must match `CUSTOM_SQL_TYPE`.
@@ -69,7 +77,8 @@ consumer is most likely to trip over:
   `dump` and `redact`.
 - `CompiledQuery` has `output` (the `OutputPlan`) and `prefix` next to `decoder`.
 - `OutputPlan` has a `constant` leaf (the value comes from `SelectNode.constants`, passed
-  to the decoder), and its `row` leaf has `nullable` and `preloads`.
+  to the decoder), and its `row` leaf has `key`, `nullable` and `preloads` (every preload
+  of the row; `row: undefined` marks one loaded by a separate query).
 - Every `compile*` method takes a `prefix` argument. There are also `compileFragment`
   (for `repo.query`) and `compileExplain`.
 - `compileInsert` takes an `InsertSource` (uniform values, cells, or a query), and its
@@ -102,9 +111,9 @@ consumer is most likely to trip over:
 
 ## Where step files and the contracts differ
 
-`docs/plan/status/02.md` lists every place where a step file's wording and the contracts
-still disagree after review round 1. The contracts win; the step's worker follows them and
-says so in their status note.
+Nowhere that is known: the step files were reconciled with the contracts in review round
+2 (the list of what changed is in `docs/plan/status/02.md`). If you find a difference, the
+contracts win; say so in your status note.
 
 ## Open until step 07 merges
 
