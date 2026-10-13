@@ -131,7 +131,10 @@ export interface OutputPreload {
  * - `row`: a schema row; `aliases[i]` is the output column of `meta.persisted[i]`.
  *   `nullable` is true when the binding can be absent from a result row (it is on the
  *   optional side of an outer join): the decoder then yields `null` instead of a row
- *   when every `key` column is `null`.
+ *   when every `key` column is `null`. For a schema without a primary key `key` is empty
+ *   and proves nothing, so the test is then that every column in `aliases` is `null`
+ *   (the compiler always lists them all; a real row of such a schema whose columns are
+ *   all `NULL` cannot be told from an absent one, which is a limit of keyless schemas).
  *   `key` holds the output columns of the primary key, in `meta.primaryKey` order
  *   (empty for a schema without one): what identifies the row in the result.
  *   `preloads` lists the associations the row carries (empty for an ordinary row). A row
@@ -683,8 +686,22 @@ export interface AdapterEvents {
  *
  * For a row-level write (`compileInsert`, `compileUpdate`, `compileDelete`) there is no
  * query: the table is the `prefix` argument if set, else the schema's. The repo computes
- * the argument as the per-call option, else (for an update or delete) the row's
- * `RowMeta.prefix`, else its default.
+ * the argument, for an insert as much as for an update or a delete, as the per-call
+ * option, else the row's `RowMeta.prefix`, else its default. A built row holds the
+ * prefix its schema declares, so the repo default reaches a write only when the schema
+ * declares none; `insertAll`, which has no row, uses the schema's declared prefix in that
+ * place.
+ *
+ * With no per-call option, every operation therefore lands on the same table:
+ *
+ * | Schema declares | Repo default | insert | get / all | update | delete |
+ * |---|---|---|---|---|---|
+ * | `auth` | none | `auth` (the built row's prefix) | `auth` (schema) | `auth` (the row's) | `auth` |
+ * | none | `tenant_1` | `tenant_1` (repo default) | `tenant_1` (argument) | `tenant_1` (the row's) | `tenant_1` |
+ * | `auth` | `tenant_1` | `auth` (the built row's prefix) | `auth` (schema beats the argument) | `auth` (the row's) | `auth` |
+ *
+ * A per-call prefix on a write overrides all of these, the schema's included; on a read
+ * it is the weakest source, like the repo default.
  *
  * The repo never rewrites an AST to apply a prefix, so a module-level query keeps its
  * identity in the plan cache. The `prefix` argument is part of the plan-cache key, and

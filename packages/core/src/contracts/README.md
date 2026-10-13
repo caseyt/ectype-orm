@@ -48,8 +48,10 @@ steps) and `../internal/` (hash, LRU, naming, inspect; used by 04, 05, 07, 08, 1
 - **A prefix never rewrites an AST.** Every `compile*` method takes the weakest prefix (the
   per-call option, else the repo default). A table resolves, in Ecto's order, to its
   source's prefix, then the schema's declared prefix, then the query's, then that argument.
-  The plan reports the prefix it resolved to, and the repo stamps it on the rows
-  (`SchemaMeta.rowMeta`).
+  For a write the argument is the per-call option, else the row's own prefix (a built row
+  holds its schema's declared prefix), else the repo default, so an insert lands where a
+  read will look; the table of cases is on `Adapter`. The plan reports the prefix it
+  resolved to, and the repo stamps it on the rows (`SchemaMeta.rowMeta`).
 - **A row decoder is stateless.** It turns one result row into one value. Merging the
   parents of a join preload happens after decoding, in the repo (`OutputPlan`, "Join
   preloads").

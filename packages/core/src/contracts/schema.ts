@@ -86,7 +86,14 @@ export interface RowMeta {
   readonly state: RowState;
   /** The table the row belongs to; `null` for a row of an embedded schema. */
   readonly source: string | null;
-  /** The schema (Postgres) or database (MySQL) prefix the row was read from, if any. */
+  /**
+   * The schema (Postgres) or database (MySQL) prefix the row belongs to. For a loaded row
+   * it is the prefix the row was read from or written to. For a **built** row
+   * (`new User()`) it is the prefix the schema declares (`SchemaMeta.prefix`), `undefined`
+   * when it declares none. A write without a per-call prefix goes to this prefix when it
+   * is set (and to the repo default otherwise), so a row is inserted where a read of its
+   * schema will look for it.
+   */
   readonly prefix: string | undefined;
 }
 
@@ -386,7 +393,8 @@ export interface SchemaMeta {
    * written to `prefix`. The same object is returned for the same arguments, so a decoder
    * looks it up once per execution and every row of the result points at it. `prefix` is
    * the prefix the statement actually ran in, which may differ from
-   * {@link SchemaMeta.prefix} (a per-call, per-query or repo-level prefix).
+   * {@link SchemaMeta.prefix} (a per-call, per-query or repo-level prefix). A built row
+   * is created with `rowMeta("built", meta.prefix)`.
    */
   rowMeta(state: RowState, prefix: string | undefined): RowMeta;
   /**

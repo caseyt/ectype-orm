@@ -365,6 +365,25 @@ describe("what steps 08 to 17 need from the contract", () => {
     expectTypeOf(plan.prefix).toEqualTypeOf<string | undefined>();
   });
 
+  test("step 13: an insert goes to the built row's prefix, like an update or a delete", () => {
+    // per-call option, else the row's prefix (for a built row: the schema's declared
+    // prefix), else the repo default. The same rule for all three writes.
+    function writePrefix(
+      row: { readonly [ROW]: RowMeta },
+      callPrefix: string | undefined,
+      repoPrefix: string | undefined,
+    ) {
+      return callPrefix ?? row[ROW].prefix ?? repoPrefix;
+    }
+    function insertPlan(adapter: Adapter, row: { readonly [ROW]: RowMeta }, repoPrefix: string | undefined) {
+      return adapter.compileInsert(meta, [field], insertOne, writePrefix(row, undefined, repoPrefix));
+    }
+    const built: RowMeta = meta.rowMeta("built", meta.prefix);
+    expectTypeOf(built.prefix).toEqualTypeOf<string | undefined>();
+    expectTypeOf(writePrefix).returns.toEqualTypeOf<string | undefined>();
+    expectTypeOf(insertPlan).returns.toEqualTypeOf<CompiledQuery>();
+  });
+
   test("step 13: an update of a loaded row goes to the prefix the row came from", () => {
     function updatePlan(adapter: Adapter, row: { readonly [ROW]: RowMeta }, callPrefix: string | undefined) {
       return adapter.compileUpdate(meta, [field], meta.primaryKey, [], callPrefix ?? row[ROW].prefix);
@@ -562,7 +581,9 @@ describe("what steps 08 to 17 need from the contract", () => {
     };
     const decode = (row: Readonly<Record<string, unknown>>): object | null => {
       if (profile.kind !== "row") return null;
-      const absent = profile.nullable && profile.key.every((alias) => row[alias] === null);
+      // With no primary key, `key` is empty: fall back to "every column is null".
+      const proof = profile.key.length > 0 ? profile.key : profile.aliases;
+      const absent = profile.nullable && proof.every((alias) => row[alias] === null);
       return absent
         ? null
         : profile.meta.create(

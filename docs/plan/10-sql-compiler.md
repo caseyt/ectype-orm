@@ -97,7 +97,9 @@ cache statistics (`hits`, `misses`, `collisions`, `size`) for telemetry.
 - **Prefix:** resolved per table with Ecto's precedence: per-source prefix (`from`/`join`)
   > the schema's declared prefix > the query prefix > the `prefix` argument of `compile`
   (the per-call option, else the repo default). A query or repo prefix never overrides a
-  schema's declared prefix. Row-level writes: the argument, else the schema's.
+  schema's declared prefix. Row-level writes (insert, update and delete alike): the
+  argument, else the schema's; the repo passes the per-call option, else the row's
+  `RowMeta.prefix` (a built row holds its schema's declared prefix), else its default.
 - **Lock:** rendered last; string modes validated against a per-dialect allowlist.
 - **Debug:** `explain` support hook (`repo.explain(queryable, opts)` implemented in step 12 uses `compile` + prefix).
 
