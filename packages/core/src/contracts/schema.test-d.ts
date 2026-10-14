@@ -62,7 +62,7 @@ declare function belongsTo<T, const FK extends string | readonly string[]>(
 // --- Circular, self-referential and mutually recursive schemas (decision D1) ---
 
 class User extends Schema("users", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   age: t.integer().nullable(),
@@ -91,7 +91,7 @@ class Profile extends Schema("profiles", {
 }
 
 class Post extends Schema("posts", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   title: t.string(),
   published: t.boolean().default(false),
   authorId: t.integer(),
@@ -114,7 +114,7 @@ class Tag extends Schema("tags", { id: t.integer().primaryKey(), name: t.string(
 
 class Membership extends Schema("memberships", {
   orgId: t.uuid().primaryKey(),
-  userId: t.integer().primaryKey({ dbGenerated: false }),
+  userId: t.integer().primaryKey(),
   role: t.string().default("member"),
 }) {
   static user = belongsTo(() => User, { foreignKey: ["userId"] });

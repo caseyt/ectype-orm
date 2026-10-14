@@ -23,7 +23,7 @@ export class UserSettings extends EmbeddedSchema({
 }) {}
 
 export class User extends Schema("users", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   age: t.integer().nullable(),
@@ -46,7 +46,7 @@ export class User extends Schema("users", {
 }
 
 export class Profile extends Schema("profiles", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   userId: t.bigint({ mode: "number" }),
   bio: t.string().nullable(),
   avatarUrl: t.string().nullable(),
@@ -55,7 +55,7 @@ export class Profile extends Schema("profiles", {
 }
 
 export class Post extends Schema("posts", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   authorId: t.bigint({ mode: "number" }),
   title: t.string(),
   body: t.string().nullable(),
@@ -76,7 +76,7 @@ export class Post extends Schema("posts", {
 }
 
 export class Comment extends Schema("comments", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   postId: t.bigint({ mode: "number" }),
   authorId: t.bigint({ mode: "number" }).nullable(),
   body: t.string(),
@@ -87,7 +87,7 @@ export class Comment extends Schema("comments", {
 }
 
 export class Tag extends Schema("tags", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   name: t.string().nullable(),
 }) {
   static posts = manyToMany(() => Post, {
@@ -108,7 +108,7 @@ export class Org extends Schema("orgs", {
 /** The join table of users and orgs, with a composite key and a column of its own. */
 export class Membership extends Schema("memberships", {
   orgId: t.uuid().primaryKey(),
-  userId: t.bigint({ mode: "number" }).primaryKey({ dbGenerated: false }),
+  userId: t.bigint({ mode: "number" }).primaryKey(),
   role: t.enum(["owner", "admin", "member"]).default("member"),
 }) {
   static org = belongsTo(() => Org);

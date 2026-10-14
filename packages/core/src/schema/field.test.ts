@@ -85,7 +85,6 @@ describe("t", () => {
       type: stringType(),
       nullable: false,
       primaryKey: false,
-      keyGenerated: undefined,
       virtual: false,
       redact: false,
       writable: "always",
@@ -176,16 +175,12 @@ describe("modifiers", () => {
     );
   });
 
-  test("primaryKey records what was said about generation", () => {
-    expect(state(t.integer().primaryKey())).toMatchObject({ primaryKey: true, keyGenerated: undefined });
-    expect(state(t.integer().primaryKey({ dbGenerated: false }))).toMatchObject({
+  test("primaryKey marks a key and says nothing about generation", () => {
+    expect(state(t.integer().primaryKey())).toMatchObject({ primaryKey: true, dbGenerated: false });
+    expect(state(t.integer().primaryKey().dbGenerated())).toMatchObject({
       primaryKey: true,
-      keyGenerated: false,
+      dbGenerated: true,
     });
-    expect(state(t.uuid().primaryKey({ dbGenerated: true } as never)).keyGenerated).toBe(true);
-    expect(() => t.integer().primaryKey({ dbGenerated: "no" } as never)).toThrowErrorMatchingInlineSnapshot(
-      `[SchemaDefinitionError: primaryKey({ dbGenerated }) takes true or false. Pass { dbGenerated: false } for a key you supply yourself.]`,
-    );
   });
 
   test("autogenerate takes a function, used on insert", () => {

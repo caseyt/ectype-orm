@@ -81,7 +81,7 @@ class Org extends Schema("orgs", { id: t.uuid().primaryKey(), name: t.string() }
 
 class Membership extends Schema("memberships", {
   orgId: t.uuid().primaryKey().column("org_ref"),
-  userId: t.integer().primaryKey({ dbGenerated: false }),
+  userId: t.integer().primaryKey(),
   role: t.string(),
 }) {
   static org = belongsTo(() => Org);
@@ -192,8 +192,8 @@ describe("each kind resolves to its metadata", () => {
     class Link extends Schema(
       "links",
       {
-        userId: t.integer().primaryKey({ dbGenerated: false }),
-        tagId: t.integer().primaryKey({ dbGenerated: false }),
+        userId: t.integer().primaryKey(),
+        tagId: t.integer().primaryKey(),
       },
       { schema: "audit" },
     ) {
@@ -341,8 +341,8 @@ describe("resolution is lazy", () => {
       }
       class B extends Schema("b", { id: t.integer().primaryKey() }) {}
       class J extends Schema("j", {
-        aId: t.integer().primaryKey({ dbGenerated: false }),
-        bId: t.integer().primaryKey({ dbGenerated: false }),
+        aId: t.integer().primaryKey(),
+        bId: t.integer().primaryKey(),
       }) {
         static a = belongsTo(() => A);
         static b = belongsTo(() => B);
@@ -365,8 +365,8 @@ describe("resolution is lazy", () => {
     }
     class Player extends Schema("players", { id: t.integer().primaryKey() }) {}
     class Seat extends Schema("seats", {
-      teamId: t.integer().primaryKey({ dbGenerated: false }),
-      playerId: t.integer().primaryKey({ dbGenerated: false }),
+      teamId: t.integer().primaryKey(),
+      playerId: t.integer().primaryKey(),
     }) {
       static team = belongsTo(() => Team);
       static player = belongsTo(() => Player);
@@ -713,8 +713,8 @@ describe("definition errors name the schema, the association and the fix", () =>
 
   test("manyToMany through a join schema", () => {
     class Loose extends Schema("loose", {
-      userId: t.integer().primaryKey({ dbGenerated: false }),
-      tagId: t.integer().primaryKey({ dbGenerated: false }),
+      userId: t.integer().primaryKey(),
+      tagId: t.integer().primaryKey(),
     }) {}
     expect(message(manyToMany(() => Tag, { joinThrough: () => Loose }))).toMatchInlineSnapshot(
       `"Owner.x: the join keys cannot be worked out: Loose declares 0 belongsTo association(s) to Owner and exactly one, with a single foreign key, is needed. Pass { joinKeys: { owner, target } } with the fields of Loose."`,

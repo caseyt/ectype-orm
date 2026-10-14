@@ -43,7 +43,7 @@ create table posts (
 import { Schema, t, timestamps, hasMany, belongsTo, cast } from "egon-orm";
 
 export class User extends Schema("users", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   ...timestamps(),
@@ -59,7 +59,7 @@ export class User extends Schema("users", {
 }
 
 export class Post extends Schema("posts", {
-  id: t.bigint({ mode: "number" }).primaryKey(),
+  id: t.bigint({ mode: "number" }).primaryKey().dbGenerated(),
   authorId: t.bigint({ mode: "number" }),
   title: t.string(),
   published: t.boolean().default(false),

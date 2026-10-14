@@ -15,7 +15,7 @@ the target class, so two schemas can refer to each other.
 ```ts
 import { Schema, t, hasOne, hasMany, belongsTo, manyToMany } from "egon-orm";
 
-export class User extends Schema("users", { id: t.integer().primaryKey(), email: t.string() }) {
+export class User extends Schema("users", { id: t.integer().primaryKey().dbGenerated(), email: t.string() }) {
   static profile  = hasOne(() => Profile, { foreignKey: "userId" });
   static posts    = hasMany(() => Post, { foreignKey: "authorId", orderBy: ["createdAt"] });
   static comments = hasMany(() => Comment, { through: ["posts", "comments"] });
@@ -26,7 +26,7 @@ export class User extends Schema("users", { id: t.integer().primaryKey(), email:
 }
 
 export class Post extends Schema("posts", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   authorId: t.integer(),
   title: t.string(),
 }) {

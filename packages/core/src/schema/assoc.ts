@@ -214,7 +214,7 @@ function declare<K extends AssocKind, T, FK extends string | readonly string[] |
  * @example
  * ```ts
  * class Post extends Schema("posts", {
- *   id: t.integer().primaryKey(),
+ *   id: t.integer().primaryKey().dbGenerated(),
  *   authorId: t.integer(),
  * }) {
  *   static author = belongsTo(() => User);                          // foreign key: authorId
@@ -242,7 +242,7 @@ export function belongsTo<T>(target: () => T, options?: unknown): Assoc<"belongs
  *
  * @example
  * ```ts
- * class User extends Schema("users", { id: t.integer().primaryKey() }) {
+ * class User extends Schema("users", { id: t.integer().primaryKey().dbGenerated() }) {
  *   static profile = hasOne(() => Profile, { foreignKey: "userId" });
  * }
  * ```
@@ -267,7 +267,7 @@ export function hasOne<T>(target: () => T, options: unknown): Assoc<"hasOne", T>
  *
  * @example
  * ```ts
- * class User extends Schema("users", { id: t.integer().primaryKey() }) {
+ * class User extends Schema("users", { id: t.integer().primaryKey().dbGenerated() }) {
  *   static posts = hasMany(() => Post, { foreignKey: "authorId", orderBy: ["createdAt"] });
  *   static comments = hasMany(() => Comment, { through: ["posts", "comments"] });
  * }
@@ -292,7 +292,7 @@ export function hasMany<T>(target: () => T, options: unknown): Assoc<"hasMany", 
  *
  * @example
  * ```ts
- * class Post extends Schema("posts", { id: t.integer().primaryKey() }) {
+ * class Post extends Schema("posts", { id: t.integer().primaryKey().dbGenerated() }) {
  *   static tags = manyToMany(() => Tag, {
  *     joinThrough: "posts_tags",
  *     joinKeys: { owner: "post_id", target: "tag_id" },
