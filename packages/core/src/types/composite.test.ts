@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, test } from "vitest";
 import type { AnyFieldType } from "../contracts/type.js";
 import { IDENTITY } from "../contracts/type.js";
@@ -46,6 +47,27 @@ describe("json", () => {
     const result = type.cast(input);
     expect(result.success).toBe(true);
     expect((result as { data: unknown }).data).toBe(input);
+  });
+
+  test("walks a value that is referenced from many places once", () => {
+    // 2^60 paths lead to the innermost array; walking each of them would never finish.
+    let value: unknown = [1];
+    for (let i = 0; i < 60; i++) value = [value, value];
+    const started = performance.now();
+    expect(type.cast(value).success).toBe(true);
+    let invalid: unknown = [undefined];
+    for (let i = 0; i < 60; i++) invalid = { a: invalid, b: invalid };
+    expect(type.cast(invalid).success).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("accepts a plain object and an array made in another realm", () => {
+    const foreign = runInNewContext('({ theme: "dark", tags: ["a", { n: 1 }] })') as object;
+    expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+    expect((type.cast(foreign) as { data: unknown }).data).toBe(foreign);
+    expect(type.cast(runInNewContext("({ at: new Date(0) })")).success).toBe(false);
+    expect(type.cast(runInNewContext("new (class Point { x = 1 })()")).success).toBe(false);
+    expect(type.cast(runInNewContext("new Map()")).success).toBe(false);
   });
 
   test("accepts the same object in two places (shared, not cyclic)", () => {
@@ -160,6 +182,43 @@ describe("array", () => {
     expect(integers.cast(sparse)).toEqual({ success: false, meta: { index: 1 } });
   });
 
+  test("rejects a null element even when the element type would accept null", () => {
+    // json accepts a null inside a document, so only the array's own check rejects this.
+    expect(jsonType().cast(null).success).toBe(true);
+    const documents = arrayType(jsonType());
+    expect(documents.cast([1, null])).toEqual({ success: false, meta: { index: 1 } });
+    expect(documents.cast([undefined])).toEqual({ success: false, meta: { index: 0 } });
+    expect(documents.cast([{ a: null }, [null]])).toEqual({ success: true, data: [{ a: null }, [null]] });
+  });
+
+  test("an element type written as a class, whose methods use `this`, works as an element", () => {
+    class Prefixed {
+      readonly name = "prefixed";
+      readonly db = { kind: "text" } as const;
+      constructor(readonly prefix: string) {}
+      cast(input: unknown) {
+        return typeof input === "string"
+          ? ({ success: true, data: this.prefix + input } as const)
+          : ({ success: false } as const);
+      }
+      fromDb(value: string): string {
+        return this.prefix + value;
+      }
+      toDb(value: string): string {
+        return value.slice(this.prefix.length);
+      }
+      equal(a: string, b: string): boolean {
+        return this.prefix.length >= 0 && a === b;
+      }
+    }
+    const type = arrayType(new Prefixed("p:"));
+    expect(type.cast(["a", "b"])).toEqual({ success: true, data: ["p:a", "p:b"] });
+    expect(type.fromDb(["a"])).toEqual(["p:a"]);
+    expect(type.toDb(["p:a"])).toEqual(["a"]);
+    expect(type.equal(["p:a"], ["p:a"])).toBe(true);
+    expect(type.equal(["p:a"], ["p:b"])).toBe(false);
+  });
+
   test("keeps the message and the metadata of the element that failed", () => {
     const even = defineType<number>({
       name: "even",
@@ -206,8 +265,15 @@ describe("array", () => {
     expect(matrix.name).toBe("array(array(integer))");
     expect(matrix.db).toEqual({ kind: "array", of: { kind: "array", of: { kind: "integer" } } });
     expect(matrix.cast([["1"], [2, 3]])).toEqual({ success: true, data: [[1], [2, 3]] });
-    expect(matrix.cast([[1], [2, "x"]])).toEqual({ success: false, meta: { index: 1 } });
-    expect(matrix.cast([1])).toEqual({ success: false, meta: { index: 0 } });
+    expect(matrix.cast([[1], [2, 3, "x"]])).toEqual({ success: false, meta: { index: 1, path: [1, 2] } });
+    expect(matrix.cast([1])).toEqual({ success: false, meta: { index: 0, path: [0] } });
+    expect(matrix.cast([[1], null])).toEqual({ success: false, meta: { index: 1, path: [1] } });
+    const cube = arrayType(matrix);
+    expect(cube.cast([[[1]], [[2], [3, 4, 5.5]]])).toEqual({
+      success: false,
+      meta: { index: 1, path: [1, 1, 2] },
+    });
+    expect(integers.cast([1, "x"])).toEqual({ success: false, meta: { index: 1 } });
     expect(matrix.fromDb).toBe(IDENTITY);
     expect(matrix.equal([[1], [2]], [[1], [2]])).toBe(true);
     expect(matrix.equal([[1], [2]], [[1], [3]])).toBe(false);
@@ -350,12 +416,23 @@ describe("enum from a mapping", () => {
     expect(level.cast(input)).toEqual({ success: false });
   });
 
-  test("a key wins over a stored value that is spelled the same", () => {
-    const swapped = enumType({ a: "b", b: "a" });
-    expect(swapped.cast("a")).toEqual({ success: true, data: "a" });
-    expect(swapped.cast("b")).toEqual({ success: true, data: "b" });
-    expect(swapped.toDb("a")).toBe("b");
-    expect(swapped.fromDb("b")).toBe("a");
+  test("a key may be spelled like its own stored value", () => {
+    const same = enumType({ a: "a", b: "B" });
+    expect(same.cast("a")).toEqual({ success: true, data: "a" });
+    expect(same.cast("B")).toEqual({ success: true, data: "b" });
+    expect(same.toDb("a")).toBe("a");
+    expect(same.fromDb("a")).toBe("a");
+  });
+
+  test("casting a stored value gives back the key it was written from, for every member", () => {
+    for (const [type, keys] of [
+      [level, ["low", "high"]],
+      [status, ["active", "archived"]],
+    ] as const) {
+      for (const key of keys) {
+        expect(type.cast(type.toDb(key as never))).toEqual({ success: true, data: key });
+      }
+    }
   });
 
   test("writes the stored value and reads the key back", () => {
@@ -419,6 +496,16 @@ describe("enum definitions that are rejected", () => {
     ["a mapping with a boolean", { a: true }, /all strings or all whole numbers, but got boolean/],
     ["a mapping with a null", { a: null }, /all strings or all whole numbers, but got object/],
     ["a mapping with a repeated value", { a: 1, b: 1 }, /mapping values must be distinct, but got 1, 1/],
+    [
+      "a mapping where a key is another key's stored value",
+      { a: "b", b: "a" },
+      /mapping is ambiguous: "a" is a key and also the stored value of "b"/,
+    ],
+    [
+      "a mapping where one key is another key's stored value",
+      { x: "y", y: "z" },
+      /mapping is ambiguous: "y"/,
+    ],
     ["a string", "admin", /takes a list of strings.*but got string/],
     ["null", null, /takes a list of strings.*but got null/],
     ["nothing", undefined, /takes a list of strings.*but got undefined/],

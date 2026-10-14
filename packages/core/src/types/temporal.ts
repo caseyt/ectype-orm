@@ -58,14 +58,23 @@ function pad2(value: number): string {
 
 const getTime = Date.prototype.getTime;
 
+const objectTag = Object.prototype.toString;
+
 /**
- * The timestamp of a valid `Date`, or `NaN` for anything else. It never throws: an
- * object that only inherits from `Date.prototype` and a proxy of a `Date` give `NaN`, and
- * an instance of a subclass that overrides `getTime` gives its real timestamp.
+ * The timestamp of a valid `Date`, or `NaN` for anything else. It never throws.
+ *
+ * `getTime` taken from `Date.prototype` reads the internal slot, so it gives the real
+ * timestamp of a `Date` from another realm and of an instance of a subclass that overrides
+ * `getTime`, and it throws (caught here) for an object that only inherits from
+ * `Date.prototype` and for a proxy of a `Date`. The two checks before it only keep the
+ * exception rare, since a caught exception is slow: `instanceof` settles a `Date` of this
+ * realm in a few nanoseconds, and the tag finds one from another realm.
  */
 function timeOf(input: unknown): number {
   try {
-    return input instanceof Date ? getTime.call(input) : Number.NaN;
+    return input instanceof Date || objectTag.call(input) === "[object Date]"
+      ? getTime.call(input)
+      : Number.NaN;
   } catch {
     return Number.NaN;
   }
@@ -162,8 +171,15 @@ function dateTextToDate(stored: string): Date {
 }
 
 function dateToDateText(value: Date): string {
-  if (Number.isNaN(value.getTime())) {
+  const time = value.getTime();
+  if (Number.isNaN(time)) {
     throw new CastError("An invalid Date cannot be written to a date column.");
+  }
+  // The same range that cast and fromDb accept: a date written here can be read back.
+  if (time < FIRST_DAY || time >= LAST_DAY + DAY) {
+    throw new CastError(
+      'A Date outside the years 1 to 9999 cannot be written to a date column read with { as: "date" }.',
+    );
   }
   return formatUtcDate(value);
 }

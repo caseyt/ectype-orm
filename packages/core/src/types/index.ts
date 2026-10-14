@@ -11,7 +11,7 @@ export { resolveCodec } from "./codec.js";
 export type { EnumMapping } from "./composite.js";
 export { arrayType, elementTypeOf, enumType, jsonType, mapElements } from "./composite.js";
 export type { TypeDefinition } from "./define.js";
-export { defineType, parameterized } from "./define.js";
+export { defineType, detached, parameterized } from "./define.js";
 export type { BigintOptions, DecimalOptions } from "./scalars.js";
 export {
   bigintType,

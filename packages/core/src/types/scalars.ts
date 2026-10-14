@@ -114,8 +114,42 @@ function castBigint(input: unknown): CastResult<bigint> {
 
 const BIGINT = defineType<bigint>({ name: "bigint", db: { kind: "bigint" }, cast: castBigint });
 
+/**
+ * Reads the digits a driver sends for a 64-bit integer. Written as a loop over character
+ * codes because it runs once per value: testing `INTEGER_TEXT` first and then calling
+ * `Number()` costs almost twice as much (20 ns against 11 ns per value in
+ * benchmarks/micro/types.bench.ts, "load an array of 1,000 elements"), and `Number()`
+ * alone reads "", " 12 " and "0x10" as numbers.
+ *
+ * The sum is exact while it is a safe integer, and a sum that is not safe stays not safe
+ * as digits are added, so the range check after the loop sees every overflow.
+ */
+function integerTextToNumber(text: string): number {
+  const length = text.length;
+  const negative = text.charCodeAt(0) === 45;
+  let i = negative ? 1 : 0;
+  if (i === length) return Number.NaN;
+  let number = 0;
+  for (; i < length; i++) {
+    const digit = text.charCodeAt(i) - 48;
+    if (digit < 0 || digit > 9) return Number.NaN;
+    number = number * 10 + digit;
+  }
+  return negative && number !== 0 ? -number : number;
+}
+
 function bigintColumnToNumber(value: number | bigint | string): number {
-  const number = typeof value === "number" ? value : Number(value);
+  let number: number;
+  if (typeof value === "string") {
+    number = integerTextToNumber(value);
+    if (Number.isNaN(number)) {
+      throw new CastError(
+        'A bigint column read with { mode: "number" } received a string from the driver that is not a whole number.',
+      );
+    }
+  } else {
+    number = typeof value === "number" ? value : Number(value);
+  }
   if (!Number.isSafeInteger(number)) {
     // The value itself is left out: the field may be redacted.
     throw new CastError(
@@ -435,13 +469,20 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
+/** The getter that names the kind of a typed array from its internal slot, and gives `undefined` for anything else. */
+const typedArrayTag = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  Symbol.toStringTag,
+)?.get as (this: unknown) => string | undefined;
+
 const BINARY = defineType<Uint8Array>({
   name: "binary",
   db: { kind: "binary" },
-  // `isView` reads the internal slot, so an object that only inherits from
-  // Uint8Array.prototype does not pass.
+  // The getter reads the internal slot and runs no code of the value: it cannot throw, an
+  // object that only inherits from Uint8Array.prototype does not pass, and a Uint8Array
+  // from another realm does (`instanceof` fails all three).
   cast: (input) =>
-    ArrayBuffer.isView(input) && input instanceof Uint8Array ? { success: true, data: input } : INVALID,
+    typedArrayTag.call(input) === "Uint8Array" ? { success: true, data: input as Uint8Array } : INVALID,
   equal: bytesEqual,
 });
 

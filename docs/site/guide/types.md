@@ -47,9 +47,11 @@ Some details of what is accepted:
 - **Normal form.** A type returns one spelling of each value, the one the database gives
   back: a uuid in lower case, `"09:30"` as `"09:30:00"`, `".5"` as `"0.5"`.
 - **Mapped enums.** In `t.enum({ low: 1, high: 2 })` the values are all whole numbers
-  (an `integer` column) or all strings (a `text` column). Your code sees the keys.
+  (an `integer` column) or all strings (a `text` column). Your code sees the keys. A key
+  may not be the stored value of another key, because input may be either.
 - **Arrays.** A `null` element is rejected. When an element fails, the error says which
-  one (`meta.index`) and keeps the element's own message.
+  one (`meta.index`) and keeps the element's own message. For an array of arrays,
+  `meta.path` holds the indexes that lead to the value.
 - **JSON.** Values that JSON would change or drop are rejected instead of being stored
   differently from what you passed: `undefined` inside a document, `NaN`, a `Date`, a
   `Map`, a class instance, a `bigint`, and a value that contains itself.
@@ -119,7 +121,8 @@ Three rules for the functions you pass:
 - They are called on their own, not as methods, so they cannot use `this`.
 
 `defineType` checks the definition when it runs and throws `SchemaDefinitionError` for a
-missing name, a `cast` that is not a function, or a column type it cannot use.
+missing name, a `cast` that is not a function, or a column type it cannot use. It keeps
+its own copy of `db`.
 
 ### A column type the library does not know
 
@@ -147,7 +150,8 @@ price: t.type(currency({ code: "EUR" }));
 
 Options are compared by content: `{ code: "EUR", digits: 2 }` and
 `{ digits: 2, code: "EUR" }` give the same type. A type, a function or a class instance
-inside the options is compared by identity.
+inside the options is compared by identity. Options are plain data: options that contain
+themselves are refused.
 
 ## Differences between databases
 

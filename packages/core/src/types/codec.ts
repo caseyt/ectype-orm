@@ -7,6 +7,7 @@ import type { Adapter } from "../contracts/adapter.js";
 import type { AnyFieldType, Codec } from "../contracts/type.js";
 import { IDENTITY } from "../contracts/type.js";
 import { elementTypeOf, mapElements } from "./composite.js";
+import { detached } from "./define.js";
 
 const IDENTITY_CODEC: Codec = Object.freeze({ fromDb: IDENTITY, toDb: IDENTITY });
 
@@ -23,15 +24,17 @@ function buildCodec(type: AnyFieldType, adapter: Pick<Adapter, "typeOverrides">)
   if (element !== undefined) {
     const inner = resolveCodec(element, adapter);
     // When nothing was overridden below, the array's own conversions already compose these.
-    if (inner.fromDb !== element.fromDb || inner.toDb !== element.toDb) {
+    if (inner.fromDb !== detached(element, "fromDb") || inner.toDb !== detached(element, "toDb")) {
       return Object.freeze({
         fromDb: inner.fromDb === IDENTITY ? IDENTITY : mapElements(inner.fromDb),
         toDb: inner.toDb === IDENTITY ? IDENTITY : mapElements(inner.toDb),
       });
     }
   }
-  if (type.fromDb === IDENTITY && type.toDb === IDENTITY) return IDENTITY_CODEC;
-  return Object.freeze({ fromDb: type.fromDb, toDb: type.toDb });
+  const fromDb = detached(type, "fromDb");
+  const toDb = detached(type, "toDb");
+  if (fromDb === IDENTITY && toDb === IDENTITY) return IDENTITY_CODEC;
+  return Object.freeze({ fromDb, toDb });
 }
 
 /**
@@ -42,7 +45,8 @@ function buildCodec(type: AnyFieldType, adapter: Pick<Adapter, "typeOverrides">)
  *
  * The answer is computed once per (type, adapter instance) and the same frozen object
  * is returned afterwards. Either member may be `IDENTITY`; callers skip that call with a
- * reference check.
+ * reference check. The members are plain functions, safe to call without a receiver even
+ * when the type was written by hand as a class.
  *
  * @example
  * ```ts

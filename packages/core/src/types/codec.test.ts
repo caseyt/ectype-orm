@@ -128,3 +128,39 @@ describe("resolveCodec", () => {
     });
   });
 });
+
+describe("resolveCodec with a type written by hand as a class", () => {
+  class Prefixed {
+    readonly name = "prefixed";
+    readonly db = { kind: "text" } as const;
+    constructor(readonly prefix: string) {}
+    cast(input: unknown) {
+      return typeof input === "string"
+        ? ({ success: true, data: input } as const)
+        : ({ success: false } as const);
+    }
+    fromDb(value: string): string {
+      return this.prefix + value;
+    }
+    toDb(value: string): string {
+      return value.slice(this.prefix.length);
+    }
+    equal(a: string, b: string): boolean {
+      return a === b;
+    }
+  }
+
+  test("the codec's functions work without a receiver", () => {
+    const type = new Prefixed("p:");
+    const { fromDb, toDb } = resolveCodec(type, adapterWith());
+    expect(fromDb("a")).toBe("p:a");
+    expect(toDb("p:a")).toBe("a");
+  });
+
+  test("an array of such a type converts each element", () => {
+    const type = arrayType(new Prefixed("p:"));
+    const codec = resolveCodec(type, adapterWith());
+    expect(codec.fromDb(["a", null])).toEqual(["p:a", null]);
+    expect(codec.toDb(["p:a"])).toEqual(["a"]);
+  });
+});

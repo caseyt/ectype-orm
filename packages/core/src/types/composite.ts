@@ -7,7 +7,7 @@ import type { AnyFieldType, CastResult, DbType, FieldType } from "../contracts/t
 import { IDENTITY } from "../contracts/type.js";
 import { CastError, SchemaDefinitionError } from "../errors.js";
 import { deepEqual } from "../internal/deep-equal.js";
-import { defineType, parameterized } from "./define.js";
+import { defineType, detached, parameterized } from "./define.js";
 import { INVALID } from "./scalars.js";
 
 // --- json --------------------------------------------------------------------
@@ -15,12 +15,21 @@ import { INVALID } from "./scalars.js";
 /** Deeper nesting than this is rejected, which also keeps the walk off the stack limit. */
 const MAX_JSON_DEPTH = 500;
 
+/** A plain object: made by a literal or `JSON.parse` (in any realm), or without a prototype. */
+function isPlainObject(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null;
+}
+
 /**
  * Whether `value` survives a round trip through JSON unchanged: `null`, booleans, finite
- * numbers, strings, arrays and plain objects of those. `ancestors` holds the containers
- * on the current path, which is how a cycle is found.
+ * numbers, strings, arrays and plain objects of those.
+ *
+ * `seen` holds every container met so far: `false` while it is being walked, which is how
+ * a cycle is found, and `true` once it is known to be valid, so that a container
+ * referenced from many places is walked once.
  */
-function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
+function isJsonValue(value: unknown, seen: Map<object, boolean>, depth: number): boolean {
   switch (typeof value) {
     case "string":
     case "boolean":
@@ -34,24 +43,24 @@ function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
   }
   if (value === null) return true;
   const container = value as object;
-  if (ancestors.has(container) || ancestors.size >= MAX_JSON_DEPTH) return false;
-  ancestors.add(container);
-  let valid = true;
+  const known = seen.get(container);
+  if (known !== undefined) return known;
+  if (depth >= MAX_JSON_DEPTH) return false;
+  seen.set(container, false);
   if (Array.isArray(container)) {
-    for (let i = 0; valid && i < container.length; i++) valid = isJsonValue(container[i], ancestors);
+    for (let i = 0; i < container.length; i++) {
+      if (!isJsonValue(container[i], seen, depth + 1)) return false;
+    }
   } else {
-    const prototype = Object.getPrototypeOf(container);
-    if (prototype !== Object.prototype && prototype !== null) {
-      valid = false;
-    } else {
-      const record = container as Record<string, unknown>;
-      const keys = Object.keys(record);
-      for (let i = 0; valid && i < keys.length; i++)
-        valid = isJsonValue(record[keys[i] as string], ancestors);
+    if (!isPlainObject(container)) return false;
+    const record = container as Record<string, unknown>;
+    const keys = Object.keys(record);
+    for (let i = 0; i < keys.length; i++) {
+      if (!isJsonValue(record[keys[i] as string], seen, depth + 1)) return false;
     }
   }
-  ancestors.delete(container);
-  return valid;
+  seen.set(container, true);
+  return true;
 }
 
 const JSON_TYPE = defineType<unknown>({
@@ -59,7 +68,7 @@ const JSON_TYPE = defineType<unknown>({
   db: { kind: "jsonb" },
   cast: (input) => {
     try {
-      return isJsonValue(input, new Set()) ? { success: true, data: input } : INVALID;
+      return isJsonValue(input, new Map(), 0) ? { success: true, data: input } : INVALID;
     } catch {
       // A getter or a proxy trap threw.
       return INVALID;
@@ -133,10 +142,28 @@ export function mapElements(convert: (value: unknown) => unknown): (values: unkn
 }
 
 const arrayOf = parameterized((element: AnyFieldType): AnyFieldType => {
-  const elementCast = element.cast;
-  const elementEqual = element.equal;
-  const elementFromDb = element.fromDb;
-  const elementToDb = element.toDb;
+  const elementCast = detached(element, "cast");
+  const elementEqual = detached(element, "equal");
+  const elementFromDb = detached(element, "fromDb");
+  const elementToDb = detached(element, "toDb");
+  const nested = arrayElements.has(element);
+
+  /** The failure of the element at `index`, with the element's own message and metadata. */
+  const elementFailure = (
+    result: CastResult<unknown> & { success: false },
+    index: number,
+  ): CastResult<never> => {
+    const meta: Record<string, unknown> = { ...result.meta, index };
+    // For an array of arrays, `path` leads to the value that failed: [1, 2] is element 2 of
+    // element 1. An inner value that is not an array at all has no index of its own.
+    if (nested) {
+      const inner = result.meta?.path ?? (result.meta?.index === undefined ? [] : [result.meta.index]);
+      meta.path = [index, ...(inner as readonly unknown[])];
+    }
+    return result.message === undefined
+      ? { success: false, meta }
+      : { success: false, message: result.message, meta };
+  };
 
   const castElements = (input: readonly unknown[]): CastResult<unknown[]> => {
     const length = input.length;
@@ -146,11 +173,7 @@ const arrayOf = parameterized((element: AnyFieldType): AnyFieldType => {
       // `null` never reaches a type, and an element type has no way to say it is nullable.
       const result: CastResult<unknown> =
         value === null || value === undefined ? INVALID : elementCast(value);
-      if (!result.success) {
-        return result.message === undefined
-          ? { success: false, meta: { ...result.meta, index } }
-          : { success: false, message: result.message, meta: { ...result.meta, index } };
-      }
+      if (!result.success) return elementFailure(result, index);
       data[index] = result.data;
     }
     return { success: true, data };
@@ -191,8 +214,9 @@ const arrayOf = parameterized((element: AnyFieldType): AnyFieldType => {
 
 /**
  * An array of `element`. Accepts an array and casts each element with the element type;
- * if one fails, the cast fails with that element's message and `meta.index`. A `null`
- * element is rejected.
+ * if one fails, the cast fails with that element's message and `meta.index` (for an array
+ * of arrays also `meta.path`, the indexes that lead to the value). A `null` element is
+ * rejected.
  *
  * `fromDb` and `toDb` convert each element, and are skipped entirely when the element
  * type needs no conversion. Two arrays are equal when they have the same length and
@@ -248,12 +272,13 @@ const enumWith = parameterized((options: EnumOptions): AnyFieldType => {
   const storedOf = new Map<string, string | number>();
   keys.forEach((key, i) => {
     const value = stored[i] as string | number;
-    casts.set(value, Object.freeze({ success: true, data: key }));
+    const result: CastResult<string> = Object.freeze({ success: true, data: key });
+    // A key and a stored value never collide, except a key with its own value (enumType checks).
+    casts.set(value, result);
+    casts.set(key, result);
     keyOf.set(value, key);
     storedOf.set(key, value);
   });
-  // Set last: a key wins over a stored value that is spelled the same.
-  for (const key of keys) casts.set(key, Object.freeze({ success: true, data: key }));
 
   return defineType<string, string | number>({
     name: "enum",
@@ -306,7 +331,8 @@ function describeMember(value: unknown): string {
  * ```
  *
  * @throws SchemaDefinitionError when the members are empty, repeated, or not all strings
- * (a list) or all strings or all whole numbers (a mapping).
+ * (a list) or all strings or all whole numbers (a mapping), and when a key of a mapping is
+ * also the stored value of another key.
  * @throws CastError from `fromDb` and `toDb` of a mapped enum, for a value that is not a member.
  */
 export function enumType<const V extends readonly [string, ...string[]]>(
@@ -354,6 +380,15 @@ export function enumType(members: readonly string[] | EnumMapping): AnyFieldType
     throw new SchemaDefinitionError(
       `t.enum mapping values must be distinct, but got ${stored.map(describeMember).join(", ")}.`,
     );
+  }
+  for (const key of keys) {
+    // Input may be a key or a stored value, so one spelling must not mean two members.
+    const other = keys.find((k) => k !== key && mapping[k] === key);
+    if (other !== undefined) {
+      throw new SchemaDefinitionError(
+        `t.enum mapping is ambiguous: ${JSON.stringify(key)} is a key and also the stored value of ${JSON.stringify(other)}, so input ${JSON.stringify(key)} could mean either.`,
+      );
+    }
   }
   return enumWith({ keys, stored: stored as readonly (string | number)[] });
 }

@@ -14,8 +14,9 @@ const hasOwn = Object.prototype.hasOwnProperty;
  *   cannot tell them apart.
  * - Arrays compare element by element.
  * - `Date`s compare by timestamp.
- * - Other objects compare by their own enumerable string keys, in any order. Two objects
+ * - Plain objects compare by their own enumerable string keys, in any order. Two objects
  *   with different prototypes are never equal.
+ * - Anything else (a `Map`, a `Set`, a class instance) is equal only to itself.
  *
  * It does not serialise anything and allocates only the key lists of the objects it
  * walks. It does not detect cycles: a value that contains itself is not JSON.
@@ -47,8 +48,14 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     return true;
   }
 
-  if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+  const prototype = Object.getPrototypeOf(a);
+  if (prototype !== Object.getPrototypeOf(b)) return false;
   if (a instanceof Date) return a.getTime() === (b as Date).getTime();
+  // Only plain objects are compared by their keys. A Map, a Set or a class instance keeps
+  // its content where keys do not show it, so two of them are equal only when identical.
+  if (prototype !== null && prototype !== Object.prototype && Object.getPrototypeOf(prototype) !== null) {
+    return false;
+  }
 
   const left = a as Record<string, unknown>;
   const right = b as Record<string, unknown>;

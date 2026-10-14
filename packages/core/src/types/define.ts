@@ -49,7 +49,28 @@ function describe(value: unknown): string {
   return value === null ? "null" : Array.isArray(value) ? "an array" : typeof value;
 }
 
-function checkDbType(typeName: string, db: unknown, path: string): void {
+const SIMPLE_KINDS: ReadonlySet<string> = new Set([
+  "integer",
+  "bigint",
+  "float",
+  "decimal",
+  "boolean",
+  "text",
+  "uuid",
+  "binary",
+  "date",
+  "time",
+  "timestamp",
+  "timestamptz",
+  "json",
+  "jsonb",
+]);
+
+/**
+ * Checks a column type and returns a frozen copy of it, so that what was checked is what
+ * the type keeps: the caller's object can be changed afterwards without changing the type.
+ */
+function checkedDbType(typeName: string, db: unknown, path: string): DbType {
   if (typeof db !== "object" || db === null || typeof (db as { kind?: unknown }).kind !== "string") {
     throw new SchemaDefinitionError(
       `Type "${typeName}": ${path} must be a column type such as { kind: "text" }, but it is ${describe(db)}.`,
@@ -57,15 +78,24 @@ function checkDbType(typeName: string, db: unknown, path: string): void {
   }
   const dbType = db as DbType;
   if (dbType.kind === "array") {
-    checkDbType(typeName, dbType.of, `${path}.of`);
-  } else if (dbType.kind === "custom") {
+    return Object.freeze({ kind: "array", of: checkedDbType(typeName, dbType.of, `${path}.of`) });
+  }
+  if (dbType.kind === "custom") {
     // Trusted developer input (decision D9). The compiler checks it again before emitting it.
-    if (typeof dbType.sql !== "string" || !CUSTOM_SQL_TYPE.test(dbType.sql)) {
+    const sql: unknown = dbType.sql;
+    if (typeof sql !== "string" || !CUSTOM_SQL_TYPE.test(sql)) {
       throw new SchemaDefinitionError(
         `Type "${typeName}": ${path}.sql must be a plain SQL type name such as "citext", "numeric(10, 2)" or "public.mood[]". It is written into the SQL text, so it must be a constant and can never come from user data.`,
       );
     }
+    return Object.freeze({ kind: "custom", sql });
   }
+  if (!SIMPLE_KINDS.has(dbType.kind)) {
+    throw new SchemaDefinitionError(
+      `Type "${typeName}": ${path}.kind is ${JSON.stringify(dbType.kind)}, which is not a column kind. Use one of ${[...SIMPLE_KINDS].join(", ")}, { kind: "array", of }, or { kind: "custom", sql } for any other SQL type.`,
+    );
+  }
+  return Object.freeze({ kind: dbType.kind });
 }
 
 /**
@@ -75,7 +105,7 @@ function checkDbType(typeName: string, db: unknown, path: string): void {
  * Leave `fromDb` and `toDb` out when the driver's value is already the value you want;
  * the library then skips the call entirely when it reads rows. `equal` defaults to
  * `Object.is`. The functions are called on their own, never as methods, so they must not
- * use `this`.
+ * use `this`. The `db` object is copied, so changing yours afterwards changes nothing.
  *
  * @example
  * ```ts
@@ -92,7 +122,8 @@ function checkDbType(typeName: string, db: unknown, path: string): void {
  * ```
  *
  * @throws SchemaDefinitionError when the definition is malformed: no name, a `cast` that
- * is not a function, or a `custom` column type that is not a plain SQL type name.
+ * is not a function, a column kind that does not exist, or a `custom` column type that is
+ * not a plain SQL type name.
  */
 export function defineType<TApp, TDb = TApp>(definition: TypeDefinition<TApp, TDb>): FieldType<TApp, TDb> {
   const { name, db, cast, equal } = definition;
@@ -105,7 +136,7 @@ export function defineType<TApp, TDb = TApp>(definition: TypeDefinition<TApp, TD
       `defineType needs a non-empty name (it appears in error messages), but got ${describe(name)}.`,
     );
   }
-  checkDbType(name, db, "db");
+  const checkedDb = checkedDbType(name, db, "db");
   if (typeof cast !== "function") {
     throw new SchemaDefinitionError(
       `Type "${name}": cast must be a function that returns { success: true, data } or { success: false }, but it is ${describe(cast)}.`,
@@ -126,7 +157,7 @@ export function defineType<TApp, TDb = TApp>(definition: TypeDefinition<TApp, TD
   // parameter loops read `fromDb` and `toDb` from many different types.
   const type: FieldType<TApp, TDb> = Object.freeze({
     name,
-    db,
+    db: checkedDb,
     cast,
     fromDb: fromDb ?? (IDENTITY as (value: TDb) => TApp),
     toDb: toDb ?? (IDENTITY as (value: TApp) => TDb),
@@ -138,6 +169,31 @@ export function defineType<TApp, TDb = TApp>(definition: TypeDefinition<TApp, TD
 
 /** Every type made by {@link defineType}: in the options of a parameterized type, it is compared by identity. */
 const definedTypes = new WeakSet<object>();
+
+/**
+ * One of a type's functions, safe to call on its own.
+ *
+ * The `FieldType` contract declares its members as methods, so a type written by hand as
+ * a class may use `this`. Code that keeps a type's function apart from the type (an array
+ * type keeps its element's, a codec keeps `fromDb` and `toDb`) takes it through here: a
+ * type made by `defineType` gives the function itself, which never uses `this`; any other
+ * type gives it bound to the type, once. `IDENTITY` is never bound, so the reference check
+ * that skips it keeps working.
+ *
+ * @example
+ * ```ts
+ * const fromDb = detached(type, "fromDb");
+ * const value = fromDb === IDENTITY ? raw : fromDb(raw);
+ * ```
+ */
+export function detached<K extends "cast" | "fromDb" | "toDb" | "equal">(
+  type: AnyFieldType,
+  member: K,
+): AnyFieldType[K] {
+  const fn = type[member] as (...args: never[]) => unknown;
+  if (fn === IDENTITY || definedTypes.has(type)) return fn as AnyFieldType[K];
+  return fn.bind(type) as AnyFieldType[K];
+}
 
 const identities = new Map<symbol, number>();
 const objectIdentities = new WeakMap<object, number>();
@@ -153,13 +209,17 @@ function identityKey(value: object | symbol): string {
   return `#${id}`;
 }
 
+/** Options nested deeper than this are taken to contain themselves. */
+const MAX_OPTIONS_DEPTH = 100;
+
 /**
- * A string that is equal for two option values exactly when they are structurally equal.
- * Plain objects compare by content whatever their key order, arrays by content in order,
- * primitives by value. Anything else (a type, a function, a class instance) compares by
- * identity.
+ * A string that is equal for two option values when they are structurally equal, and
+ * different otherwise. Plain objects compare by their own enumerable keys, symbol keys
+ * included, whatever the key order; arrays by their elements in order; primitives by
+ * value and type. Anything else (a type, a function, a symbol, a class instance) compares
+ * by identity.
  */
-function optionsKey(value: unknown): string {
+function optionsKey(value: unknown, depth: number): string {
   switch (typeof value) {
     case "string":
       return JSON.stringify(value);
@@ -178,22 +238,32 @@ function optionsKey(value: unknown): string {
       break;
   }
   if (value === null) return "null";
+  if (depth > MAX_OPTIONS_DEPTH) {
+    throw new SchemaDefinitionError(
+      `The options of a parameterized type are nested more than ${MAX_OPTIONS_DEPTH} levels deep. They probably contain themselves; options must be plain data.`,
+    );
+  }
   const object = value as object;
   if (Array.isArray(object)) {
     let key = "[";
-    for (let i = 0; i < object.length; i++) key += `${optionsKey(object[i])},`;
+    for (let i = 0; i < object.length; i++) key += `${optionsKey(object[i], depth + 1)},`;
     return `${key}]`;
   }
   const prototype = Object.getPrototypeOf(object);
   if ((prototype !== Object.prototype && prototype !== null) || definedTypes.has(object)) {
     return identityKey(object);
   }
-  const record = object as Record<string, unknown>;
-  let key = "{";
-  for (const name of Object.keys(record).sort()) {
-    key += `${JSON.stringify(name)}:${optionsKey(record[name])},`;
+  const record = object as Record<string | symbol, unknown>;
+  const entries: string[] = [];
+  for (const name of Object.keys(record)) {
+    entries.push(`${JSON.stringify(name)}:${optionsKey(record[name], depth + 1)}`);
   }
-  return `${key}}`;
+  for (const symbol of Object.getOwnPropertySymbols(record)) {
+    if (Object.prototype.propertyIsEnumerable.call(record, symbol)) {
+      entries.push(`${identityKey(symbol)}:${optionsKey(record[symbol], depth + 1)}`);
+    }
+  }
+  return `{${entries.sort().join(",")}}`;
 }
 
 /**
@@ -203,7 +273,8 @@ function optionsKey(value: unknown): string {
  *
  * Options are compared by content: plain objects whatever their key order, arrays in
  * order, primitives by value. A type, a function or a class instance inside the options
- * is compared by identity.
+ * is compared by identity. Options must be plain data: options that contain themselves
+ * throw `SchemaDefinitionError`.
  *
  * @example
  * ```ts
@@ -226,7 +297,7 @@ export function parameterized<TOptions, TType extends AnyFieldType>(
 ): (options: TOptions) => TType {
   const cache = new Map<string, TType>();
   return (options) => {
-    const key = optionsKey(options);
+    const key = optionsKey(options, 0);
     let type = cache.get(key);
     if (type === undefined) {
       type = build(options);

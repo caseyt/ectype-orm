@@ -1,3 +1,5 @@
+import { runInNewContext } from "node:vm";
+import fc from "fast-check";
 import { describe, expect, test } from "vitest";
 import type { AnyFieldType, CastResult } from "../contracts/type.js";
 import { IDENTITY } from "../contracts/type.js";
@@ -268,15 +270,29 @@ describe('bigint with { mode: "number" }', () => {
     ["-5", -5],
     [BigInt(MAX), MAX],
     [String(MIN), MIN],
+    ["007", 7],
+    ["-0", 0],
   ])("reads the stored value %s as a number", (stored, expected) => {
-    expect(type.fromDb(stored)).toBe(expected);
+    expect(Object.is(type.fromDb(stored), expected)).toBe(true);
   });
+
+  test.each(["", "-", " 12 ", "12 ", "0x10", "1e3", "1.5", "abc", "12n", "+5", "1-2", "--1", "1/2", "1:2"])(
+    'throws CastError for the driver string "%s", which is not a whole number',
+    (stored) => {
+      const read = () => type.fromDb(stored);
+      expect(read).toThrow(CastError);
+      expect(read).toThrow("received a string from the driver that is not a whole number");
+    },
+  );
 
   test.each([
     ["a digit string beyond the safe range", "9007199254740993"],
     ["a bigint beyond the safe range", 2n ** 60n],
     ["a number beyond the safe range", 2 ** 53],
     ["a negative value beyond the safe range", "-9007199254740992"],
+    ["the largest 64-bit value", "9223372036854775807"],
+    ["the smallest 64-bit value", "-9223372036854775808"],
+    ["digits far beyond 64 bits", "9".repeat(400)],
   ])("throws CastError when the stored value is %s, without quoting it", (_label, stored) => {
     const read = () => type.fromDb(stored);
     expect(read).toThrow(CastError);
@@ -342,6 +358,36 @@ describe("float", () => {
     expect(type.db).toEqual({ kind: "float" });
     expectIdentityCodec(type);
     expect(floatType()).toBe(type);
+  });
+});
+
+describe('reading digit strings with bigint { mode: "number" }', () => {
+  const type = bigintType({ mode: "number" });
+
+  test("agrees with BigInt for every digit string: the same number, or CastError beyond the safe range", () => {
+    fc.assert(
+      fc.property(fc.bigInt({ min: -(2n ** 64n), max: 2n ** 64n }), fc.nat({ max: 3 }), (value, zeros) => {
+        const text = `${value < 0n ? "-" : ""}${"0".repeat(zeros)}${value < 0n ? -value : value}`;
+        const safe = value >= BigInt(MIN) && value <= BigInt(MAX);
+        if (!safe) {
+          expect(() => type.fromDb(text)).toThrow(CastError);
+          return true;
+        }
+        return Object.is(type.fromDb(text), Number(value) + 0);
+      }),
+      { numRuns: 5000 },
+    );
+  });
+
+  test("the values around the edge of the safe range", () => {
+    for (let offset = -3n; offset <= 3n; offset++) {
+      for (const edge of [BigInt(MAX), BigInt(MIN)]) {
+        const value = edge + offset;
+        const safe = value >= BigInt(MIN) && value <= BigInt(MAX);
+        if (safe) expect(type.fromDb(String(value))).toBe(Number(value));
+        else expect(() => type.fromDb(String(value))).toThrow(/outside the safe integer range/);
+      }
+    }
   });
 });
 
@@ -642,6 +688,42 @@ describe("binary", () => {
     ["undefined", undefined],
   ])("rejects %s", (_label, input) => {
     expectRejected(type, input);
+  });
+
+  test("does not run the code of a value whose prototype chain is hostile", () => {
+    const trapped = Object.setPrototypeOf(
+      new Uint8Array(1),
+      new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            throw new Error("trap");
+          },
+        },
+      ),
+    );
+    // Still a real Uint8Array underneath: accepted, and no trap ran. (The assertions
+    // compare by identity: a deep comparison would walk the prototype chain itself.)
+    const result = type.cast(trapped) as { success: boolean; data: unknown };
+    expect(result.success).toBe(true);
+    expect(result.data === trapped).toBe(true);
+    const proxy = new Proxy(new Uint8Array(1), {
+      get() {
+        throw new Error("trap");
+      },
+      getPrototypeOf() {
+        throw new Error("trap");
+      },
+    });
+    expect(type.cast(proxy).success).toBe(false);
+  });
+
+  test("accepts a Uint8Array made in another realm", () => {
+    const foreign = runInNewContext("new Uint8Array([1, 2, 3])") as Uint8Array;
+    expect(foreign instanceof Uint8Array).toBe(false);
+    expectCast(type, foreign, foreign);
+    expect(type.equal(foreign, new Uint8Array([1, 2, 3]))).toBe(true);
+    expectRejected(type, runInNewContext("new Uint16Array(2)"));
   });
 
   test("compares by bytes", () => {

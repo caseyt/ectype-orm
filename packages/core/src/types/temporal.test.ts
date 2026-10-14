@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import fc from "fast-check";
 import { describe, expect, test } from "vitest";
 import type { AnyFieldType } from "../contracts/type.js";
@@ -230,6 +231,25 @@ describe('date with { as: "date" }', () => {
     expect(write).toThrow("An invalid Date cannot be written to a date column.");
   });
 
+  test.each([
+    ["the year 10000", new Date("+010000-01-01T00:00:00Z")],
+    ["the year 0", new Date("0000-06-01T00:00:00Z")],
+    ["a year before 0", new Date(-1e14)],
+    ["the last instant before year 1", new Date(new Date("0001-01-01T00:00:00Z").getTime() - 1)],
+  ])("throws CastError when asked to write a Date in %s, which it could not read back", (_label, date) => {
+    const write = () => type.toDb(date);
+    expect(write).toThrow(CastError);
+    expect(write).toThrow("outside the years 1 to 9999");
+  });
+
+  test("writes the first and the last day it accepts, at any time of day", () => {
+    expect(type.toDb(new Date("0001-01-01T00:00:00Z"))).toBe("0001-01-01");
+    expect(type.toDb(new Date("9999-12-31T23:59:59.999Z"))).toBe("9999-12-31");
+    expect(type.fromDb(type.toDb(new Date("9999-12-31T23:59:59.999Z"))).toISOString()).toBe(
+      "9999-12-31T00:00:00.000Z",
+    );
+  });
+
   test("is a date column whose values are Dates, compared by timestamp", () => {
     expect(type.name).toBe("date(date)");
     expect(type.db).toEqual({ kind: "date" });
@@ -361,6 +381,24 @@ describe("timestamp", () => {
 
   rejects(type, ["2026-10-13T09:30:00", "2026-10-13 09:30", "2026-10-13T09:30:00.250", ...NOT_TIMESTAMPS]);
 
+  test("accepts a Date made in another realm, as a copy", () => {
+    const foreign = runInNewContext(`new Date(${BASE})`) as Date;
+    expect(foreign instanceof Date).toBe(false);
+    const { data } = type.cast(foreign) as { data: Date };
+    expect(data).toBeInstanceOf(Date);
+    expect(data.getTime()).toBe(BASE);
+    expect(dateType().cast(foreign)).toEqual({ success: true, data: "2026-10-13" });
+    expect(type.cast(runInNewContext("new Date(NaN)"))).toEqual({ success: false });
+  });
+
+  test("an object that only claims to be a Date is rejected", () => {
+    expect(type.cast({ [Symbol.toStringTag]: "Date" })).toEqual({ success: false });
+    expect(dateType().cast({ [Symbol.toStringTag]: "Date", year: 2026, month: 1, day: 2 })).toEqual({
+      success: true,
+      data: "2026-01-02",
+    });
+  });
+
   test("returns an accepted plain Date as it is", () => {
     const date = new Date(BASE + 123);
     expect(type.cast(date)).toEqual({ success: true, data: date });
@@ -489,7 +527,7 @@ describe("the instant computed from the parts of a string", () => {
     noInvalidDate: true,
   });
 
-  test("agrees with the engine's own Date for every ISO timestamp", () => {
+  test("agrees with the engine's own Date for sampled ISO timestamps", () => {
     const timestamp = timestampType();
     const local = localTimestampType();
     fc.assert(
@@ -503,7 +541,7 @@ describe("the instant computed from the parts of a string", () => {
     );
   });
 
-  test("agrees with the engine's own Date for every calendar day", () => {
+  test("agrees with the engine's own Date for sampled calendar days, through every entry point", () => {
     const asDate = dateType({ as: "date" });
     const asString = dateType();
     fc.assert(
@@ -519,6 +557,23 @@ describe("the instant computed from the parts of a string", () => {
       }),
       { numRuns: 5000 },
     );
+  });
+
+  test("agrees with the engine's own Date for every one of the 3,652,059 days from year 1 to 9999", () => {
+    const asDate = dateType({ as: "date" });
+    const first = new Date("0001-01-01T00:00:00.000Z").getTime();
+    const last = new Date("9999-12-31T00:00:00.000Z").getTime();
+    const day = new Date(first);
+    let count = 0;
+    let mismatches = 0;
+    for (let time = first; time <= last; time += 86_400_000) {
+      day.setTime(time);
+      const text = day.toISOString().slice(0, 10);
+      if (asDate.fromDb(text).getTime() !== time || asDate.toDb(day) !== text) mismatches++;
+      count++;
+    }
+    expect(count).toBe(3_652_059);
+    expect(mismatches).toBe(0);
   });
 
   test("applies an offset of any size and sign", () => {

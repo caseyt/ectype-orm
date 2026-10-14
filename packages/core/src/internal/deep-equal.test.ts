@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import fc from "fast-check";
 import { describe, expect, test } from "vitest";
 import { deepEqual } from "./deep-equal.js";
@@ -54,6 +55,31 @@ describe("deepEqual", () => {
   ])("%j does not equal %j", (a, b) => {
     expect(deepEqual(a, b)).toBe(false);
     expect(deepEqual(b, a)).toBe(false);
+  });
+
+  test("a Map, a Set, a RegExp or a class instance is equal only to itself", () => {
+    class Point {
+      constructor(readonly x: number) {}
+    }
+    const pairs: (readonly [object, object])[] = [
+      [new Set([1]), new Set([2])],
+      [new Set([1]), new Set([1])],
+      [new Map([[1, 2]]), new Map()],
+      [/a/, /b/],
+      [new Point(1), new Point(1)],
+      [new Uint8Array([1]), new Uint8Array([1])],
+    ];
+    for (const [a, b] of pairs) {
+      expect(deepEqual(a, b)).toBe(false);
+      expect(deepEqual(a, a)).toBe(true);
+      expect(deepEqual({ v: a }, { v: b })).toBe(false);
+    }
+  });
+
+  test("plain objects made in another realm are compared by their keys", () => {
+    const [a, b, c] = runInNewContext("[{ n: 1, d: [1] }, { d: [1], n: 1 }, { n: 2, d: [1] }]") as object[];
+    expect(deepEqual(a, b)).toBe(true);
+    expect(deepEqual(a, c)).toBe(false);
   });
 
   test("the same object is equal to itself without being walked", () => {
