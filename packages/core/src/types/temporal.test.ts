@@ -574,7 +574,8 @@ describe("the instant computed from the parts of a string", () => {
     }
     expect(count).toBe(3_652_059);
     expect(mismatches).toBe(0);
-  });
+    // 3.65 million iterations take about 2 s here and 9 s on a CI runner under coverage.
+  }, 60_000);
 
   test("applies an offset of any size and sign", () => {
     const timestamp = timestampType();
