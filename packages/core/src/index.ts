@@ -112,7 +112,7 @@ export {
 } from "./errors.js";
 // Step 07: query expressions. The classes are public as types only: expressions come from
 // columns, operators and these functions.
-export type { Col, Expr, NoParams, Operand, OrderExpr } from "./query/expr.js";
+export type { Col, Expr, NoParams, Operand, OrderExpr, SomeParams } from "./query/expr.js";
 export type { Aggregate, Case, FragmentFunction, WindowSpec } from "./query/functions.js";
 export {
   and,

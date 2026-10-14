@@ -6,7 +6,7 @@
  *
  * @module
  */
-import type { AggregateNode, ExprNode, OrderNode } from "../contracts/query.js";
+import type { AggregateNode, ExprNode, NamedParamNode, OrderNode } from "../contracts/query.js";
 import type { FieldBuilder, FieldFlags } from "../contracts/schema.js";
 import type { AnyFieldType } from "../contracts/type.js";
 import { QueryError } from "../errors.js";
@@ -30,6 +30,7 @@ import {
   fnNode,
   foldShape,
   fragmentNode,
+  IDENTIFIER,
   identNode,
   literalNode,
   namedParamNode,
@@ -57,8 +58,12 @@ import {
   type AnyExpr,
   AS_SUBQUERY,
   booleanLiteral,
+  type Checked,
+  type Compatible,
   Expr,
+  isSubqueryOperand,
   join,
+  joinNamed,
   type MergeParams,
   NONE,
   type NoParams,
@@ -66,6 +71,7 @@ import {
   OrderExpr,
   type ParamsOf,
   type ParamsOfAll,
+  type SomeParams,
   type SubqueryOperand,
   subqueryOf,
   toOperand,
@@ -102,11 +108,27 @@ type CaseValue<V> = V extends { readonly "~expr": { readonly type: infer T } } ?
 /** Anything but `undefined`: what a branch of `caseWhen` and an interpolation of `fragment` take. */
 type Value = NonNullable<unknown> | null;
 
+/**
+ * What a `fragment` interpolation takes: an expression, a query, or a value bound as a
+ * parameter. Not an order item, and not a plain object (no type to write it with).
+ */
+type FragmentValue =
+  | Expr<unknown, SomeParams>
+  | SubqueryOperand<unknown, SomeParams>
+  | string
+  | number
+  | bigint
+  | boolean
+  | Date
+  | Uint8Array
+  | readonly unknown[]
+  | null;
+
 /** A boolean expression, as `filter`, `caseWhen` and the logical functions take it. */
-type Condition = Expr<boolean | null, object>;
+type Condition = Expr<boolean | null, SomeParams>;
 
 /** What `sum` and `avg` take: numbers, and decimals (which are strings). */
-type Summable = Expr<number | bigint | string | null, object>;
+type Summable = Expr<number | bigint | string | null, SomeParams>;
 
 type SumOf<T> = NonNullable<T> extends bigint ? bigint : NonNullable<T> extends number ? number : string;
 
@@ -126,11 +148,11 @@ type AvgOf<T> = NonNullable<T> extends string ? string : number;
  */
 export interface WindowSpec {
   /** `PARTITION BY`. */
-  readonly partitionBy?: readonly Expr<unknown, object>[];
+  readonly partitionBy?: readonly Expr<unknown, SomeParams>[];
   /** `ORDER BY`; a bare expression is ascending. */
-  readonly orderBy?: readonly (Expr<unknown, object> | OrderExpr<object>)[];
+  readonly orderBy?: readonly (Expr<unknown, SomeParams> | OrderExpr<SomeParams>)[];
   /** The frame clause, as a fragment: fragment`ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`. */
-  readonly frame?: Expr<unknown, object>;
+  readonly frame?: Expr<unknown, SomeParams>;
 }
 
 type ElementOf<X> = X extends readonly (infer E)[] ? E : never;
@@ -160,7 +182,7 @@ export class Aggregate<T, P = NoParams> extends Expr<T, P> {
    *
    * @throws QueryError when `condition` is not an expression.
    */
-  filter<C extends Condition>(condition: C): Aggregate<T, MergeParams<P, ParamsOf<C>>> {
+  filter<C extends Condition>(condition: C & Compatible<P, C>): Aggregate<T, MergeParams<P, ParamsOf<C>>> {
     if (!(condition instanceof Expr)) {
       throw new QueryError("filter() takes a boolean expression, such as p.published or p.views.gt(10).");
     }
@@ -203,13 +225,17 @@ function rebuild(previous: AnyExpr, agg: AggregateNode): AnyExpr {
   const node: ExprNode = previous.node.kind === "cast" ? castNode(agg, previous.node.type) : agg;
   const params: unknown[] = [];
   const lists: number[] = [];
-  collectParams(node, params, lists);
+  const named: NamedParamNode[] = [];
+  collectParams(node, params, lists, named);
+  // The same check as joining expressions: one name, one type.
+  for (let i = 0; i < named.length; i++) joinNamed(named.slice(0, i), named.slice(i, i + 1));
   return new Aggregate(
     node,
     previous.type,
     previous.redact,
     params.length === 0 ? NONE : params,
     lists.length === 0 ? NONE : lists,
+    named.length === 0 ? NONE : named,
     shapeOf(node),
   );
 }
@@ -217,8 +243,11 @@ function rebuild(previous: AnyExpr, agg: AggregateNode): AnyExpr {
 function windowOf(window: string | WindowSpec | undefined): AggregateNode["over"] {
   if (window === undefined) return windowNode(NONE, NONE, undefined);
   if (typeof window === "string") {
-    if (window === "")
-      throw new QueryError("over() takes the name of a window declared on the query, or a window.");
+    if (!IDENTIFIER.test(window)) {
+      throw new QueryError(
+        "over() takes the name of a window declared on the query, an identifier (/^[A-Za-z_][A-Za-z0-9_$]*$/), or a window. The name given does not match, so it was refused.",
+      );
+    }
     return window;
   }
   if (typeof window !== "object" || window === null) {
@@ -259,11 +288,13 @@ function aggregate(
   const shapes: number[] = [];
   let params: readonly unknown[] = NONE;
   let lists: readonly number[] = NONE;
+  let named: readonly NamedParamNode[] = NONE;
   for (const arg of args) {
     nodes.push(arg.node);
     shapes.push(arg.shape);
     params = join(params, arg.params);
     lists = join(lists, arg.lists);
+    named = joinNamed(named, arg.named);
   }
   if (args.length === 0) {
     nodes.push(STAR);
@@ -275,6 +306,7 @@ function aggregate(
     redact,
     params,
     lists,
+    named,
     shapeOfAggregate(name, shapes, distinct, undefined, undefined),
   );
 }
@@ -307,7 +339,7 @@ function numericArgument(value: unknown, method: string): AnyExpr {
  * @throws QueryError when the argument is not an expression.
  */
 export function count(): Aggregate<number>;
-export function count<X extends Expr<unknown, object>>(expr: X): Aggregate<number, ParamsOf<X>>;
+export function count<X extends Expr<unknown, SomeParams>>(expr: X): Aggregate<number, ParamsOf<X>>;
 export function count(...args: readonly unknown[]): AnyExpr {
   if (args.length === 0) return COUNT_ROWS;
   return aggregate("count", [expressionArgument(args[0], "count")], false, BIG_COUNT, false);
@@ -323,7 +355,7 @@ export function count(...args: readonly unknown[]): AnyExpr {
  *
  * @throws QueryError when the argument is not an expression.
  */
-export function countDistinct<X extends Expr<unknown, object>>(expr: X): Aggregate<number, ParamsOf<X>> {
+export function countDistinct<X extends Expr<unknown, SomeParams>>(expr: X): Aggregate<number, ParamsOf<X>> {
   return aggregate("count", [expressionArgument(expr, "countDistinct")], true, BIG_COUNT, false) as never;
 }
 
@@ -367,6 +399,7 @@ export function avg<X extends Summable>(expr: X): Aggregate<AvgOf<ValueOf<X>> | 
     arg.redact,
     agg.params,
     agg.lists,
+    agg.named,
     shapeOfCast(agg.shape, FLOAT),
   ) as never;
 }
@@ -381,7 +414,7 @@ export function avg<X extends Summable>(expr: X): Aggregate<AvgOf<ValueOf<X>> | 
  *
  * @throws QueryError when the argument is not an expression.
  */
-export function min<X extends Expr<unknown, object>>(
+export function min<X extends Expr<unknown, SomeParams>>(
   expr: X,
 ): Aggregate<NonNullable<ValueOf<X>> | null, ParamsOf<X>> {
   const arg = expressionArgument(expr, "min");
@@ -398,7 +431,7 @@ export function min<X extends Expr<unknown, object>>(
  *
  * @throws QueryError when the argument is not an expression.
  */
-export function max<X extends Expr<unknown, object>>(
+export function max<X extends Expr<unknown, SomeParams>>(
   expr: X,
 ): Aggregate<NonNullable<ValueOf<X>> | null, ParamsOf<X>> {
   const arg = expressionArgument(expr, "max");
@@ -415,7 +448,7 @@ export function max<X extends Expr<unknown, object>>(
  *
  * @throws QueryError when the argument is not an expression.
  */
-export function arrayAgg<X extends Expr<unknown, object>>(
+export function arrayAgg<X extends Expr<unknown, SomeParams>>(
   expr: X,
 ): Aggregate<ValueOf<X>[] | null, ParamsOf<X>> {
   const arg = expressionArgument(expr, "arrayAgg");
@@ -434,7 +467,9 @@ export function arrayAgg<X extends Expr<unknown, object>>(
  *
  * @throws QueryError when the argument is not an expression.
  */
-export function jsonAgg<X extends Expr<unknown, object>>(expr: X): Aggregate<unknown[] | null, ParamsOf<X>> {
+export function jsonAgg<X extends Expr<unknown, SomeParams>>(
+  expr: X,
+): Aggregate<unknown[] | null, ParamsOf<X>> {
   const arg = expressionArgument(expr, "jsonAgg");
   return aggregate("jsonAgg", [arg], false, JSON_VALUE, arg.redact) as never;
 }
@@ -450,9 +485,12 @@ export function jsonAgg<X extends Expr<unknown, object>>(expr: X): Aggregate<unk
  * @throws QueryError when the first argument is not an expression, or the separator is `null` or `undefined`.
  */
 export function stringAgg<
-  X extends Expr<string | null, object>,
-  S extends string | Expr<string | null, object>,
->(expr: X, separator: S): Aggregate<string | null, MergeParams<ParamsOf<X>, ParamsOf<S>>> {
+  X extends Expr<string | null, SomeParams>,
+  S extends string | Expr<string | null, SomeParams>,
+>(
+  expr: X,
+  separator: S & Checked<ParamsOf<X>, S>,
+): Aggregate<string | null, MergeParams<ParamsOf<X>, ParamsOf<S>>> {
   const arg = expressionArgument(expr, "stringAgg");
   const sep = toOperand(separator, STRING, false, "stringAgg", false);
   return aggregate("stringAgg", [arg, sep], false, STRING, arg.redact) as never;
@@ -481,14 +519,16 @@ function nary(op: "and" | "or", values: readonly unknown[]): AnyExpr {
   const nodes: ExprNode[] = [];
   let params: readonly unknown[] = NONE;
   let lists: readonly number[] = NONE;
+  let named: readonly NamedParamNode[] = NONE;
   let shape = startNary(op);
   for (const arg of args) {
     nodes.push(arg.node);
     params = join(params, arg.params);
     lists = join(lists, arg.lists);
+    named = joinNamed(named, arg.named);
     shape = foldShape(shape, arg.shape);
   }
-  return new Expr(naryNode(op, nodes), BOOLEAN, false, params, lists, shape);
+  return new Expr(naryNode(op, nodes), BOOLEAN, false, params, lists, named, shape);
 }
 
 /**
@@ -538,6 +578,7 @@ export function not<X extends Condition>(condition: X): Expr<boolean, ParamsOf<X
     false,
     operand.params,
     operand.lists,
+    operand.named,
     shapeOfUnary("not", operand.shape),
   ) as never;
 }
@@ -559,7 +600,7 @@ export function not<X extends Condition>(condition: X): Expr<boolean, ParamsOf<X
  * @throws QueryError when `first` is not an expression or an argument is `null` or `undefined`.
  */
 export function coalesce<
-  F extends Expr<unknown, object>,
+  F extends Expr<unknown, SomeParams>,
   const R extends readonly [Operand<ValueOf<F>>, ...Operand<ValueOf<F>>[]],
 >(
   first: F,
@@ -570,18 +611,20 @@ export function coalesce<
   const nodes: ExprNode[] = [head.node];
   let params = head.params;
   let lists = head.lists;
+  let named = head.named;
   let shape = foldShape(startFn("coalesce"), head.shape);
   for (const value of rest) {
     const arg = toOperand(value, head.type, head.redact, "coalesce", false);
     nodes.push(arg.node);
     params = join(params, arg.params);
     lists = join(lists, arg.lists);
+    named = joinNamed(named, arg.named);
     shape = foldShape(shape, arg.shape);
   }
-  return new Expr(fnNode("coalesce", nodes), head.type, head.redact, params, lists, shape) as never;
+  return new Expr(fnNode("coalesce", nodes), head.type, head.redact, params, lists, named, shape) as never;
 }
 
-const NOW: AnyExpr = new Expr(fnNode("now", NONE), TIMESTAMP, false, NONE, NONE, startFn("now"));
+const NOW: AnyExpr = new Expr(fnNode("now", NONE), TIMESTAMP, false, NONE, NONE, NONE, startFn("now"));
 
 /**
  * `now()`: the database's current time (the start of the transaction on Postgres).
@@ -615,7 +658,7 @@ export class Case<T, P = NoParams> extends Expr<T | null, P> {
    *
    * @example
    * ```ts
-   * new Case(node, type, false, params, lists, shape, branchesShape);
+   * new Case(node, type, false, params, lists, named, shape, branchesShape);
    * ```
    */
   constructor(
@@ -624,10 +667,11 @@ export class Case<T, P = NoParams> extends Expr<T | null, P> {
     redact: boolean,
     params: readonly unknown[],
     lists: readonly number[],
+    named: readonly NamedParamNode[],
     shape: number,
     branchesShape: number,
   ) {
-    super(node, type, redact, params, lists, shape);
+    super(node, type, redact, params, lists, named, shape);
     this.branchesShape = branchesShape;
   }
 
@@ -642,8 +686,8 @@ export class Case<T, P = NoParams> extends Expr<T | null, P> {
    * @throws QueryError when `condition` is not an expression or `value` is `undefined`.
    */
   when<C extends Condition, V extends Value>(
-    condition: C,
-    value: V,
+    condition: C & Compatible<P, C>,
+    value: V & Compatible<MergeParams<P, ParamsOf<C>>, V>,
   ): Case<T | CaseValue<V>, MergeParams<P, MergeParams<ParamsOf<C>, ParamsOf<V>>>> {
     return branch(this, condition, value) as never;
   }
@@ -658,25 +702,31 @@ export class Case<T, P = NoParams> extends Expr<T | null, P> {
    *
    * @throws QueryError when `value` is `undefined`.
    */
-  else<V extends Value>(value: V): Expr<T | CaseValue<V>, MergeParams<P, ParamsOf<V>>> {
+  else<V extends Value>(value: V & Compatible<P, V>): Expr<T | CaseValue<V>, MergeParams<P, ParamsOf<V>>> {
     const node = this.node as Extract<ExprNode, { kind: "case" }>;
-    const otherwise = toOperand(value, this.type, false, "else", false, true);
+    const otherwise = toOperand(value, this.type, this.redact, "else", false, true);
     return new Expr(
       caseNode(node.whens, otherwise.node),
       this.type ?? otherwise.type,
-      false,
+      this.redact || otherwise.redact,
       join(this.params, otherwise.params),
       join(this.lists, otherwise.lists),
+      joinNamed(this.named, otherwise.named),
       endCase(this.branchesShape, otherwise.shape),
     ) as never;
   }
 }
 
-function branch(previous: Case<unknown, unknown> | undefined, condition: unknown, value: unknown): AnyExpr {
+function branch(
+  previous: Case<unknown, SomeParams> | undefined,
+  condition: unknown,
+  value: unknown,
+): AnyExpr {
   if (!(condition instanceof Expr)) {
     throw new QueryError("caseWhen() takes a boolean expression as its condition, such as u.age.lt(18).");
   }
-  const then = toOperand(value, previous?.type, false, "caseWhen", false, true);
+  // A plain value is bound with the type and redaction of the branches before it.
+  const then = toOperand(value, previous?.type, previous?.redact ?? false, "caseWhen", false, true);
   const whens =
     previous === undefined ? [] : (previous.node as Extract<ExprNode, { kind: "case" }>).whens.slice();
   whens.push({ when: condition.node, result: then.node });
@@ -684,9 +734,10 @@ function branch(previous: Case<unknown, unknown> | undefined, condition: unknown
   return new Case(
     caseNode(whens, undefined),
     previous?.type ?? then.type,
-    false,
+    (previous?.redact ?? false) || then.redact,
     join(join(previous?.params ?? NONE, condition.params), then.params),
     join(join(previous?.lists ?? NONE, condition.lists), then.lists),
+    joinNamed(joinNamed(previous?.named ?? NONE, condition.named), then.named),
     endCase(branchesShape, undefined),
     branchesShape,
   );
@@ -705,7 +756,7 @@ function branch(previous: Case<unknown, unknown> | undefined, condition: unknown
  */
 export function caseWhen<C extends Condition, V extends Value>(
   condition: C,
-  value: V,
+  value: V & Compatible<ParamsOf<C>, V>,
 ): Case<CaseValue<V>, MergeParams<ParamsOf<C>, ParamsOf<V>>> {
   return branch(undefined, condition, value) as never;
 }
@@ -720,7 +771,7 @@ export function caseWhen<C extends Condition, V extends Value>(
  *
  * @throws QueryError when the argument is not a query.
  */
-export function exists<Q extends SubqueryOperand<unknown, object>>(query: Q): Expr<boolean, ParamsOf<Q>> {
+export function exists<Q extends SubqueryOperand<unknown, SomeParams>>(query: Q): Expr<boolean, ParamsOf<Q>> {
   if (typeof query !== "object" || query === null || typeof query[AS_SUBQUERY] !== "function") {
     throw new QueryError("exists() takes a query.");
   }
@@ -731,6 +782,7 @@ export function exists<Q extends SubqueryOperand<unknown, object>>(query: Q): Ex
     false,
     sub.params,
     sub.lists,
+    sub.named,
     shapeOfSubquery("exists", sub.node.query.shape),
   ) as never;
 }
@@ -763,6 +815,7 @@ export function val(value: unknown, type?: unknown): AnyExpr {
     false,
     [value],
     NONE,
+    NONE,
     shapeOfParam(fieldType, false),
   );
 }
@@ -789,6 +842,7 @@ export function lit<const V extends boolean | number | null>(
     false,
     NONE,
     NONE,
+    NONE,
     shapeOfLiteral(node.value),
   ) as never;
 }
@@ -812,12 +866,14 @@ export function param<const N extends string, T, F extends FieldFlags>(
     throw new QueryError('param() takes a name and a field type: param("minAge", t.integer()).');
   }
   const fieldType = typeArgument(type, "param");
+  const node = namedParamNode(name, fieldType, false);
   return new Expr(
-    namedParamNode(name, fieldType, false),
+    node,
     fieldType,
     false,
     NONE,
     NONE,
+    [node],
     shapeOfNamedParam(name, fieldType, false),
   ) as never;
 }
@@ -832,7 +888,7 @@ export function param<const N extends string, T, F extends FieldFlags>(
  */
 export interface FragmentFunction {
   /** Raw SQL: the template's literal parts are SQL text, every interpolation is an expression or a bound value. */
-  <const A extends readonly Value[]>(
+  <const A extends readonly FragmentValue[]>(
     strings: TemplateStringsArray,
     ...args: A
   ): Expr<unknown, ParamsOfAll<A>>;
@@ -861,15 +917,14 @@ function fragmentTag(strings: TemplateStringsArray, ...args: unknown[]): AnyExpr
   const shapes: number[] = [];
   let params: readonly unknown[] = NONE;
   let lists: readonly number[] = NONE;
+  let named: readonly NamedParamNode[] = NONE;
   for (const value of args) {
-    const arg =
-      typeof value === "object" && value !== null && !(value instanceof Expr) && AS_SUBQUERY in value
-        ? subqueryOf(value as SubqueryOperand<unknown, unknown>, "fragment")
-        : toOperand(value, undefined, false, "fragment", false, true);
+    const arg = fragmentArgument(value);
     nodes.push(arg.node);
     shapes.push(arg.shape);
     params = join(params, arg.params);
     lists = join(lists, arg.lists);
+    named = joinNamed(named, arg.named);
   }
   return new Expr(
     fragmentNode(strings, nodes),
@@ -877,13 +932,39 @@ function fragmentTag(strings: TemplateStringsArray, ...args: unknown[]): AnyExpr
     false,
     params,
     lists,
+    named,
     shapeOfFragment(strings, shapes),
   );
 }
 
+/**
+ * One interpolation of a fragment as an expression. An expression is used as it is, a
+ * query becomes a subquery, and a value is bound: a string, number, bigint, boolean,
+ * `Date`, bytes, an array (one array parameter) or `null`. Any other object is refused: an
+ * order item is not an expression, and a plain object has no type to be written with
+ * (pass `val(object, t.json())`).
+ */
+function fragmentArgument(value: unknown): AnyExpr {
+  if (value instanceof Expr) return value;
+  if (typeof value === "object" && value !== null) {
+    if (isSubqueryOperand(value)) return subqueryOf(value, "fragment");
+    if (value instanceof OrderExpr) {
+      throw new QueryError(
+        "fragment() was given an order item (asc() or desc()), which is not an expression. Interpolate the expression, and write ASC or DESC in the template.",
+      );
+    }
+    if (!Array.isArray(value) && !(value instanceof Date) && !(value instanceof Uint8Array)) {
+      throw new QueryError(
+        "fragment() binds strings, numbers, bigints, booleans, dates, bytes, arrays and null. For a JSON object pass val(object, t.json()).",
+      );
+    }
+  }
+  return toOperand(value, undefined, false, "fragment", false, true);
+}
+
 function ident(name: string): AnyExpr {
   const node = identNode(name);
-  return new Expr(node, undefined, false, NONE, NONE, shapeOfIdent(node.name));
+  return new Expr(node, undefined, false, NONE, NONE, NONE, shapeOfIdent(node.name));
 }
 
 /**

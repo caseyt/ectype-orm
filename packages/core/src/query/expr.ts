@@ -14,7 +14,7 @@
  *
  * @module
  */
-import type { BinaryOp, ExprNode, OrderNode, QueryAst } from "../contracts/query.js";
+import type { BinaryOp, ExprNode, NamedParamNode, OrderNode, QueryAst } from "../contracts/query.js";
 import type { FieldBuilder, FieldFlags, FieldMeta } from "../contracts/schema.js";
 import type { AnyFieldType } from "../contracts/type.js";
 import { QueryError } from "../errors.js";
@@ -64,6 +64,20 @@ import {
  */
 export type NoParams = Record<never, never>;
 
+/**
+ * The named-parameter position that accepts an expression whatever parameters it needs:
+ * `Expr<boolean, SomeParams>` is any boolean expression. Named parameters are a
+ * requirement, so `Expr` is contravariant in them: an expression that needs `minAge` is not
+ * an `Expr<boolean>` (which needs none), and `never` is the type every requirement accepts.
+ *
+ * @example
+ * ```ts
+ * function isCondition(value: Expr<boolean | null, SomeParams>): void {}
+ * isCondition(u.age.gte(param("minAge", t.integer())));
+ * ```
+ */
+export type SomeParams = never;
+
 type Simplify<X> = { [K in keyof X]: X[K] };
 
 type UnionToIntersection<U> = (U extends unknown ? (value: U) => void : never) extends (
@@ -91,9 +105,9 @@ export type MergeParams<A, B> = Simplify<A & B>;
  * type P = ParamsOf<Expr<number, { minAge: number }>>; // { minAge: number }
  * ```
  */
-export type ParamsOf<X> = X extends { readonly "~expr": { readonly params: infer Q } }
+export type ParamsOf<X> = X extends { readonly "~expr": { readonly params: (params: infer Q) => void } }
   ? Q
-  : X extends { readonly "~order": { readonly params: infer Q } }
+  : X extends { readonly "~order": { readonly params: (params: infer Q) => void } }
     ? Q
     : X extends SubqueryOperand<unknown, infer Q>
       ? Q
@@ -139,13 +153,51 @@ type ElementOf<T> = NonNullable<T> extends readonly (infer E)[] ? E : never;
  * const operand: Operand<number | null> = 18;
  * ```
  */
-export type Operand<T> = NonNullable<T> | Expr<T | null, object>;
+export type Operand<T> = NonNullable<T> | Expr<T | null, SomeParams>;
+
+/** The keys two sets of named parameters share with different types. */
+type Clashes<A, B> = [A] extends [never]
+  ? never
+  : [B] extends [never]
+    ? never
+    : {
+        [K in keyof A & keyof B]: [A[K]] extends [B[K]] ? ([B[K]] extends [A[K]] ? never : K) : K;
+      }[keyof A & keyof B];
+
+/**
+ * Refuses an operand at compile time, by intersecting the parameter type with an error
+ * object it cannot satisfy: an operand that is always `null` (`lit(null)`, `val(null)`),
+ * and one whose named parameters use a name of this expression's with another type.
+ * Otherwise `unknown`, which leaves the parameter type as it is.
+ *
+ * @example
+ * ```ts
+ * declare function eq<O extends Operand<number>>(other: O & Checked<NoParams, O>): Expr<boolean>;
+ * ```
+ */
+export type Checked<P, O> = ([ValueOf<O>] extends [null]
+  ? { readonly "~error": "null is never equal to anything: use isNull() or isDistinctFrom()" }
+  : unknown) &
+  Compatible<P, O>;
+
+/**
+ * The named-parameter half of {@link Checked}: refuses an operand that uses a parameter
+ * name of this expression's with another type.
+ *
+ * @example
+ * ```ts
+ * declare function isDistinctFrom<O>(other: O & Compatible<NoParams, O>): Expr<boolean>;
+ * ```
+ */
+export type Compatible<P, O> = [Clashes<P, ParamsOf<O>>] extends [never]
+  ? unknown
+  : { readonly "~error": `the named parameter "${Clashes<P, ParamsOf<O>> & string}" is used with two types` };
 
 /** What `and`, `or` and `filter` take. */
-type BoolOperand = boolean | Expr<boolean | null, object>;
+type BoolOperand = boolean | Expr<boolean | null, SomeParams>;
 
 /** What the text operators take. */
-type TextOperand = string | Expr<string | null, object>;
+type TextOperand = string | Expr<string | null, SomeParams>;
 
 /** A key of a JSON path: an object key, or an array index. */
 type JsonKey = string | number;
@@ -154,10 +206,13 @@ type JsonKey = string | number;
 type NotJson = string | number | bigint | boolean | Date | Uint8Array;
 
 /** `this` for `path` / `pathText`: an expression that may hold a JSON document. */
-type JsonExpr<T> = [NonNullable<T>] extends [NotJson] ? never : Expr<T, object>;
+type JsonExpr<T> = [NonNullable<T>] extends [NotJson] ? never : Expr<T, SomeParams>;
 
-/** The result of `cast`: `U`, nullable when the operand is (an `unknown` operand is not assumed nullable). */
-type CastResult<T, U> = U | (unknown extends T ? never : NullOf<T>);
+/**
+ * The result of `cast`: `U`, nullable when the operand is (an `unknown` operand is not
+ * assumed nullable). A cast of something that is always `null` is still always `null`.
+ */
+type CastResult<T, U> = [T] extends [null] ? null : U | (unknown extends T ? never : NullOf<T>);
 
 // ---------------------------------------------------------------------------
 // Subqueries
@@ -191,7 +246,15 @@ export interface SubqueryOperand<R, P> {
   [AS_SUBQUERY](): Expr<R, P>;
 }
 
-function isSubqueryOperand(value: unknown): value is SubqueryOperand<unknown, unknown> {
+/**
+ * Whether `value` is a subquery operand: an object with an `[AS_SUBQUERY]` method.
+ *
+ * @example
+ * ```ts
+ * isSubqueryOperand(from(Post, "p").select(({ p }) => p.authorId)); // true
+ * ```
+ */
+export function isSubqueryOperand(value: unknown): value is SubqueryOperand<unknown, SomeParams> {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -210,7 +273,7 @@ function isSubqueryOperand(value: unknown): value is SubqueryOperand<unknown, un
  * @throws QueryError when the operand does not produce a subquery expression.
  */
 export function subqueryOf(
-  value: SubqueryOperand<unknown, unknown>,
+  value: SubqueryOperand<unknown, SomeParams>,
   method: string,
 ): AnyExpr & { readonly node: { readonly kind: "subquery"; readonly query: QueryAst } } {
   const expr = value[AS_SUBQUERY]();
@@ -224,10 +287,26 @@ export function subqueryOf(
 // Expr
 // ---------------------------------------------------------------------------
 
-/** An expression of any type: what the implementation handles. */
-export type AnyExpr = Expr<unknown, unknown>;
+/**
+ * An expression of any type and any named parameters: what the implementation handles.
+ *
+ * @example
+ * ```ts
+ * function describe(expr: AnyExpr): string {
+ *   return expr.node.kind;
+ * }
+ * ```
+ */
+export type AnyExpr = Expr<unknown, SomeParams>;
 
-/** The shared empty array for `params` and `lists`. Never mutated. */
+/**
+ * The shared empty array for `params`, `lists` and `named`. Frozen, never mutated.
+ *
+ * @example
+ * ```ts
+ * new Expr(node, undefined, false, NONE, NONE, NONE, shapeOf(node));
+ * ```
+ */
 export const NONE: readonly never[] = Object.freeze([]);
 
 const BOOLEAN: AnyFieldType = booleanType();
@@ -250,9 +329,12 @@ const JSON_VALUE: AnyFieldType = jsonType();
  * const adult: Expr<boolean> = u.age.gte(18).and(u.role.eq("admin"));
  * ```
  */
-export class Expr<out T, out P = NoParams> {
-  /** Type information only; there is no such property at run time. */
-  declare readonly "~expr": { readonly type: T; readonly params: P };
+export class Expr<out T, in P = NoParams> {
+  /**
+   * Type information only; there is no such property at run time. `params` is a function
+   * type so that `P` is contravariant: see {@link SomeParams}.
+   */
+  declare readonly "~expr": { readonly type: T; readonly params: (params: P) => void };
   /** The AST node. */
   readonly node: ExprNode;
   /** The type the value is loaded with when it is selected, when one is known. */
@@ -263,6 +345,8 @@ export class Expr<out T, out P = NoParams> {
   readonly params: readonly unknown[];
   /** The lengths of the lists of {@link node}, in canonical order. */
   readonly lists: readonly number[];
+  /** The named parameters of {@link node}, in canonical order (a name may repeat). */
+  readonly named: readonly NamedParamNode[];
   /** The structural hash of {@link node} (`shapeOf(node)`). */
   readonly shape: number;
 
@@ -271,7 +355,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @example
    * ```ts
-   * new Expr(node, undefined, false, NONE, NONE, shapeOf(node));
+   * new Expr(node, undefined, false, NONE, NONE, NONE, shapeOf(node));
    * ```
    */
   constructor(
@@ -280,6 +364,7 @@ export class Expr<out T, out P = NoParams> {
     redact: boolean,
     params: readonly unknown[],
     lists: readonly number[],
+    named: readonly NamedParamNode[],
     shape: number,
   ) {
     this.node = node;
@@ -287,6 +372,7 @@ export class Expr<out T, out P = NoParams> {
     this.redact = redact;
     this.params = params;
     this.lists = lists;
+    this.named = named;
     this.shape = shape;
   }
 
@@ -303,7 +389,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  eq<O extends Operand<T>>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  eq<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("eq", this, other) as never;
   }
 
@@ -317,7 +403,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  neq<O extends Operand<T>>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  neq<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("neq", this, other) as never;
   }
 
@@ -331,7 +417,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  gt<O extends Operand<T>>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  gt<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("gt", this, other) as never;
   }
 
@@ -345,7 +431,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  gte<O extends Operand<T>>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  gte<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("gte", this, other) as never;
   }
 
@@ -359,7 +445,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  lt<O extends Operand<T>>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  lt<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("lt", this, other) as never;
   }
 
@@ -373,7 +459,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  lte<O extends Operand<T>>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  lte<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("lte", this, other) as never;
   }
 
@@ -388,18 +474,20 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when either end is `null` or `undefined`.
    */
   between<L extends Operand<T>, H extends Operand<T>>(
-    low: L,
-    high: H,
+    low: L & Checked<P, L>,
+    high: H & Checked<MergeParams<P, ParamsOf<L>>, H>,
   ): Expr<boolean, MergeParams<P, MergeParams<ParamsOf<L>, ParamsOf<H>>>> {
     const lowExpr = toOperand(low, this.type, this.redact, "between", true);
     const highExpr = toOperand(high, this.type, this.redact, "between", true);
+    const self: AnyExpr = lowExpr.redact || highExpr.redact ? redacted(this) : this;
     return new Expr(
-      betweenNode(this.node, lowExpr.node, highExpr.node),
+      betweenNode(self.node, lowExpr.node, highExpr.node),
       BOOLEAN,
       false,
-      join(join(this.params, lowExpr.params), highExpr.params),
-      join(join(this.lists, lowExpr.lists), highExpr.lists),
-      shapeOfBetween(this.shape, lowExpr.shape, highExpr.shape),
+      join(join(self.params, lowExpr.params), highExpr.params),
+      join(join(self.lists, lowExpr.lists), highExpr.lists),
+      joinNamed(joinNamed(self.named, lowExpr.named), highExpr.named),
+      shapeOfBetween(self.shape, lowExpr.shape, highExpr.shape),
     ) as never;
   }
 
@@ -414,7 +502,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when the list holds `null` or `undefined`, or the argument is not a list, an expression or a query.
    */
-  in<O extends InOperand<T>>(values: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  in<O extends InOperand<T>>(values: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return membership("in", this, values) as never;
   }
 
@@ -428,7 +516,7 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when the list holds `null` or `undefined`, or the argument is not a list, an expression or a query.
    */
-  notIn<O extends InOperand<T>>(values: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  notIn<O extends InOperand<T>>(values: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return membership("notIn", this, values) as never;
   }
 
@@ -466,7 +554,9 @@ export class Expr<out T, out P = NoParams> {
    *
    * @throws QueryError when given `undefined`.
    */
-  isDistinctFrom<O extends Operand<T> | null>(other: O): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  isDistinctFrom<O extends Operand<T> | null>(
+    other: O & Compatible<P, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return operate(
       "isDistinctFrom",
       this,
@@ -493,8 +583,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given anything but a boolean or a boolean expression.
    */
   and<O extends BoolOperand>(
-    this: Expr<boolean | null, object>,
-    other: O,
+    this: Expr<boolean | null, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return logical("and", this, other) as never;
   }
@@ -510,8 +600,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given anything but a boolean or a boolean expression.
    */
   or<O extends BoolOperand>(
-    this: Expr<boolean | null, object>,
-    other: O,
+    this: Expr<boolean | null, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return logical("or", this, other) as never;
   }
@@ -524,7 +614,7 @@ export class Expr<out T, out P = NoParams> {
    * p.published.not();
    * ```
    */
-  not(this: Expr<boolean | null, object>): Expr<boolean, P> {
+  not(this: Expr<boolean | null, SomeParams>): Expr<boolean, P> {
     return unary("not", this, BOOLEAN, false) as never;
   }
 
@@ -541,10 +631,10 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   like<O extends TextOperand>(
-    this: Expr<string | null, object>,
-    pattern: O,
+    this: Expr<string | null, SomeParams>,
+    pattern: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
-    return operate("like", this, pattern, STRING, this.redact, BOOLEAN, false, "like", false);
+    return operate("like", this, pattern, STRING, this.redact, BOOLEAN, false, "like", false, true);
   }
 
   /**
@@ -558,10 +648,10 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   notLike<O extends TextOperand>(
-    this: Expr<string | null, object>,
-    pattern: O,
+    this: Expr<string | null, SomeParams>,
+    pattern: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
-    return operate("notLike", this, pattern, STRING, this.redact, BOOLEAN, false, "notLike", false);
+    return operate("notLike", this, pattern, STRING, this.redact, BOOLEAN, false, "notLike", false, true);
   }
 
   /**
@@ -575,10 +665,10 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   ilike<O extends TextOperand>(
-    this: Expr<string | null, object>,
-    pattern: O,
+    this: Expr<string | null, SomeParams>,
+    pattern: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
-    return operate("ilike", this, pattern, STRING, this.redact, BOOLEAN, false, "ilike", false);
+    return operate("ilike", this, pattern, STRING, this.redact, BOOLEAN, false, "ilike", false, true);
   }
 
   /**
@@ -592,7 +682,7 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when a part is `null` or `undefined`, or no part is given.
    */
   concat<S extends string | null, const A extends readonly TextOperand[]>(
-    this: Expr<S, object>,
+    this: Expr<S, SomeParams>,
     ...parts: A
   ): Expr<string | NullOf<S> | NullOf<ValueOf<A[number]>>, MergeParams<P, ParamsOfAll<A>>> {
     if (parts.length === 0) throw new QueryError("concat() needs at least one part to append.");
@@ -611,7 +701,7 @@ export class Expr<out T, out P = NoParams> {
    * u.email.lower().eq("ada@example.com");
    * ```
    */
-  lower<S extends string | null>(this: Expr<S, object>): Expr<string | NullOf<S>, P> {
+  lower<S extends string | null>(this: Expr<S, SomeParams>): Expr<string | NullOf<S>, P> {
     return call("lower", this, STRING, this.redact) as never;
   }
 
@@ -623,7 +713,7 @@ export class Expr<out T, out P = NoParams> {
    * u.email.upper();
    * ```
    */
-  upper<S extends string | null>(this: Expr<S, object>): Expr<string | NullOf<S>, P> {
+  upper<S extends string | null>(this: Expr<S, SomeParams>): Expr<string | NullOf<S>, P> {
     return call("upper", this, STRING, this.redact) as never;
   }
 
@@ -640,8 +730,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   add<S extends number | bigint | null, O extends Operand<S>>(
-    this: Expr<S, object>,
-    other: O,
+    this: Expr<S, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<Numeric<S> | NullOf<S> | NullOf<ValueOf<O>>, MergeParams<P, ParamsOf<O>>> {
     return arithmetic("add", this, other);
   }
@@ -657,8 +747,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   sub<S extends number | bigint | null, O extends Operand<S>>(
-    this: Expr<S, object>,
-    other: O,
+    this: Expr<S, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<Numeric<S> | NullOf<S> | NullOf<ValueOf<O>>, MergeParams<P, ParamsOf<O>>> {
     return arithmetic("sub", this, other);
   }
@@ -674,8 +764,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   mul<S extends number | bigint | null, O extends Operand<S>>(
-    this: Expr<S, object>,
-    other: O,
+    this: Expr<S, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<Numeric<S> | NullOf<S> | NullOf<ValueOf<O>>, MergeParams<P, ParamsOf<O>>> {
     return arithmetic("mul", this, other);
   }
@@ -691,8 +781,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   div<S extends number | bigint | null, O extends Operand<S>>(
-    this: Expr<S, object>,
-    other: O,
+    this: Expr<S, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<Numeric<S> | NullOf<S> | NullOf<ValueOf<O>>, MergeParams<P, ParamsOf<O>>> {
     return arithmetic("div", this, other);
   }
@@ -708,8 +798,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   mod<S extends number | bigint | null, O extends Operand<S>>(
-    this: Expr<S, object>,
-    other: O,
+    this: Expr<S, SomeParams>,
+    other: O & Checked<P, O>,
   ): Expr<Numeric<S> | NullOf<S> | NullOf<ValueOf<O>>, MergeParams<P, ParamsOf<O>>> {
     return arithmetic("mod", this, other);
   }
@@ -722,7 +812,7 @@ export class Expr<out T, out P = NoParams> {
    * p.views.neg();
    * ```
    */
-  neg<S extends number | bigint | null>(this: Expr<S, object>): Expr<Numeric<S> | NullOf<S>, P> {
+  neg<S extends number | bigint | null>(this: Expr<S, SomeParams>): Expr<Numeric<S> | NullOf<S>, P> {
     return unary("neg", this, this.type, this.redact) as never;
   }
 
@@ -739,8 +829,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   contains<O extends Operand<T>>(
-    this: Expr<readonly unknown[] | null, object>,
-    values: O,
+    this: Expr<readonly unknown[] | null, SomeParams>,
+    values: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return operate("contains", this, values, this.type, this.redact, BOOLEAN, false, "contains", false);
   }
@@ -756,8 +846,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   containedBy<O extends Operand<T>>(
-    this: Expr<readonly unknown[] | null, object>,
-    values: O,
+    this: Expr<readonly unknown[] | null, SomeParams>,
+    values: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return operate("containedBy", this, values, this.type, this.redact, BOOLEAN, false, "containedBy", false);
   }
@@ -773,8 +863,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   overlaps<O extends Operand<T>>(
-    this: Expr<readonly unknown[] | null, object>,
-    values: O,
+    this: Expr<readonly unknown[] | null, SomeParams>,
+    values: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return operate("overlaps", this, values, this.type, this.redact, BOOLEAN, false, "overlaps", false);
   }
@@ -790,8 +880,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `null` or `undefined`.
    */
   has<S extends readonly unknown[] | null, O extends Operand<ElementOf<S>>>(
-    this: Expr<S, object>,
-    element: O,
+    this: Expr<S, SomeParams>,
+    element: O & Checked<P, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return operate(
       "has",
@@ -819,8 +909,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `undefined`.
    */
   append<S extends readonly unknown[] | null, O extends Operand<ElementOf<S>> | null>(
-    this: Expr<S, object>,
-    element: O,
+    this: Expr<S, SomeParams>,
+    element: O & Compatible<P, O>,
   ): Expr<NonNullable<S>, MergeParams<P, ParamsOf<O>>> {
     return call2(
       "arrayAppend",
@@ -840,8 +930,8 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when given `undefined`.
    */
   remove<S extends readonly unknown[] | null, O extends Operand<ElementOf<S>> | null>(
-    this: Expr<S, object>,
-    element: O,
+    this: Expr<S, SomeParams>,
+    element: O & Compatible<P, O>,
   ): Expr<S, MergeParams<P, ParamsOf<O>>> {
     return call2(
       "arrayRemove",
@@ -899,7 +989,7 @@ export class Expr<out T, out P = NoParams> {
    * @throws QueryError when `type` is not a field type.
    */
   cast<S, U, F extends FieldFlags>(
-    this: Expr<S, object>,
+    this: Expr<S, SomeParams>,
     type: FieldBuilder<U, F>,
   ): Expr<CastResult<S, U>, P> {
     const target = typeArgument(type, "cast");
@@ -909,6 +999,7 @@ export class Expr<out T, out P = NoParams> {
       this.redact,
       this.params,
       this.lists,
+      this.named,
       shapeOfCast(this.shape, target),
     ) as never;
   }
@@ -941,6 +1032,7 @@ export class Expr<out T, out P = NoParams> {
       orderNode(this.node, "asc", undefined),
       this.params,
       this.lists,
+      this.named,
       shapeOfOrder(this.shape, "asc", undefined),
       this.shape,
     );
@@ -959,6 +1051,7 @@ export class Expr<out T, out P = NoParams> {
       orderNode(this.node, "desc", undefined),
       this.params,
       this.lists,
+      this.named,
       shapeOfOrder(this.shape, "desc", undefined),
       this.shape,
     );
@@ -968,8 +1061,8 @@ export class Expr<out T, out P = NoParams> {
 /** What `in` and `notIn` take for an expression of type `T`. */
 type InOperand<T> =
   | readonly NonNullable<T>[]
-  | Expr<readonly (T | null)[] | null, object>
-  | SubqueryOperand<T | null, object>;
+  | Expr<readonly (T | null)[] | null, SomeParams>
+  | SubqueryOperand<T | null, SomeParams>;
 
 /**
  * A column of a binding: `u.email`. Query bindings hold one per field, made once per
@@ -1001,6 +1094,7 @@ export class Col<T> extends Expr<T, NoParams> {
       field.redact,
       NONE,
       NONE,
+      NONE,
       shapeOfColumn(binding, field.column),
     );
     this.binding = binding;
@@ -1016,15 +1110,17 @@ export class Col<T> extends Expr<T, NoParams> {
  * const newestFirst: OrderExpr = u.createdAt.desc();
  * ```
  */
-export class OrderExpr<P = NoParams> {
+export class OrderExpr<in P = NoParams> {
   /** Type information only; there is no such property at run time. */
-  declare readonly "~order": { readonly params: P };
+  declare readonly "~order": { readonly params: (params: P) => void };
   /** The AST node. */
   readonly node: OrderNode;
   /** The bound values of {@link node}, in canonical order. */
   readonly params: readonly unknown[];
   /** The lengths of the lists of {@link node}, in canonical order. */
   readonly lists: readonly number[];
+  /** The named parameters of {@link node}, in canonical order. */
+  readonly named: readonly NamedParamNode[];
   /** The structural hash of {@link node}. */
   readonly shape: number;
   /** The structural hash of the ordered expression. */
@@ -1035,19 +1131,21 @@ export class OrderExpr<P = NoParams> {
    *
    * @example
    * ```ts
-   * new OrderExpr(node, NONE, NONE, shape, exprShape);
+   * new OrderExpr(node, NONE, NONE, NONE, shape, exprShape);
    * ```
    */
   constructor(
     node: OrderNode,
     params: readonly unknown[],
     lists: readonly number[],
+    named: readonly NamedParamNode[],
     shape: number,
     exprShape: number,
   ) {
     this.node = node;
     this.params = params;
     this.lists = lists;
+    this.named = named;
     this.shape = shape;
     this.exprShape = exprShape;
   }
@@ -1082,6 +1180,7 @@ export class OrderExpr<P = NoParams> {
       orderNode(expr, direction, nulls),
       this.params,
       this.lists,
+      this.named,
       shapeOfOrder(this.exprShape, direction, nulls),
       this.exprShape,
     );
@@ -1135,6 +1234,35 @@ function appendOne<V>(a: readonly V[], value: V): readonly V[] {
 }
 
 /**
+ * The named parameters of two expressions together. A name used with two different types
+ * is refused: the query could never be given one value for both.
+ *
+ * @example
+ * ```ts
+ * joinNamed(left.named, right.named);
+ * ```
+ *
+ * @throws QueryError when one name has two types.
+ */
+export function joinNamed(
+  a: readonly NamedParamNode[],
+  b: readonly NamedParamNode[],
+): readonly NamedParamNode[] {
+  if (a.length === 0) return b;
+  if (b.length === 0) return a;
+  for (const x of a) {
+    for (const y of b) {
+      if (x.name === y.name && x.type !== y.type) {
+        throw new QueryError(
+          `The named parameter "${x.name}" is used with two types, ${x.type?.name ?? "untyped"} and ${y.type?.name ?? "untyped"}. A named parameter has one type: give the other use its own name.`,
+        );
+      }
+    }
+  }
+  return join(a, b);
+}
+
+/**
  * The type a field builder names, for functions that take one (`cast`, `val`, `param`).
  *
  * @example
@@ -1161,14 +1289,30 @@ function elementType(type: AnyFieldType | undefined): AnyFieldType | undefined {
 function nullOperand(method: string, comparison: boolean): QueryError {
   return comparison
     ? new QueryError(
-        `${method}() was given null. A comparison with null is always unknown in SQL, so it would match nothing: use isNull() or isNotNull() instead.`,
+        `${method}() was given null. A comparison with null is always unknown in SQL, so it would match nothing: use isNull() or isNotNull(), or isDistinctFrom() to compare treating null as a value.`,
       )
     : new QueryError(`${method}() was given null or undefined, which it cannot take.`);
 }
 
 /**
+ * Whether an expression is always `null`: `lit(null)`, `val(null)`, or either of them cast.
+ *
+ * @example
+ * ```ts
+ * isNullOperand(val(null).cast(t.integer())); // true
+ * ```
+ */
+export function isNullOperand(expr: AnyExpr): boolean {
+  let node = expr.node;
+  while (node.kind === "cast") node = node.expr;
+  return (node.kind === "param" || node.kind === "literal") && node.value === null;
+}
+
+/**
  * An operand as an expression: an expression as it is, a value as a bound parameter of
- * `type`. A named parameter takes `redact` from the other side, as a value does.
+ * `type`. A parameter given as an expression (`val(x)`, `param(…)`) takes `redact` from the
+ * other side, as a plain value does. Unless `allowNull`, an operand that is `null` is
+ * refused, whether a plain `null` or an expression that is always `null`.
  *
  * @example
  * ```ts
@@ -1186,26 +1330,60 @@ export function toOperand(
   allowNull = false,
 ): AnyExpr {
   if (value instanceof Expr) {
-    if (comparison && value.node.kind === "param" && value.node.value === null)
-      throw nullOperand(method, true);
+    if (!allowNull && isNullOperand(value)) throw nullOperand(method, comparison);
     return redact ? redacted(value) : value;
   }
   if (value === undefined || (value === null && !allowNull)) throw nullOperand(method, comparison);
-  return new Expr(paramNode(value, type, redact), type, redact, [value], NONE, shapeOfParam(type, redact));
+  return new Expr(
+    paramNode(value, type, redact),
+    type,
+    redact,
+    [value],
+    NONE,
+    NONE,
+    shapeOfParam(type, redact),
+  );
 }
 
-/** A named parameter used beside a redacted field becomes redacted too. */
-function redacted(value: AnyExpr): AnyExpr {
+/**
+ * The same expression with its parameter marked `redact`, when it is a bare parameter
+ * (`val(x)`, `param(…)`) that is not marked yet; otherwise the expression itself.
+ *
+ * @example
+ * ```ts
+ * redacted(val("secret")).node; // { kind: "param", value: "secret", type: undefined, redact: true }
+ * ```
+ */
+export function redacted(value: AnyExpr): AnyExpr {
   const node = value.node;
-  if (node.kind !== "namedParam" || node.redact) return value;
-  return new Expr(
-    namedParamNode(node.name, node.type, true),
-    value.type,
-    value.redact,
-    value.params,
-    value.lists,
-    shapeOfNamedParam(node.name, node.type, true),
-  );
+  switch (node.kind) {
+    case "param":
+      if (node.redact) return value;
+      return new Expr(
+        paramNode(node.value, node.type, true),
+        value.type,
+        value.redact,
+        value.params,
+        value.lists,
+        value.named,
+        shapeOfParam(node.type, true),
+      );
+    case "namedParam": {
+      if (node.redact) return value;
+      const marked = namedParamNode(node.name, node.type, true);
+      return new Expr(
+        marked,
+        value.type,
+        value.redact,
+        value.params,
+        value.lists,
+        [marked],
+        shapeOfNamedParam(node.name, node.type, true),
+      );
+    }
+    default:
+      return value;
+  }
 }
 
 /** A comparison: the operand takes the left side's type and `redact`; `null` is refused. */
@@ -1219,7 +1397,8 @@ function arithmetic<R>(op: BinaryOp, left: AnyExpr, right: unknown): R {
 
 /**
  * A binary operation whose right side is an operand. A plain value takes the fast path:
- * one parameter node, no intermediate expression.
+ * one parameter node, no intermediate expression. When the right side is redacted and the
+ * left one is a bare parameter (`val(x).eq(u.passwordHash)`), the left one is redacted too.
  */
 function operate<R>(
   op: BinaryOp,
@@ -1235,13 +1414,15 @@ function operate<R>(
 ): R {
   if (right instanceof Expr || right === null || right === undefined) {
     const operand = toOperand(right, operandType, operandRedact, method, comparison, allowNull);
+    const first = operand.redact ? redacted(left) : left;
     return new Expr(
-      binaryNode(op, left.node, operand.node),
+      binaryNode(op, first.node, operand.node),
       type,
       redact,
-      join(left.params, operand.params),
-      join(left.lists, operand.lists),
-      shapeOfBinary(op, left.shape, operand.shape),
+      join(first.params, operand.params),
+      join(first.lists, operand.lists),
+      joinNamed(first.named, operand.named),
+      shapeOfBinary(op, first.shape, operand.shape),
     ) as R;
   }
   return new Expr(
@@ -1250,6 +1431,7 @@ function operate<R>(
     redact,
     appendOne(left.params, right),
     left.lists,
+    left.named,
     shapeOfBinary(op, left.shape, shapeOfParam(operandType, operandRedact)),
   ) as R;
 }
@@ -1266,6 +1448,7 @@ function unary(
     redact,
     operand.params,
     operand.lists,
+    operand.named,
     shapeOfUnary(op, operand.shape),
   );
 }
@@ -1278,6 +1461,7 @@ function call(name: string, arg: AnyExpr, type: AnyFieldType | undefined, redact
     redact,
     arg.params,
     arg.lists,
+    arg.named,
     foldShape(startFn(name), arg.shape),
   );
 }
@@ -1290,6 +1474,7 @@ function call2<R>(name: string, first: AnyExpr, second: AnyExpr): R {
     first.redact,
     join(first.params, second.params),
     join(first.lists, second.lists),
+    joinNamed(first.named, second.named),
     foldShape(foldShape(startFn(name), first.shape), second.shape),
   ) as R;
 }
@@ -1314,6 +1499,7 @@ export function booleanOperand(value: unknown, method: string): AnyExpr {
       false,
       [value],
       NONE,
+      NONE,
       shapeOfParam(BOOLEAN, false),
     );
   }
@@ -1323,6 +1509,9 @@ export function booleanOperand(value: unknown, method: string): AnyExpr {
 function logical(op: "and" | "or", left: AnyExpr, right: unknown): AnyExpr {
   const operand = booleanOperand(right, op);
   const node = left.node;
+  const params = join(left.params, operand.params);
+  const lists = join(left.lists, operand.lists);
+  const named = joinNamed(left.named, operand.named);
   if (node.kind === "nary" && node.op === op) {
     const args = node.args.slice();
     args.push(operand.node);
@@ -1330,8 +1519,9 @@ function logical(op: "and" | "or", left: AnyExpr, right: unknown): AnyExpr {
       naryNode(op, args),
       BOOLEAN,
       false,
-      join(left.params, operand.params),
-      join(left.lists, operand.lists),
+      params,
+      lists,
+      named,
       foldShape(left.shape, operand.shape),
     );
   }
@@ -1339,14 +1529,15 @@ function logical(op: "and" | "or", left: AnyExpr, right: unknown): AnyExpr {
     naryNode(op, [node, operand.node]),
     BOOLEAN,
     false,
-    join(left.params, operand.params),
-    join(left.lists, operand.lists),
+    params,
+    lists,
+    named,
     foldShape(foldShape(startNary(op), left.shape), operand.shape),
   );
 }
 
-const FALSE: AnyExpr = new Expr(literalNode(false), BOOLEAN, false, NONE, NONE, shapeOfLiteral(false));
-const TRUE: AnyExpr = new Expr(literalNode(true), BOOLEAN, false, NONE, NONE, shapeOfLiteral(true));
+const FALSE: AnyExpr = new Expr(literalNode(false), BOOLEAN, false, NONE, NONE, NONE, shapeOfLiteral(false));
+const TRUE: AnyExpr = new Expr(literalNode(true), BOOLEAN, false, NONE, NONE, NONE, shapeOfLiteral(true));
 
 /**
  * The literal `true` or `false` as an expression. Shared: expressions are immutable.
@@ -1360,11 +1551,31 @@ export function booleanLiteral(value: boolean): AnyExpr {
   return value ? TRUE : FALSE;
 }
 
+/**
+ * `x IN ()`: `FALSE` (and `x NOT IN ()`: `TRUE`), whatever `x` is. When `x` uses named
+ * parameters they stay in the query, so that its type and its tree agree on the parameters
+ * it needs: `FALSE AND x IS NULL` (`TRUE OR x IS NULL`), which is still false (true).
+ */
+function emptyMembership(op: "in" | "notIn", left: AnyExpr): AnyExpr {
+  const constant = op === "in" ? FALSE : TRUE;
+  if (left.named.length === 0) return constant;
+  const connective = op === "in" ? "and" : "or";
+  const isNull = unaryNode("isNull", left.node);
+  return new Expr(
+    naryNode(connective, [constant.node, isNull]),
+    BOOLEAN,
+    false,
+    left.params,
+    left.lists,
+    left.named,
+    foldShape(foldShape(startNary(connective), constant.shape), shapeOfUnary("isNull", left.shape)),
+  );
+}
+
 function membership(op: "in" | "notIn", left: AnyExpr, values: unknown): AnyExpr {
   if (Array.isArray(values)) {
     const length = values.length;
-    // x IN () is false, and NOT IN () true, whatever x is.
-    if (length === 0) return op === "in" ? FALSE : TRUE;
+    if (length === 0) return emptyMembership(op, left);
     // A copy, so that changing the caller's array later cannot change the query, and so
     // that `lists` keeps matching the list.
     const copy = new Array<unknown>(length);
@@ -1383,22 +1594,27 @@ function membership(op: "in" | "notIn", left: AnyExpr, values: unknown): AnyExpr
       false,
       appendOne(left.params, copy),
       appendOne(left.lists, length),
+      left.named,
       shapeOfBinary(op, left.shape, shapeOfList(left.type, left.redact)),
     );
   }
   let right: AnyExpr;
-  if (values instanceof Expr) right = values;
-  else if (isSubqueryOperand(values)) right = subqueryOf(values, op);
+  if (values instanceof Expr) {
+    if (isNullOperand(values)) throw nullOperand(op, true);
+    right = left.redact ? redacted(values) : values;
+  } else if (isSubqueryOperand(values)) right = subqueryOf(values, op);
   else {
     throw new QueryError(`${op}() takes an array of values, an expression of array type, or a query.`);
   }
+  const first = right.redact ? redacted(left) : left;
   return new Expr(
-    binaryNode(op, left.node, right.node),
+    binaryNode(op, first.node, right.node),
     BOOLEAN,
     false,
-    join(left.params, right.params),
-    join(left.lists, right.lists),
-    shapeOfBinary(op, left.shape, right.shape),
+    join(first.params, right.params),
+    join(first.lists, right.lists),
+    joinNamed(first.named, right.named),
+    shapeOfBinary(op, first.shape, right.shape),
   );
 }
 
@@ -1433,6 +1649,7 @@ function jsonPath(
     value.redact,
     join(value.params, keys),
     value.lists,
+    value.named,
     shapeOfJsonPath(value.shape, shapes, asText),
   );
 }

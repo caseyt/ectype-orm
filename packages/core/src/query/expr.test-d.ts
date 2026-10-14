@@ -4,7 +4,7 @@ import type { Post, User } from "@egon-orm/test-support";
 import { describe, expectTypeOf, test } from "vitest";
 import type { AnySchema, FieldNames, Row } from "../contracts/schema.js";
 import { Schema, t } from "../schema/index.js";
-import type { Col, Expr, NoParams, OrderExpr, ParamsOf, SubqueryOperand } from "./expr.js";
+import type { Col, Expr, NoParams, OrderExpr, ParamsOf, SomeParams, SubqueryOperand } from "./expr.js";
 import {
   type Aggregate,
   and,
@@ -436,7 +436,96 @@ describe("named parameters", () => {
   test("an expression with params is still an operand", () => {
     const withParam: Expr<boolean, { minAge: number }> = u.age.gte(param("minAge", t.integer()));
     expectTypeOf(withParam.and(p.published)).toEqualTypeOf<Expr<boolean, { minAge: number }>>();
-    const anyCondition: Expr<boolean | null, object> = withParam;
+    const anyCondition: Expr<boolean | null, SomeParams> = withParam;
     void anyCondition;
+  });
+});
+
+describe("an operand that is always null", () => {
+  test("is refused at compile time where a value is compared", () => {
+    // @ts-expect-error lit(null) is null
+    u.age.eq(lit(null));
+    // @ts-expect-error val(null) is null
+    u.name.eq(val(null));
+    // @ts-expect-error a cast of null is still null
+    u.age.eq(val(null).cast(t.integer()));
+    // @ts-expect-error neither end of a range
+    u.age.between(lit(null), 5);
+    // @ts-expect-error nor the high end
+    u.age.between(1, val(null));
+    // @ts-expect-error in takes no null
+    u.id.in(val(null));
+    // @ts-expect-error a pattern
+    u.email.like(val(null));
+    // @ts-expect-error arithmetic
+    u.age.add(lit(null));
+    // @ts-expect-error an element
+    p.tagList.has(val(null));
+    // @ts-expect-error a separator
+    stringAgg(p.title, val(null));
+    expectTypeOf(val(null).cast(t.integer())).toEqualTypeOf<Expr<null, NoParams>>();
+  });
+
+  test("is accepted where null means something", () => {
+    u.name.isDistinctFrom(lit(null));
+    p.tagList.remove(val(null));
+    caseWhen(p.published, lit(null));
+  });
+});
+
+describe("named parameters are a requirement", () => {
+  test("an expression that needs a parameter is not one that needs none", () => {
+    // @ts-expect-error minAge would be lost
+    const adults: Expr<boolean> = u.age.gte(param("minAge", t.integer()));
+    void adults;
+    // @ts-expect-error role would be lost
+    const fewer: Expr<boolean, { minAge: number }> = and(
+      u.age.gte(param("minAge", t.integer())),
+      u.role.eq(param("role", t.enum(["admin", "member"]))),
+    );
+    void fewer;
+  });
+
+  test("declaring a parameter the expression does not use is allowed", () => {
+    const more: Expr<boolean, { minAge: number }> = u.age.gte(18);
+    void more;
+    function adults(): Expr<boolean, { minAge: number }> {
+      return u.age.gte(param("minAge", t.integer()));
+    }
+    expectTypeOf<ParamsOf<ReturnType<typeof adults>>>().toEqualTypeOf<{ minAge: number }>();
+    expectTypeOf<ParamsOf<ReturnType<typeof adults>>>().not.toBeAny();
+  });
+
+  test("any expression fits SomeParams", () => {
+    const any: Expr<boolean | null, SomeParams> = u.age.gte(param("minAge", t.integer()));
+    void any;
+  });
+
+  test("one name with two types does not compile where two expressions meet", () => {
+    const n = u.age.add(param("n", t.integer()));
+    expectTypeOf(n.eq(param("n", t.integer()))).toEqualTypeOf<Expr<boolean, { n: number }>>();
+    // @ts-expect-error n is a number on the left
+    n.eq(param("n", t.string()).as<number>());
+    const cond = u.age.gte(param("n", t.integer()));
+    // @ts-expect-error and
+    cond.and(u.email.eq(param("n", t.string())));
+    // @ts-expect-error between
+    u.age.between(param("n", t.integer()), param("n", t.string()).as<number>());
+    // @ts-expect-error filter
+    sum(p.views.add(param("n", t.integer()))).filter(u.email.eq(param("n", t.string())));
+    // @ts-expect-error caseWhen
+    caseWhen(cond, param("n", t.string()));
+    // @ts-expect-error isDistinctFrom
+    n.isDistinctFrom(param("n", t.string()).as<number>());
+  });
+});
+
+describe("fragment interpolations", () => {
+  test("take values, expressions and queries, not order items or plain objects", () => {
+    fragment`${1} ${"a"} ${1n} ${true} ${null} ${new Date()} ${new Uint8Array()} ${[1, 2]} ${u.age} ${authorIds}`;
+    // @ts-expect-error an order item is not an expression
+    fragment`${u.name.asc()}`;
+    // @ts-expect-error a plain object has no type to be bound with
+    fragment`${{ theme: "dark" }}`;
   });
 });

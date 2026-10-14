@@ -2,7 +2,14 @@
 // printer for AST nodes (the unit tests snapshot nodes, not SQL), and a hand-built query
 // that stands in for the query builder of step 08 wherever a subquery is needed.
 // Imported by tests only.
-import type { ExprNode, QueryAst, QueryNode, TableSourceNode, WindowNode } from "../contracts/query.js";
+import type {
+  ExprNode,
+  NamedParamNode,
+  QueryAst,
+  QueryNode,
+  TableSourceNode,
+  WindowNode,
+} from "../contracts/query.js";
 import type { AnySchema, FieldNames, Row } from "../contracts/schema.js";
 import { meta } from "../schema/index.js";
 import {
@@ -184,6 +191,8 @@ export function postsByViews(minViews: number): QueryAst {
 
 /** Wraps a query as a subquery operand, as the query builder's `Query` will. */
 export function asSubquery<R>(ast: QueryAst): SubqueryOperand<R, NoParams> {
+  const named: NamedParamNode[] = [];
+  collectParams(ast, [], [], named);
   return {
     [AS_SUBQUERY]: () =>
       new Expr(
@@ -192,6 +201,7 @@ export function asSubquery<R>(ast: QueryAst): SubqueryOperand<R, NoParams> {
         false,
         ast.params,
         ast.listLengths,
+        named,
         shapeOfSubquery("subquery", ast.shape),
       ) as never,
   };

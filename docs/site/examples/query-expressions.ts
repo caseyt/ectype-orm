@@ -28,6 +28,7 @@ import {
   param,
   type Row,
   Schema,
+  type SomeParams,
   stringAgg,
   sum,
   t,
@@ -76,7 +77,7 @@ declare const terms: string;
 // A query that selects user ids, as `from(Post, "p").select(({ p }) => p.authorId)` will be.
 declare const subqueryOfIds: Exclude<
   Parameters<Col<number>["in"]>[0],
-  readonly unknown[] | Expr<unknown, object>
+  readonly unknown[] | Expr<unknown, SomeParams>
 >;
 
 export function overview() {
@@ -192,6 +193,20 @@ export function namedParams() {
   // Expr<boolean, { minAge: number; role: "admin" | "member" }>
   // #endregion named-params
   return condition;
+}
+
+// #region named-params-helper
+function adults(): Expr<boolean, { minAge: number }> {
+  return u.age.gte(param("minAge", t.integer()));
+}
+
+function anyCondition(condition: Expr<boolean | null, SomeParams>) {
+  return condition;
+}
+// #endregion named-params-helper
+
+export function helpers() {
+  return anyCondition(adults());
 }
 
 export function logic() {

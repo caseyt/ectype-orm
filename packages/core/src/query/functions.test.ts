@@ -4,7 +4,7 @@ import { Post, User } from "@egon-orm/test-support";
 import { describe, expect, test } from "vitest";
 import { QueryError } from "../errors.js";
 import { Schema, t } from "../schema/index.js";
-import { collectParams, shapeOf } from "./ast.js";
+import { collectParams, type NamedParamNode, shapeOf } from "./ast.js";
 import type { AnyExpr } from "./expr.js";
 import { asSubquery, columns, postsByViews, show } from "./expr-fixtures.js";
 import {
@@ -45,9 +45,11 @@ const l = columns(Ledger, "l");
 function shown(expr: AnyExpr): string {
   const params: unknown[] = [];
   const lists: number[] = [];
-  collectParams(expr.node, params, lists);
+  const named: NamedParamNode[] = [];
+  collectParams(expr.node, params, lists, named);
   expect(expr.params).toEqual(params);
   expect(expr.lists).toEqual(lists);
+  expect(expr.named).toEqual(named);
   expect(expr.shape).toBe(shapeOf(expr.node));
   return show(expr.node);
 }
@@ -389,5 +391,84 @@ describe("fragment", () => {
     }
     expect(() => fragment.ident(1 as never)).toThrow(QueryError);
     expect(shown(fragment.ident("_x$1"))).toBe("#_x$1");
+  });
+});
+
+describe("round 1 review", () => {
+  test("a window name must be an identifier", () => {
+    expect(shown(count().over("by_author$1"))).toBe("count(*) OVER by_author$1");
+    for (const name of ['w" ; drop table x; --', "1w", "a b", ""]) {
+      expect(() => count().over(name)).toThrow(
+        /over\(\) takes the name of a window declared on the query, an identifier/,
+      );
+    }
+  });
+
+  test("fragment refuses an order item and plain objects, and binds the value kinds it lists", () => {
+    expect(() => fragment`${u.name.asc() as never}`).toThrow(/fragment\(\) was given an order item/);
+    expect(() => fragment`${{ theme: "dark" } as never}`).toThrow(
+      /For a JSON object pass val\(object, t.json\(\)\)/,
+    );
+    expect(() => fragment`${new Map() as never}`).toThrow(QueryError);
+    const when = new Date("2026-01-01T00:00:00Z");
+    const bytes = new Uint8Array([1]);
+    expect(fragment`${[1, 2]} ${when} ${bytes} ${1n} ${true} ${null}`.params).toEqual([
+      [1, 2],
+      when,
+      bytes,
+      1n,
+      true,
+      null,
+    ]);
+    const json = fragment`x = ${val({ theme: "dark" }, t.json())}`;
+    expect(json.params).toEqual([{ theme: "dark" }]);
+    expect(json.node.kind === "fragment" && json.node.args[0]).toMatchObject({
+      kind: "param",
+      type: { name: "json" },
+    });
+  });
+
+  test("caseWhen is redacted when a branch is, and binds later plain values redacted", () => {
+    const secret = caseWhen(p.published, u.passwordHash);
+    expect(secret.redact).toBe(true);
+    expect(shown(secret.when(u.age.lt(1), "x").else("y"))).toBe(
+      '(case (when p.published u.password_hash) (when (lt u.age $1:integer) $"x":string!) (else $"y":string!))',
+    );
+    expect(secret.else("y").redact).toBe(true);
+    expect(caseWhen(p.published, "a").else(u.passwordHash).redact).toBe(true);
+    expect(caseWhen(p.published, "a").else("b").redact).toBe(false);
+  });
+
+  test("one named parameter name with two types is refused in every function", () => {
+    const message = /The named parameter "n" is used with two types/;
+    const n = u.age.gte(param("n", t.integer()));
+    const s = u.email.eq(param("n", t.string()));
+    expect(() => and(n, s)).toThrow(message);
+    expect(() => or(n, s)).toThrow(message);
+    expect(() =>
+      sum(p.views)
+        .filter(n)
+        .filter(s as never),
+    ).toThrow(message);
+    expect(() =>
+      count()
+        .filter(n)
+        .over({ partitionBy: [param("n", t.string())] }),
+    ).toThrow(message);
+    expect(() => caseWhen(n, param("n", t.string()) as never)).toThrow(message);
+    expect(() => caseWhen(n, 1).else(param("n", t.string()) as never)).toThrow(message);
+    expect(() => fragment`${n} ${s}`).toThrow(message);
+    expect(() => stringAgg(p.title.concat(param("n", t.integer()) as never), s as never)).toThrow(message);
+    expect(and(n, u.age.lt(param("n", t.integer()))).named).toHaveLength(2);
+  });
+
+  test("expressions built by the functions list their named parameters", () => {
+    const e = avg(u.age.add(param("shift", t.integer()))).filter(u.age.gt(param("min", t.integer())));
+    expect(e.named.map((node) => node.name)).toEqual(["shift", "min"]);
+    expect(shown(e)).toMatchInlineSnapshot(
+      `"(cast avg((add u.age :shift:integer)) FILTER (gt u.age :min:integer) :float)"`,
+    );
+    expect(exists(asSubquery(postsByViews(1))).named).toEqual([]);
+    expect(param("x", t.integer()).named.map((node) => node.name)).toEqual(["x"]);
   });
 });

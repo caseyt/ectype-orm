@@ -439,6 +439,13 @@ describe("shapeOf", () => {
     expect(new Set(nodes.map(shapeOf)).size).toBe(nodes.length);
   });
 
+  test("a function name's hash is the same whether or not it was remembered", () => {
+    const names = Array.from({ length: 300 }, (_, i) => `fn${i}`);
+    const first = names.map((name) => shapeOf(fnNode(name, [])));
+    expect(names.map((name) => shapeOf(fnNode(name, [])))).toEqual(first);
+    expect(new Set(first).size).toBe(names.length);
+  });
+
   test("ignores what never reaches SQL: select constants and a preload's query", () => {
     const constants = (values: unknown[]) =>
       shapeOf({ kind: "select", shape: { kind: "constant", index: 0 }, constants: values });

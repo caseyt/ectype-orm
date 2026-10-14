@@ -21,7 +21,9 @@ The value takes the type of the other side, and is written to the driver with it
 <<< @/examples/query-expressions.ts#bound
 
 A value compared with a [redacted](/guide/schemas#fields) field (`.redact()`) is redacted
-too: it is hidden in logs and telemetry, like the field.
+too: it is hidden in logs and telemetry, like the field. That holds in either order
+(`val(x).eq(u.passwordHash)`), for an explicit `val(x)` and a named parameter, and for a
+`caseWhen` with a redacted branch.
 
 ## Operators
 
@@ -72,7 +74,8 @@ compile error, and so is `u.age.gt("18")`. Chained `and` calls make one flat
 Comparing with `null` is rejected: `u.name.eq(null)` is a compile error and throws
 `QueryError`. In SQL, `name = NULL` is never true, so the query would silently match
 nothing. Use `isNull()` or `isNotNull()`. The same goes for `null` inside an `in` list,
-and for `between`.
+for `between`, for a `like` pattern, and for an expression that is always `null`:
+`u.name.eq(lit(null))` and `u.name.eq(val(null))` do not compile either.
 
 <<< @/examples/query-expressions.ts#null
 
@@ -121,8 +124,8 @@ For a typed alternative on embedded schemas, see
 - `filter(condition)` aggregates only the rows that match: `FILTER (WHERE ...)`. A second
   `filter` is combined with the first by `AND`.
 - `.over(...)` turns an aggregate into a [window function](/guide/queries-advanced#window-functions):
-  `.over()` for the whole result, `.over("w")` for a named window, or
-  `.over({ partitionBy, orderBy, frame })`.
+  `.over()` for the whole result, `.over("w")` for a named window (the name is checked
+  like an identifier, `/^[A-Za-z_][A-Za-z0-9_$]*$/`), or `.over({ partitionBy, orderBy, frame })`.
 
 ## Conditional values
 
@@ -142,6 +145,9 @@ become SQL text and every interpolation becomes an expression or a bound paramet
 - A dynamic identifier goes through `fragment.ident(name)`, which checks it against
   `/^[A-Za-z_][A-Za-z0-9_$]*$/` and quotes it.
 - An interpolated query becomes a subquery.
+- A value is bound: a string, number, bigint, boolean, `Date`, bytes, an array or `null`.
+  An order item (`u.name.asc()`) and a plain object are refused; bind a JSON object with
+  `val(object, t.json())`.
 
 ## Explicit values and types
 
@@ -161,6 +167,17 @@ nullable.
 and type are part of the expression's type, so the query knows which parameters it needs:
 
 <<< @/examples/query-expressions.ts#named-params
+
+The parameters are a requirement, so they cannot be typed away: a helper that returns
+`u.age.gte(param("minAge", t.integer()))` must say so in its return type,
+`Expr<boolean, { minAge: number }>`; `Expr<boolean>` (no parameters) does not compile.
+`Expr<boolean, SomeParams>` accepts a condition whatever parameters it needs.
+
+<<< @/examples/query-expressions.ts#named-params-helper
+
+One name has one type. Using `"n"` as an integer in one place and a string in another does
+not compile where the two expressions meet, and throws `QueryError` when they are combined
+where the types cannot see it (in `and(...)` of many conditions, for example).
 
 See [Queries](/guide/queries#named-parameters) for passing the values.
 

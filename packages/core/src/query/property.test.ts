@@ -1,6 +1,7 @@
 // Properties of expressions over generated trees:
 //
-// 1. An expression's cached `params`, `lists` and `shape` are what walking its node gives.
+// 1. An expression's cached `params`, `lists`, `named` and `shape` are what walking its
+//    node gives.
 // 2. The shape does not change when only bound values change.
 // 3. The shape changes when the structure changes anywhere in the tree.
 // 4. No value supplied by the caller ends up anywhere in a node but the `value` of a
@@ -25,6 +26,7 @@ import {
   min,
   or,
   param,
+  stringAgg,
   val,
 } from "./functions.js";
 
@@ -37,7 +39,8 @@ type Operand = Desc | Raw;
 type Desc =
   | { readonly k: "col"; readonly c: number }
   | { readonly k: "val"; readonly v: Value; readonly typed: boolean }
-  | { readonly k: "lit"; readonly v: number | boolean | null }
+  // Not null: a null operand is refused where a value is compared (it has unit tests).
+  | { readonly k: "lit"; readonly v: number | boolean }
   | { readonly k: "param"; readonly name: string }
   | { readonly k: "bin"; readonly op: number; readonly l: Desc; readonly r: Operand }
   | { readonly k: "in"; readonly not: boolean; readonly l: Desc; readonly values: readonly Value[] }
@@ -54,6 +57,15 @@ type Desc =
       readonly otherwise: Operand | null;
     }
   | { readonly k: "frag"; readonly variant: boolean; readonly args: readonly Operand[] }
+  | { readonly k: "arr"; readonly op: number; readonly c: number; readonly values: readonly string[] }
+  | { readonly k: "sagg"; readonly e: Desc; readonly sep: Operand }
+  | {
+      readonly k: "win";
+      readonly e: Desc;
+      readonly name: string | null;
+      readonly partition: readonly Desc[];
+      readonly order: readonly Desc[];
+    }
   | {
       readonly k: "path";
       readonly json: number;
@@ -66,6 +78,10 @@ const p = columns(Post, "p");
 const v = columns(User, "v");
 const COLUMNS: readonly AnyExpr[] = [u.age, u.email, u.name, p.views, p.title, u.id, v.age];
 const JSON_COLUMNS: readonly AnyExpr[] = [u.settings, v.settings];
+const ARRAY_COLUMNS: readonly AnyExpr[] = [p.tagList, columns(Post, "q").tagList];
+/** The array operators: the first three take an array, the others one element. */
+const ARRAY_OPS = ["contains", "containedBy", "overlaps", "has", "append", "remove"] as const;
+const WINDOWS = ["w", "byAuthor"] as const;
 const BINARY = [
   "eq",
   "neq",
@@ -113,7 +129,7 @@ const { desc } = fc.letrec<{ desc: Desc; operand: Operand }>((tie) => {
       fc.record({ k: fc.constant("val" as const), v: value, typed: fc.boolean() }),
       fc.record({
         k: fc.constant("lit" as const),
-        v: fc.oneof(fc.integer({ min: -100, max: 100 }), fc.boolean(), fc.constant(null)),
+        v: fc.oneof(fc.integer({ min: -100, max: 100 }), fc.boolean()),
       }),
       fc.record({ k: fc.constant("param" as const), name: fc.constantFrom(...NAMES) }),
       fc.record({ k: fc.constant("bin" as const), op: fc.nat(BINARY.length - 1), l: d, r: operand }),
@@ -152,6 +168,23 @@ const { desc } = fc.letrec<{ desc: Desc; operand: Operand }>((tie) => {
         k: fc.constant("frag" as const),
         variant: fc.boolean(),
         args: fc.array(operand, { maxLength: 2 }),
+      }),
+      fc.record({
+        k: fc.constant("arr" as const),
+        op: fc.nat(ARRAY_OPS.length - 1),
+        c: fc.nat(ARRAY_COLUMNS.length - 1),
+        values: fc.array(
+          fc.string().map((x) => MARK + x),
+          { minLength: 1, maxLength: 3 },
+        ),
+      }),
+      fc.record({ k: fc.constant("sagg" as const), e: d, sep: operand }),
+      fc.record({
+        k: fc.constant("win" as const),
+        e: d,
+        name: fc.option(fc.constantFrom(...WINDOWS), { nil: null }),
+        partition: fc.array(d, { maxLength: 2 }),
+        order: fc.array(d, { maxLength: 2 }),
       }),
       fc.record({
         k: fc.constant("path" as const),
@@ -230,6 +263,20 @@ function build(d: Desc): AnyExpr {
         ...d.args.map(operand),
       );
     }
+    case "arr": {
+      const op = ARRAY_OPS[d.op]!;
+      return call(ARRAY_COLUMNS[d.c]!, op, d.op < 3 ? d.values : d.values[0]);
+    }
+    case "sagg":
+      return (stringAgg as (e: unknown, sep: unknown) => AnyExpr)(build(d.e), operand(d.sep));
+    case "win": {
+      const agg = count(build(d.e) as never) as unknown as AnyExpr;
+      if (d.name !== null) return call(agg, "over", d.name);
+      return call(agg, "over", {
+        partitionBy: d.partition.map(build),
+        orderBy: d.order.map((o, i) => (i % 2 === 0 ? build(o) : build(o).desc())),
+      });
+    }
     case "path":
       return call(JSON_COLUMNS[d.json]!, d.text ? "pathText" : "path", ...d.keys);
   }
@@ -280,6 +327,17 @@ function bumpValues(d: Desc): Desc {
       };
     case "frag":
       return { ...d, args: d.args.map(bumpOperand) };
+    case "arr":
+      return { ...d, values: d.values.map((x) => `${x}!`) };
+    case "sagg":
+      return { ...d, e: bumpValues(d.e), sep: bumpOperand(d.sep) };
+    case "win":
+      return {
+        ...d,
+        e: bumpValues(d.e),
+        partition: d.partition.map(bumpValues),
+        order: d.order.map(bumpValues),
+      };
     case "path":
       return { ...d, keys: d.keys.map((key) => (typeof key === "string" ? `${key}!` : key + 1)) };
   }
@@ -321,6 +379,19 @@ function sites(d: Operand): number {
       );
     case "frag":
       return 1 + d.args.reduce((n, a) => n + sites(a), 0);
+    case "arr":
+      return 1;
+    case "sagg":
+      return 1 + sites(d.e) + sites(d.sep);
+    case "win":
+      // A named window ignores the inline parts, so they are no place for a change.
+      return (
+        1 +
+        sites(d.e) +
+        (d.name === null
+          ? d.partition.reduce((n, a) => n + sites(a), 0) + d.order.reduce((n, a) => n + sites(a), 0)
+          : 0)
+      );
   }
 }
 
@@ -335,7 +406,7 @@ function changeNode(d: Operand, wrap: boolean): Operand {
     case "val":
       return { ...d, typed: !d.typed };
     case "lit":
-      return { ...d, v: d.v === null ? 0 : typeof d.v === "boolean" ? !d.v : d.v + 1 };
+      return { ...d, v: typeof d.v === "boolean" ? !d.v : d.v + 1 };
     case "param":
       return { ...d, name: `${d.name}x` };
     case "bin":
@@ -362,6 +433,12 @@ function changeNode(d: Operand, wrap: boolean): Operand {
       return { ...d, variant: !d.variant };
     case "path":
       return { ...d, text: !d.text };
+    case "arr":
+      return { ...d, op: (d.op + 1) % ARRAY_OPS.length };
+    case "sagg":
+      return { ...d, e: { k: "fn", upper: true, e: d.e } };
+    case "win":
+      return d.name === null ? { ...d, name: "w" } : { ...d, name: d.name === "w" ? "byAuthor" : "w" };
   }
 }
 
@@ -403,6 +480,14 @@ function mutate(root: Desc, target: number, wrap: boolean): Desc {
         };
       case "frag":
         return { ...d, args: d.args.map(visitOperand) };
+      case "arr":
+        return d;
+      case "sagg":
+        return { ...d, e: visit(d.e), sep: visitOperand(d.sep) };
+      case "win":
+        return d.name === null
+          ? { ...d, e: visit(d.e), partition: d.partition.map(visit), order: d.order.map(visit) }
+          : { ...d, e: visit(d.e) };
     }
   };
   return visit(root);
@@ -439,9 +524,11 @@ describe("expressions over generated trees", () => {
         const expr = build(d);
         const params: unknown[] = [];
         const lists: number[] = [];
-        collectParams(expr.node, params, lists);
+        const named: unknown[] = [];
+        collectParams(expr.node, params, lists, named as never);
         expect(expr.params).toEqual(params);
         expect(expr.lists).toEqual(lists);
+        expect(expr.named).toEqual(named);
         expect(expr.shape).toBe(shapeOf(expr.node));
       }),
       { numRuns: RUNS },
@@ -483,6 +570,22 @@ describe("expressions over generated trees", () => {
 
   test("the generators reach the values they claim to (the D9 check is not vacuous)", () => {
     const sample = fc.sample(desc, { numRuns: 500, seed: 7 });
+    const kinds = new Set<string>();
+    const visit = (d: Operand): void => {
+      kinds.add(d.k);
+      for (const value of Object.values(d)) {
+        if (Array.isArray(value)) for (const item of value) visitAny(item);
+        else visitAny(value);
+      }
+    };
+    const visitAny = (x: unknown): void => {
+      if (Array.isArray(x)) for (const item of x) visitAny(item);
+      else if (typeof x === "object" && x !== null && "k" in x) visit(x as Operand);
+    };
+    for (const d of sample) visit(d);
+    for (const kind of ["arr", "sagg", "win", "path", "frag", "case", "coalesce", "between", "in", "bin"]) {
+      expect(kinds.has(kind)).toBe(true);
+    }
     const carried = sample
       .map(build)
       .filter((e) => e.params.some((x) => typeof x === "string" && x.includes(MARK)));

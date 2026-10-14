@@ -542,8 +542,9 @@ export function orderNode(
  * properties of each node in the order its interface declares them, arrays in index order
  * (contract `contracts/query.ts`, "Parameter order"). A {@link ParamNode} and a
  * {@link ListNode} contribute their `value`; a {@link ListNode} also appends its length to
- * `lists` when that array is given. A nested query contributes its params where it sits;
- * `QueryAst.preloads` is skipped (a preload's query is a separate statement), and so is a
+ * `lists`, and a {@link NamedParamNode} itself goes to `named`, when those arrays are
+ * given. A nested query contributes its params where it sits; `QueryAst.preloads` is
+ * skipped (a preload's query is a separate statement), and so is a
  * {@link PreloadNode} given directly.
  *
  * This is the definition the builders' incremental `params` and an expression's own
@@ -556,10 +557,17 @@ export function orderNode(
  * collectParams(ast, params, lists);
  * ```
  */
-export function collectParams(node: QueryNode, out: unknown[], lists?: number[]): void {
+export function collectParams(
+  node: QueryNode,
+  out: unknown[],
+  lists?: number[],
+  named?: NamedParamNode[],
+): void {
   switch (node.kind) {
-    case "column":
     case "namedParam":
+      named?.push(node);
+      return;
+    case "column":
     case "literal":
     case "ident":
     case "star":
@@ -575,133 +583,149 @@ export function collectParams(node: QueryNode, out: unknown[], lists?: number[])
       lists?.push(node.value.length);
       return;
     case "unary":
-      collectParams(node.operand, out, lists);
+      collectParams(node.operand, out, lists, named);
       return;
     case "binary":
-      collectParams(node.left, out, lists);
-      collectParams(node.right, out, lists);
+      collectParams(node.left, out, lists, named);
+      collectParams(node.right, out, lists, named);
       return;
     case "between":
-      collectParams(node.expr, out, lists);
-      collectParams(node.low, out, lists);
-      collectParams(node.high, out, lists);
+      collectParams(node.expr, out, lists, named);
+      collectParams(node.low, out, lists, named);
+      collectParams(node.high, out, lists, named);
       return;
     case "nary":
     case "fn":
     case "fragment":
-      collectAll(node.args, out, lists);
+      collectAll(node.args, out, lists, named);
       return;
     case "aggregate":
-      collectAll(node.args, out, lists);
-      if (node.filter !== undefined) collectParams(node.filter, out, lists);
-      if (node.over !== undefined && typeof node.over !== "string") collectParams(node.over, out, lists);
+      collectAll(node.args, out, lists, named);
+      if (node.filter !== undefined) collectParams(node.filter, out, lists, named);
+      if (node.over !== undefined && typeof node.over !== "string")
+        collectParams(node.over, out, lists, named);
       return;
     case "window":
-      collectAll(node.partitionBy, out, lists);
-      collectAll(node.orderBy, out, lists);
-      if (node.frame !== undefined) collectParams(node.frame, out, lists);
+      collectAll(node.partitionBy, out, lists, named);
+      collectAll(node.orderBy, out, lists, named);
+      if (node.frame !== undefined) collectParams(node.frame, out, lists, named);
       return;
     case "cast":
     case "order":
-      collectParams(node.expr, out, lists);
+      collectParams(node.expr, out, lists, named);
       return;
     case "case":
       for (const branch of node.whens) {
-        collectParams(branch.when, out, lists);
-        collectParams(branch.result, out, lists);
+        collectParams(branch.when, out, lists, named);
+        collectParams(branch.result, out, lists, named);
       }
-      if (node.else !== undefined) collectParams(node.else, out, lists);
+      if (node.else !== undefined) collectParams(node.else, out, lists, named);
       return;
     case "jsonPath":
-      collectParams(node.expr, out, lists);
-      collectAll(node.path, out, lists);
+      collectParams(node.expr, out, lists, named);
+      collectAll(node.path, out, lists, named);
       return;
     case "subquery":
     case "exists":
     case "subquerySource":
     case "combination":
     case "cte":
-      collectParams(node.query, out, lists);
+      collectParams(node.query, out, lists, named);
       return;
     case "tuple":
-      collectAll(node.items, out, lists);
+      collectAll(node.items, out, lists, named);
       return;
     case "selectedAs":
-      if (node.expr !== undefined) collectParams(node.expr, out, lists);
+      if (node.expr !== undefined) collectParams(node.expr, out, lists, named);
       return;
     case "values":
-      for (const row of node.rows) collectAll(row, out, lists);
+      for (const row of node.rows) collectAll(row, out, lists, named);
       return;
     case "fragmentSource":
-      collectParams(node.fragment, out, lists);
+      collectParams(node.fragment, out, lists, named);
       return;
     case "join":
-      collectParams(node.source, out, lists);
-      if (node.on !== undefined) collectParams(node.on, out, lists);
+      collectParams(node.source, out, lists, named);
+      if (node.on !== undefined) collectParams(node.on, out, lists, named);
       return;
     case "bool":
-      collectParams(node.expr, out, lists);
+      collectParams(node.expr, out, lists, named);
       return;
     case "select":
-      collectSelect(node.shape, out, lists);
+      collectSelect(node.shape, out, lists, named);
       return;
     case "distinct":
-      collectAll(node.on, out, lists);
+      collectAll(node.on, out, lists, named);
       return;
     case "lock":
-      if (typeof node.clause !== "string") collectParams(node.clause, out, lists);
+      if (typeof node.clause !== "string") collectParams(node.clause, out, lists, named);
       return;
     case "windowDef":
-      collectParams(node.spec, out, lists);
+      collectParams(node.spec, out, lists, named);
       return;
     case "update":
-      collectParams(node.value, out, lists);
+      collectParams(node.value, out, lists, named);
       return;
     case "query":
-      collectQuery(node, out, lists);
+      collectQuery(node, out, lists, named);
       return;
   }
 }
 
-function collectAll(nodes: readonly QueryNode[], out: unknown[], lists: number[] | undefined): void {
-  for (const node of nodes) collectParams(node, out, lists);
+function collectAll(
+  nodes: readonly QueryNode[],
+  out: unknown[],
+  lists: number[] | undefined,
+  named: NamedParamNode[] | undefined,
+): void {
+  for (const node of nodes) collectParams(node, out, lists, named);
 }
 
-function collectSelect(shape: SelectShape, out: unknown[], lists: number[] | undefined): void {
+function collectSelect(
+  shape: SelectShape,
+  out: unknown[],
+  lists: number[] | undefined,
+  named: NamedParamNode[] | undefined,
+): void {
   switch (shape.kind) {
     case "expr":
-      collectParams(shape.expr, out, lists);
+      collectParams(shape.expr, out, lists, named);
       return;
     case "binding":
     case "constant":
       return;
     case "object":
-      for (const value of shape.values) collectSelect(value, out, lists);
+      for (const value of shape.values) collectSelect(value, out, lists, named);
       return;
     case "tuple":
-      for (const item of shape.items) collectSelect(item, out, lists);
+      for (const item of shape.items) collectSelect(item, out, lists, named);
       return;
   }
 }
 
-function collectQuery(ast: QueryAst, out: unknown[], lists: number[] | undefined): void {
-  collectParams(ast.from, out, lists);
-  collectAll(ast.joins, out, lists);
-  collectAll(ast.wheres, out, lists);
-  if (ast.select !== undefined) collectParams(ast.select, out, lists);
-  if (ast.distinct !== undefined) collectParams(ast.distinct, out, lists);
-  collectAll(ast.groupBys, out, lists);
-  collectAll(ast.havings, out, lists);
-  collectAll(ast.orderBys, out, lists);
-  if (ast.limit !== undefined) collectParams(ast.limit, out, lists);
-  if (ast.offset !== undefined) collectParams(ast.offset, out, lists);
-  if (ast.lock !== undefined) collectParams(ast.lock, out, lists);
-  collectAll(ast.combinations, out, lists);
-  collectAll(ast.ctes, out, lists);
-  collectAll(ast.windows, out, lists);
+function collectQuery(
+  ast: QueryAst,
+  out: unknown[],
+  lists: number[] | undefined,
+  named: NamedParamNode[] | undefined,
+): void {
+  collectParams(ast.from, out, lists, named);
+  collectAll(ast.joins, out, lists, named);
+  collectAll(ast.wheres, out, lists, named);
+  if (ast.select !== undefined) collectParams(ast.select, out, lists, named);
+  if (ast.distinct !== undefined) collectParams(ast.distinct, out, lists, named);
+  collectAll(ast.groupBys, out, lists, named);
+  collectAll(ast.havings, out, lists, named);
+  collectAll(ast.orderBys, out, lists, named);
+  if (ast.limit !== undefined) collectParams(ast.limit, out, lists, named);
+  if (ast.offset !== undefined) collectParams(ast.offset, out, lists, named);
+  if (ast.lock !== undefined) collectParams(ast.lock, out, lists, named);
+  collectAll(ast.combinations, out, lists, named);
+  collectAll(ast.ctes, out, lists, named);
+  collectAll(ast.windows, out, lists, named);
   // preloads: skipped, a preload's query is a separate statement with its own params.
-  collectAll(ast.updates, out, lists);
-  collectAll(ast.hints, out, lists);
+  collectAll(ast.updates, out, lists, named);
+  collectAll(ast.hints, out, lists, named);
 }
 
 // ---------------------------------------------------------------------------

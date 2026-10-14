@@ -5,10 +5,20 @@ import { Post, User } from "@egon-orm/test-support";
 import { describe, expect, test } from "vitest";
 import { QueryError } from "../errors.js";
 import { meta, Schema, t } from "../schema/index.js";
-import { collectParams, namedParamNode, shapeOf } from "./ast.js";
-import { type AnyExpr, Col, Expr, isExpr, NONE, type OrderExpr } from "./expr.js";
+import { collectParams, type NamedParamNode, namedParamNode, shapeOf } from "./ast.js";
+import {
+  type AnyExpr,
+  Col,
+  Expr,
+  isExpr,
+  joinNamed,
+  NONE,
+  type OrderExpr,
+  redacted,
+  type SomeParams,
+} from "./expr.js";
 import { asSubquery, columns, postsByViews, show } from "./expr-fixtures.js";
-import { param, val } from "./functions.js";
+import { coalesce, lit, param, val } from "./functions.js";
 
 const u = columns(User, "u");
 const p = columns(Post, "p");
@@ -23,16 +33,18 @@ class Ledger extends Schema("ledgers", {
 const l = columns(Ledger, "l");
 
 /** The expression's cached `params`, `lists` and `shape` are what a walk of its node gives. */
-function expectConsistent(expr: AnyExpr | OrderExpr<unknown>): void {
+function expectConsistent(expr: AnyExpr | OrderExpr<SomeParams>): void {
   const params: unknown[] = [];
   const lists: number[] = [];
-  collectParams(expr.node, params, lists);
+  const named: NamedParamNode[] = [];
+  collectParams(expr.node, params, lists, named);
   expect(expr.params).toEqual(params);
   expect(expr.lists).toEqual(lists);
+  expect(expr.named).toEqual(named);
   expect(expr.shape).toBe(shapeOf(expr.node));
 }
 
-function shown(expr: AnyExpr | OrderExpr<unknown>): string {
+function shown(expr: AnyExpr | OrderExpr<SomeParams>): string {
   expectConsistent(expr);
   return show(expr.node);
 }
@@ -115,7 +127,8 @@ describe("comparison operators", () => {
     const right = named.node.kind === "binary" ? named.node.right : undefined;
     expect(right).toMatchObject({ kind: "namedParam", redact: true });
     // A named parameter that is redacted already is used as it is.
-    const redacted = new Expr(namedParamNode("hash", undefined, true), undefined, false, NONE, NONE, 0);
+    const marked = namedParamNode("hash", undefined, true);
+    const redacted = new Expr(marked, undefined, false, NONE, NONE, [marked], 0);
     const again = u.passwordHash.eq(redacted as never);
     expect(again.node.kind === "binary" && again.node.right).toBe(redacted.node);
   });
@@ -158,9 +171,39 @@ describe("null is refused in comparisons", () => {
     expect(build).toThrow(message);
   });
 
-  test("an explicit val(null) is refused as well", () => {
-    expect(() => u.name.eq(val(null))).toThrow(message);
-    expect(() => u.age.between(val(null), 3)).toThrow(message);
+  test("an operand that is always null is refused too: lit(null), val(null), or either cast", () => {
+    const nulls = [
+      () => lit(null),
+      () => val(null),
+      () => val(null).cast(t.integer()),
+      () => lit(null).cast(t.string()),
+    ];
+    for (const make of nulls) {
+      expect(() => u.age.eq(make() as never)).toThrow(message);
+      expect(() => u.age.gt(make() as never)).toThrow(message);
+      expect(() => u.age.between(make() as never, 5)).toThrow(message);
+      expect(() => u.age.between(1, make() as never)).toThrow(message);
+      expect(() => u.id.in(make() as never)).toThrow(message);
+      expect(() => u.id.notIn(make() as never)).toThrow(message);
+      expect(() => u.email.like(make() as never)).toThrow(message);
+      expect(() => u.email.notLike(make() as never)).toThrow(message);
+      expect(() => u.email.ilike(make() as never)).toThrow(message);
+      expect(() => p.tagList.has(make() as never)).toThrow(message);
+      expect(() => p.views.add(make() as never)).toThrow(/^add\(\) was given null/);
+      expect(() => p.tagList.contains(make() as never)).toThrow(/^contains\(\) was given null/);
+      expect(() => u.email.concat(make() as never)).toThrow(/^concat\(\) was given null/);
+    }
+  });
+
+  test("the message points at isNull and isDistinctFrom", () => {
+    expect(() => u.age.eq(lit(null) as never)).toThrow(
+      /use isNull\(\) or isNotNull\(\), or isDistinctFrom\(\)/,
+    );
+  });
+
+  test("where null means something, an expression that is null is accepted", () => {
+    expect(shown(u.name.isDistinctFrom(lit(null)))).toBe("(isDistinctFrom u.name NULL)");
+    expect(shown(p.tagList.remove(val(null)))).toBe("arrayRemove(p.tags, $null)");
   });
 
   test("the message names the method", () => {
@@ -176,7 +219,9 @@ describe("null is refused in comparisons", () => {
 
   test("the other operators refuse null and undefined with their own message", () => {
     expect(() => p.views.add(null as never)).toThrow(/^add\(\) was given null or undefined/);
-    expect(() => u.email.like(undefined as never)).toThrow(/^like\(\) was given null or undefined/);
+    expect(() => u.email.like(undefined as never)).toThrow(
+      /^like\(\) was given null\. A comparison with null/,
+    );
     expect(() => u.email.concat("a", null as never)).toThrow(/^concat\(\) was given null or undefined/);
     expect(() => p.tagList.contains(null as never)).toThrow(QueryError);
     expect(() => p.tagList.append(undefined as never)).toThrow(QueryError);
@@ -198,12 +243,26 @@ describe("in and notIn", () => {
     expect(u.age.add(val(1)).in([]).params).toEqual([]);
   });
 
+  test("an empty list keeps the left side when it uses a named parameter, so the query still needs it", () => {
+    const left = coalesce(u.age, param("fallback", t.integer()));
+    expect(shown(left.in([]))).toMatchInlineSnapshot(
+      `"(and FALSE (isNull coalesce(u.age, :fallback:integer)))"`,
+    );
+    expect(shown(left.notIn([]))).toMatchInlineSnapshot(
+      `"(or TRUE (isNull coalesce(u.age, :fallback:integer)))"`,
+    );
+    expect(left.in([]).named.map((node) => node.name)).toEqual(["fallback"]);
+  });
+
   test("the list is copied: changing the array afterwards does not change the query", () => {
     const ids = [1, 2];
     const e = u.id.in(ids);
     ids.push(3);
     expect(e.params).toEqual([[1, 2]]);
     expect(e.lists).toEqual([2]);
+    // The node holds the same copy, so that walking it still agrees with params.
+    expect(e.node.kind === "binary" && e.node.right.kind === "list" && e.node.right.value).toEqual([1, 2]);
+    expectConsistent(e);
   });
 
   test("a list holding null or undefined is refused", () => {
@@ -461,9 +520,71 @@ describe("immutability", () => {
   test("every expression of one kind has its own keys in one order", () => {
     const keys = (value: object) => Object.keys(value).join(",");
     expect(keys(u.age.gte(1))).toBe(keys(u.email.lower()));
-    expect(keys(u.age.gte(1))).toBe("node,type,redact,params,lists,shape");
-    expect(keys(u.age)).toBe("node,type,redact,params,lists,shape,binding,field");
-    expect(keys(u.age.asc())).toBe("node,params,lists,shape,exprShape");
+    expect(keys(u.age.gte(1))).toBe("node,type,redact,params,lists,named,shape");
+    expect(keys(u.age)).toBe("node,type,redact,params,lists,named,shape,binding,field");
+    expect(keys(u.age.asc())).toBe("node,params,lists,named,shape,exprShape");
     expect(u.age.gte(1)).toBeInstanceOf(Expr);
+  });
+});
+
+describe("redaction of explicit parameters", () => {
+  test("val() beside a redacted field is redacted, in either order", () => {
+    expect(shown(u.passwordHash.eq(val("secret")))).toBe('(eq u.password_hash $"secret"!)');
+    expect(shown(val("secret", t.string()).eq(u.passwordHash))).toBe(
+      '(eq $"secret":string! u.password_hash)',
+    );
+    expect(shown(val<string>("a").between(u.passwordHash, "z"))).toBe('(between $"a"! u.password_hash $"z")');
+    expect(shown(u.passwordHash.in(val(["a", "b"]) as never))).toBe('(in u.password_hash $["a","b"]!)');
+    expect(shown(val("x").in(l.secretTags as never))).toBe('(in $"x"! l.secret_tags)');
+    expect(shown(u.passwordHash.like(val("a%")))).toBe('(like u.password_hash $"a%"!)');
+  });
+
+  test("redacted() marks a bare parameter once", () => {
+    const once = redacted(val("s"));
+    expect(once.node).toMatchObject({ kind: "param", redact: true });
+    expect(redacted(once)).toBe(once);
+    expect(redacted(u.age)).toBe(u.age);
+  });
+
+  test("joinNamed names an untyped parameter in its message", () => {
+    const untyped = namedParamNode("n", undefined, false);
+    const integer = namedParamNode("n", u.age.type, false);
+    expect(() => joinNamed([untyped], [integer])).toThrow(/two types, untyped and integer/);
+    expect(() => joinNamed([integer], [untyped])).toThrow(/two types, integer and untyped/);
+  });
+
+  test("a redacted parameter is kept as it is, and other expressions are not changed", () => {
+    const secret = u.passwordHash.eq("x");
+    const right = secret.node.kind === "binary" ? secret.node.right : undefined;
+    expect(right).toMatchObject({ kind: "param", redact: true });
+    expect(shown(u.passwordHash.eq(u.name))).toBe("(eq u.password_hash u.name)");
+    expect(shown(u.name.eq(u.passwordHash))).toBe("(eq u.name u.password_hash)");
+  });
+});
+
+describe("named parameters", () => {
+  test("an expression lists the named parameters of its node", () => {
+    const e = u.age.gte(param("minAge", t.integer())).and(u.name.eq(param("name", t.string())));
+    expect(e.named.map((node) => node.name)).toEqual(["minAge", "name"]);
+    expectConsistent(e);
+    expect(u.age.gte(1).named).toEqual([]);
+  });
+
+  test("one name may be used twice with one type", () => {
+    const n = () => param("n", t.integer());
+    const e = u.age.gte(n()).and(p.views.lt(n()));
+    expect(e.named.map((node) => node.name)).toEqual(["n", "n"]);
+  });
+
+  test("one name with two types is refused when the expressions meet", () => {
+    const message = /The named parameter "n" is used with two types, integer and string/;
+    const a = u.age.gte(param("n", t.integer()));
+    const b = u.email.eq(param("n", t.string()));
+    expect(() => a.and(b as never)).toThrow(message);
+    expect(() => u.age.add(param("n", t.integer())).eq(param("n", t.string()) as never)).toThrow(message);
+    expect(() => u.age.between(param("n", t.integer()), param("n", t.string()) as never)).toThrow(message);
+    expect(() => coalesce(u.age.add(param("n", t.integer())), param("n", t.string()) as never)).toThrow(
+      message,
+    );
   });
 });
