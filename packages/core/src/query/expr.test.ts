@@ -158,7 +158,7 @@ describe("null is refused in comparisons", () => {
   const message = /comparison with null is always unknown in SQL.*isNull\(\)/;
   test.each([
     ["eq", () => u.name.eq(null as never)],
-    ["neq", () => u.name.neq(undefined as never)],
+    ["neq", () => u.name.neq(null as never)],
     ["gt", () => u.age.gt(null as never)],
     ["gte", () => u.age.gte(null as never)],
     ["lt", () => u.age.lt(null as never)],
@@ -206,6 +206,17 @@ describe("null is refused in comparisons", () => {
     expect(shown(p.tagList.remove(val(null)))).toBe("arrayRemove(p.tags, $null)");
   });
 
+  test("undefined is named as undefined, not as null", () => {
+    expect(() => u.name.eq(undefined as never)).toThrow(
+      /^eq\(\) was given undefined, which is not a value\.$/,
+    );
+    expect(() => u.age.between(1, undefined as never)).toThrow(/^between\(\) was given undefined/);
+    expect(() => p.views.add(undefined as never)).toThrow(/^add\(\) was given undefined/);
+    expect(() => u.name.isDistinctFrom(undefined as never)).toThrow(
+      /^isDistinctFrom\(\) was given undefined, which is not a value\. Pass null for SQL NULL\.$/,
+    );
+  });
+
   test("the message names the method", () => {
     expect(() => u.name.eq(null as never)).toThrow(/^eq\(\) was given null/);
   });
@@ -218,11 +229,12 @@ describe("null is refused in comparisons", () => {
   });
 
   test("the other operators refuse null and undefined with their own message", () => {
-    expect(() => p.views.add(null as never)).toThrow(/^add\(\) was given null or undefined/);
-    expect(() => u.email.like(undefined as never)).toThrow(
-      /^like\(\) was given null\. A comparison with null/,
+    expect(() => p.views.add(null as never)).toThrow(/^add\(\) was given null, which it cannot take/);
+    expect(() => u.email.like(null as never)).toThrow(/^like\(\) was given null\. A comparison with null/);
+    expect(() => u.email.like(undefined as never)).toThrow(/^like\(\) was given undefined/);
+    expect(() => u.email.concat("a", null as never)).toThrow(
+      /^concat\(\) was given null, which it cannot take/,
     );
-    expect(() => u.email.concat("a", null as never)).toThrow(/^concat\(\) was given null or undefined/);
     expect(() => p.tagList.contains(null as never)).toThrow(QueryError);
     expect(() => p.tagList.append(undefined as never)).toThrow(QueryError);
   });
@@ -666,6 +678,16 @@ describe("redaction through CASE (review round 3)", () => {
     expect(shown(caseWhen(c, val("s", t.string())).else("t").eq(u.passwordHash))).toBe(
       '(eq (case (when (eq p.published $true:boolean) $"s":string!) (else $"t":string!)) u.password_hash)',
     );
+  });
+
+  test("a condition's parameter stays unmarked, even a bare one", () => {
+    const e = u.passwordHash.eq(caseWhen(param("flag", t.boolean()), val("s", t.string())).else("t"));
+    expect(shown(e)).toBe(
+      '(eq u.password_hash (case (when :flag:boolean $"s":string!) (else $"t":string!)))',
+    );
+    expect(e.named).toMatchObject([{ name: "flag", redact: false }]);
+    const valued = caseWhen(val(true), "a").eq(u.passwordHash);
+    expect(shown(valued)).toBe('(eq (case (when $true $"a"!)) u.password_hash)');
   });
 
   test("conditions keep their params unmarked", () => {

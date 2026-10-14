@@ -1317,7 +1317,7 @@ function nullOperand(method: string, comparison: boolean): QueryError {
     ? new QueryError(
         `${method}() was given null. A comparison with null is always unknown in SQL, so it would match nothing: use isNull() or isNotNull(), or isDistinctFrom() to compare treating null as a value.`,
       )
-    : new QueryError(`${method}() was given null or undefined, which it cannot take.`);
+    : new QueryError(`${method}() was given null, which it cannot take.`);
 }
 
 /**
@@ -1359,10 +1359,14 @@ export function toOperand(
     if (!allowNull && isNullOperand(value)) throw nullOperand(method, comparison);
     return redact ? redacted(value) : value;
   }
-  if (value === undefined && allowNull) {
-    throw new QueryError(`${method}() was given undefined, which is not a value. Pass null for SQL NULL.`);
+  if (value === undefined) {
+    throw new QueryError(
+      allowNull
+        ? `${method}() was given undefined, which is not a value. Pass null for SQL NULL.`
+        : `${method}() was given undefined, which is not a value.`,
+    );
   }
-  if (value === undefined || (value === null && !allowNull)) throw nullOperand(method, comparison);
+  if (value === null && !allowNull) throw nullOperand(method, comparison);
   return new Expr(
     paramNode(value, type, redact),
     type,

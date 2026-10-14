@@ -249,7 +249,13 @@ describe("caseWhen", () => {
 
   test("a condition must be an expression and a value cannot be undefined", () => {
     expect(() => caseWhen(true as never, "x")).toThrow(/caseWhen\(\) takes a boolean expression/);
-    expect(() => caseWhen(u.age.lt(1), undefined as never)).toThrow(QueryError);
+    expect(() => caseWhen(u.age.lt(1), undefined as never)).toThrow(/^caseWhen\(\) was given undefined/);
+    expect(() => caseWhen(u.age.lt(1), 1).when(u.age.lt(2), undefined as never)).toThrow(
+      /^when\(\) was given undefined/,
+    );
+    expect(() => caseWhen(u.age.lt(1), 1).when(true as never, 2)).toThrow(
+      /^when\(\) takes a boolean expression/,
+    );
     expect(() => caseWhen(u.age.lt(1), 1).else(undefined as never)).toThrow(QueryError);
   });
 });

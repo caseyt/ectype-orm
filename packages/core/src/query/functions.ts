@@ -722,11 +722,12 @@ function branch(
   condition: unknown,
   value: unknown,
 ): AnyExpr {
+  const method = previous === undefined ? "caseWhen" : "when";
   if (!(condition instanceof Expr)) {
-    throw new QueryError("caseWhen() takes a boolean expression as its condition, such as u.age.lt(18).");
+    throw new QueryError(`${method}() takes a boolean expression as its condition, such as u.age.lt(18).`);
   }
   // A plain value is bound with the type and redaction of the branches before it.
-  const then = toOperand(value, previous?.type, previous?.redact ?? false, "caseWhen", false, true);
+  const then = toOperand(value, previous?.type, previous?.redact ?? false, method, false, true);
   const whens =
     previous === undefined ? [] : (previous.node as Extract<ExprNode, { kind: "case" }>).whens.slice();
   whens.push({ when: condition.node, result: then.node });
