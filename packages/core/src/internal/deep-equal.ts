@@ -5,6 +5,8 @@
  * @module
  */
 
+import { isPlainObject } from "./plain-object.js";
+
 const hasOwn = Object.prototype.hasOwnProperty;
 
 /**
@@ -14,8 +16,8 @@ const hasOwn = Object.prototype.hasOwnProperty;
  *   cannot tell them apart.
  * - Arrays compare element by element.
  * - `Date`s compare by timestamp.
- * - Plain objects compare by their own enumerable string keys, in any order. Two objects
- *   with different prototypes are never equal.
+ * - Plain objects compare by their own enumerable string keys, in any order. It does not
+ *   matter whether one has no prototype, or was made in another realm.
  * - Anything else (a `Map`, a `Set`, a class instance) is equal only to itself.
  *
  * It does not serialise anything and allocates only the key lists of the objects it
@@ -48,13 +50,15 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     return true;
   }
 
-  const prototype = Object.getPrototypeOf(a);
-  if (prototype !== Object.getPrototypeOf(b)) return false;
-  if (a instanceof Date) return a.getTime() === (b as Date).getTime();
-  // Only plain objects are compared by their keys. A Map, a Set or a class instance keeps
-  // its content where keys do not show it, so two of them are equal only when identical.
-  if (prototype !== null && prototype !== Object.prototype && Object.getPrototypeOf(prototype) !== null) {
-    return false;
+  // Only plain objects are compared by their keys, whichever realm each was made in. A
+  // Map, a Set or a class instance keeps its content where keys do not show it, so two of
+  // them are equal only when identical.
+  if (!isPlainObject(a) || !isPlainObject(b)) {
+    return (
+      a instanceof Date &&
+      Object.getPrototypeOf(a) === Object.getPrototypeOf(b) &&
+      a.getTime() === (b as Date).getTime()
+    );
   }
 
   const left = a as Record<string, unknown>;

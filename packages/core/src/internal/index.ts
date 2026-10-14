@@ -14,3 +14,4 @@ export { HASH_SEED, hashInt, hashString } from "./hash.js";
 export { formatStruct, formatValue, omitRedacted, REDACTED, redactFields } from "./inspect.js";
 export { LruCache } from "./lru.js";
 export { camelToSnake, snakeToCamel } from "./naming.js";
+export { isPlainObject } from "./plain-object.js";

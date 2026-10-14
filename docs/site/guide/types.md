@@ -50,8 +50,8 @@ Some details of what is accepted:
   (an `integer` column) or all strings (a `text` column). Your code sees the keys. A key
   may not be the stored value of another key, because input may be either.
 - **Arrays.** A `null` element is rejected. When an element fails, the error says which
-  one (`meta.index`) and keeps the element's own message. For an array of arrays,
-  `meta.path` holds the indexes that lead to the value.
+  one (`meta.index`) and keeps the element's own message. `meta.path` holds the indexes
+  that lead to the value: `[1]`, or `[1, 2]` in an array of arrays.
 - **JSON.** Values that JSON would change or drop are rejected instead of being stored
   differently from what you passed: `undefined` inside a document, `NaN`, a `Date`, a
   `Map`, a class instance, a `bigint`, and a value that contains itself.

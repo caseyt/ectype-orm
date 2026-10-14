@@ -71,31 +71,34 @@ const SIMPLE_KINDS: ReadonlySet<string> = new Set([
  * the type keeps: the caller's object can be changed afterwards without changing the type.
  */
 function checkedDbType(typeName: string, db: unknown, path: string): DbType {
-  if (typeof db !== "object" || db === null || typeof (db as { kind?: unknown }).kind !== "string") {
+  // Each property is read once: what is checked is what is kept, even if the caller's
+  // object answers differently the next time it is asked.
+  const kind: unknown = typeof db === "object" && db !== null ? (db as { kind?: unknown }).kind : undefined;
+  if (typeof kind !== "string") {
     throw new SchemaDefinitionError(
       `Type "${typeName}": ${path} must be a column type such as { kind: "text" }, but it is ${describe(db)}.`,
     );
   }
-  const dbType = db as DbType;
-  if (dbType.kind === "array") {
-    return Object.freeze({ kind: "array", of: checkedDbType(typeName, dbType.of, `${path}.of`) });
+  if (kind === "array") {
+    const of = checkedDbType(typeName, (db as { of?: unknown }).of, `${path}.of`);
+    return Object.freeze({ kind, of });
   }
-  if (dbType.kind === "custom") {
+  if (kind === "custom") {
     // Trusted developer input (decision D9). The compiler checks it again before emitting it.
-    const sql: unknown = dbType.sql;
+    const sql: unknown = (db as { sql?: unknown }).sql;
     if (typeof sql !== "string" || !CUSTOM_SQL_TYPE.test(sql)) {
       throw new SchemaDefinitionError(
         `Type "${typeName}": ${path}.sql must be a plain SQL type name such as "citext", "numeric(10, 2)" or "public.mood[]". It is written into the SQL text, so it must be a constant and can never come from user data.`,
       );
     }
-    return Object.freeze({ kind: "custom", sql });
+    return Object.freeze({ kind, sql });
   }
-  if (!SIMPLE_KINDS.has(dbType.kind)) {
+  if (!SIMPLE_KINDS.has(kind)) {
     throw new SchemaDefinitionError(
-      `Type "${typeName}": ${path}.kind is ${JSON.stringify(dbType.kind)}, which is not a column kind. Use one of ${[...SIMPLE_KINDS].join(", ")}, { kind: "array", of }, or { kind: "custom", sql } for any other SQL type.`,
+      `Type "${typeName}": ${path}.kind is ${JSON.stringify(kind)}, which is not a column kind. Use one of ${[...SIMPLE_KINDS].join(", ")}, { kind: "array", of }, or { kind: "custom", sql } for any other SQL type.`,
     );
   }
-  return Object.freeze({ kind: dbType.kind });
+  return Object.freeze({ kind }) as DbType;
 }
 
 /**

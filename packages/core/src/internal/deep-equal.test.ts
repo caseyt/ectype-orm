@@ -24,6 +24,7 @@ describe("deepEqual", () => {
     [{ a: undefined }, { a: undefined }],
     [new Date(5), new Date(5)],
     [Object.assign(Object.create(null), { a: 1 }), Object.assign(Object.create(null), { a: 1 })],
+    [{ a: 1 }, Object.assign(Object.create(null), { a: 1 })],
   ])("%j equals %j", (a, b) => {
     expect(deepEqual(a, b)).toBe(true);
     expect(deepEqual(b, a)).toBe(true);
@@ -51,7 +52,6 @@ describe("deepEqual", () => {
     [{ a: { b: [1] } }, { a: { b: [2] } }],
     [new Date(5), new Date(6)],
     [new Date(5), {}],
-    [{ a: 1 }, Object.assign(Object.create(null), { a: 1 })],
   ])("%j does not equal %j", (a, b) => {
     expect(deepEqual(a, b)).toBe(false);
     expect(deepEqual(b, a)).toBe(false);
@@ -76,10 +76,31 @@ describe("deepEqual", () => {
     }
   });
 
-  test("plain objects made in another realm are compared by their keys", () => {
+  test("plain objects are compared by their keys, whichever realm each was made in", () => {
     const [a, b, c] = runInNewContext("[{ n: 1, d: [1] }, { d: [1], n: 1 }, { n: 2, d: [1] }]") as object[];
     expect(deepEqual(a, b)).toBe(true);
     expect(deepEqual(a, c)).toBe(false);
+    expect(deepEqual({ n: 1, d: [1] }, a)).toBe(true);
+    expect(deepEqual(a, { n: 1, d: [1] })).toBe(true);
+    expect(deepEqual({ n: 2, d: [1] }, a)).toBe(false);
+    expect(deepEqual({ v: { a: [1] } }, runInNewContext("({ v: { a: [1] } })"))).toBe(true);
+  });
+
+  test("Dates are compared by timestamp only within one realm, and never with a plain object", () => {
+    expect(deepEqual(new Date(5), runInNewContext("new Date(5)"))).toBe(false);
+    expect(deepEqual({}, new Date(5))).toBe(false);
+    expect(deepEqual(new Date(5), {})).toBe(false);
+    class Stamp extends Date {}
+    expect(deepEqual(new Stamp(5), new Date(5))).toBe(false);
+    expect(deepEqual(new Stamp(5), new Stamp(5))).toBe(true);
+  });
+
+  test("an object created over another object is not plain, so it is equal only to itself", () => {
+    const base = Object.assign(Object.create(null), { toJSON: () => 1 });
+    const a = Object.assign(Object.create(base), { n: 1 });
+    const b = Object.assign(Object.create(base), { n: 1 });
+    expect(deepEqual(a, b)).toBe(false);
+    expect(deepEqual(a, a)).toBe(true);
   });
 
   test("the same object is equal to itself without being walked", () => {

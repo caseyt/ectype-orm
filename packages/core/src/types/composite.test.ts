@@ -61,6 +61,45 @@ describe("json", () => {
     expect(performance.now() - started).toBeLessThan(1000);
   });
 
+  test("the depth limit does not depend on the order in which a shared container is met", () => {
+    const chain = (levels: number, leaf: unknown): unknown => {
+      let value = leaf;
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+    const a = chain(400, 1);
+    const b = chain(400, a);
+    // b nests 800 deep, however it is reached.
+    expect(type.cast(b).success).toBe(false);
+    expect(type.cast([b, a]).success).toBe(false);
+    expect(type.cast([a, b]).success).toBe(false);
+    expect(type.cast({ first: a, second: { inner: b } }).success).toBe(false);
+    // Within the limit, sharing changes nothing: 400 + 99 + the outer array is 500.
+    const within = chain(99, a);
+    expect(type.cast([a, within]).success).toBe(true);
+    expect(type.cast([within, a]).success).toBe(true);
+    const over = chain(100, a);
+    expect(type.cast([a, over]).success).toBe(false);
+    expect(type.cast([over, a]).success).toBe(false);
+  });
+
+  test("rejects an object that only looks plain", () => {
+    const withToJson = Object.assign(Object.create(null), { toJSON: () => 1 });
+    expect(type.cast(Object.assign(Object.create(withToJson), { a: 1 })).success).toBe(false);
+    expect(type.cast(Object.create(Object.assign(Object.create(null), { inherited: 1 }))).success).toBe(
+      false,
+    );
+    class Bare extends (null as unknown as new () => object) {}
+    expect(type.cast(Object.create(Bare.prototype)).success).toBe(false);
+  });
+
+  test("a document equals the same document made in another realm", () => {
+    expect(type.equal({ a: [1], b: { c: null } }, runInNewContext("({ b: { c: null }, a: [1] })"))).toBe(
+      true,
+    );
+    expect(type.equal({ a: [1] }, runInNewContext("({ a: [2] })"))).toBe(false);
+  });
+
   test("accepts a plain object and an array made in another realm", () => {
     const foreign = runInNewContext('({ theme: "dark", tags: ["a", { n: 1 }] })') as object;
     expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
@@ -170,24 +209,24 @@ describe("array", () => {
   });
 
   test("fails with the index of the first element that fails", () => {
-    expect(integers.cast([1, "x", "y"])).toEqual({ success: false, meta: { index: 1 } });
-    expect(integers.cast([1.5])).toEqual({ success: false, meta: { index: 0 } });
+    expect(integers.cast([1, "x", "y"])).toEqual({ success: false, meta: { index: 1, path: [1] } });
+    expect(integers.cast([1.5])).toEqual({ success: false, meta: { index: 0, path: [0] } });
   });
 
   test("rejects a null or missing element, with its index", () => {
-    expect(integers.cast([1, null])).toEqual({ success: false, meta: { index: 1 } });
-    expect(integers.cast([undefined, 1])).toEqual({ success: false, meta: { index: 0 } });
+    expect(integers.cast([1, null])).toEqual({ success: false, meta: { index: 1, path: [1] } });
+    expect(integers.cast([undefined, 1])).toEqual({ success: false, meta: { index: 0, path: [0] } });
     const sparse: unknown[] = [1];
     sparse[2] = 3;
-    expect(integers.cast(sparse)).toEqual({ success: false, meta: { index: 1 } });
+    expect(integers.cast(sparse)).toEqual({ success: false, meta: { index: 1, path: [1] } });
   });
 
   test("rejects a null element even when the element type would accept null", () => {
     // json accepts a null inside a document, so only the array's own check rejects this.
     expect(jsonType().cast(null).success).toBe(true);
     const documents = arrayType(jsonType());
-    expect(documents.cast([1, null])).toEqual({ success: false, meta: { index: 1 } });
-    expect(documents.cast([undefined])).toEqual({ success: false, meta: { index: 0 } });
+    expect(documents.cast([1, null])).toEqual({ success: false, meta: { index: 1, path: [1] } });
+    expect(documents.cast([undefined])).toEqual({ success: false, meta: { index: 0, path: [0] } });
     expect(documents.cast([{ a: null }, [null]])).toEqual({ success: true, data: [{ a: null }, [null]] });
   });
 
@@ -231,14 +270,37 @@ describe("array", () => {
     expect(arrayType(even).cast([2, 4, 5])).toEqual({
       success: false,
       message: "must be divisible by {by}",
-      meta: { by: 2, index: 2 },
+      meta: { by: 2, index: 2, path: [2] },
     });
     const quiet = defineType<number>({
       name: "quiet",
       db: { kind: "integer" },
       cast: () => ({ success: false, meta: { reason: "never" } }),
     });
-    expect(arrayType(quiet).cast([1])).toEqual({ success: false, meta: { reason: "never", index: 0 } });
+    expect(arrayType(quiet).cast([1])).toEqual({
+      success: false,
+      meta: { reason: "never", index: 0, path: [0] },
+    });
+  });
+
+  test("an element type's own `path` metadata is replaced, never extended", () => {
+    for (const ownPath of ["a.b", 5, ["x"], { deep: true }]) {
+      const element = defineType<string>({
+        name: "pathy",
+        db: { kind: "text" },
+        cast: () => ({ success: false, message: "no", meta: { path: ownPath, kept: true } }),
+      });
+      expect(arrayType(element).cast(["v"])).toEqual({
+        success: false,
+        message: "no",
+        meta: { kept: true, index: 0, path: [0] },
+      });
+      expect(arrayType(arrayType(element)).cast([[], ["v", "w"]])).toEqual({
+        success: false,
+        message: "no",
+        meta: { kept: true, index: 1, path: [1, 0] },
+      });
+    }
   });
 
   test.each([
@@ -273,7 +335,7 @@ describe("array", () => {
       success: false,
       meta: { index: 1, path: [1, 1, 2] },
     });
-    expect(integers.cast([1, "x"])).toEqual({ success: false, meta: { index: 1 } });
+    expect(integers.cast([1, "x"])).toEqual({ success: false, meta: { index: 1, path: [1] } });
     expect(matrix.fromDb).toBe(IDENTITY);
     expect(matrix.equal([[1], [2]], [[1], [2]])).toBe(true);
     expect(matrix.equal([[1], [2]], [[1], [3]])).toBe(false);

@@ -7,6 +7,7 @@ import type { AnyFieldType, CastResult, DbType, FieldType } from "../contracts/t
 import { IDENTITY } from "../contracts/type.js";
 import { CastError, SchemaDefinitionError } from "../errors.js";
 import { deepEqual } from "../internal/deep-equal.js";
+import { isPlainObject } from "../internal/plain-object.js";
 import { defineType, detached, parameterized } from "./define.js";
 import { INVALID } from "./scalars.js";
 
@@ -15,52 +16,60 @@ import { INVALID } from "./scalars.js";
 /** Deeper nesting than this is rejected, which also keeps the walk off the stack limit. */
 const MAX_JSON_DEPTH = 500;
 
-/** A plain object: made by a literal or `JSON.parse` (in any realm), or without a prototype. */
-function isPlainObject(value: object): boolean {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === null || prototype === Object.prototype || Object.getPrototypeOf(prototype) === null;
-}
+/** What {@link jsonHeight} returns for a value that is not JSON. */
+const NOT_JSON = -1;
+/** The mark in `seen` of a container whose walk has not finished: meeting it again is a cycle. */
+const WALKING = 0;
 
 /**
- * Whether `value` survives a round trip through JSON unchanged: `null`, booleans, finite
- * numbers, strings, arrays and plain objects of those.
+ * How many containers deep `value` nests (0 for a string, number or boolean, 1 for an
+ * empty array), or `NOT_JSON` when it does not survive a round trip through JSON
+ * unchanged. JSON values are `null`, booleans, finite numbers, strings, and arrays and
+ * plain objects of those, nested at most `MAX_JSON_DEPTH` deep.
  *
- * `seen` holds every container met so far: `false` while it is being walked, which is how
- * a cycle is found, and `true` once it is known to be valid, so that a container
- * referenced from many places is walked once.
+ * `seen` holds every container met so far: `WALKING` while it is being walked, then its
+ * height. A container referenced from many places is therefore walked once, and the
+ * depth limit gives the same answer wherever and however often it appears.
  */
-function isJsonValue(value: unknown, seen: Map<object, boolean>, depth: number): boolean {
+function jsonHeight(value: unknown, seen: Map<object, number>, depth: number): number {
   switch (typeof value) {
     case "string":
     case "boolean":
-      return true;
+      return 0;
     case "number":
-      return Number.isFinite(value);
+      return Number.isFinite(value) ? 0 : NOT_JSON;
     case "object":
       break;
     default:
-      return false;
+      return NOT_JSON;
   }
-  if (value === null) return true;
+  if (value === null) return 0;
   const container = value as object;
   const known = seen.get(container);
-  if (known !== undefined) return known;
-  if (depth >= MAX_JSON_DEPTH) return false;
-  seen.set(container, false);
+  if (known !== undefined) {
+    return known === WALKING || depth + known > MAX_JSON_DEPTH ? NOT_JSON : known;
+  }
+  if (depth >= MAX_JSON_DEPTH) return NOT_JSON;
+  seen.set(container, WALKING);
+  let tallest = 0;
   if (Array.isArray(container)) {
     for (let i = 0; i < container.length; i++) {
-      if (!isJsonValue(container[i], seen, depth + 1)) return false;
+      const height = jsonHeight(container[i], seen, depth + 1);
+      if (height === NOT_JSON) return NOT_JSON;
+      if (height > tallest) tallest = height;
     }
   } else {
-    if (!isPlainObject(container)) return false;
+    if (!isPlainObject(container)) return NOT_JSON;
     const record = container as Record<string, unknown>;
     const keys = Object.keys(record);
     for (let i = 0; i < keys.length; i++) {
-      if (!isJsonValue(record[keys[i] as string], seen, depth + 1)) return false;
+      const height = jsonHeight(record[keys[i] as string], seen, depth + 1);
+      if (height === NOT_JSON) return NOT_JSON;
+      if (height > tallest) tallest = height;
     }
   }
-  seen.set(container, true);
-  return true;
+  seen.set(container, tallest + 1);
+  return tallest + 1;
 }
 
 const JSON_TYPE = defineType<unknown>({
@@ -68,7 +77,7 @@ const JSON_TYPE = defineType<unknown>({
   db: { kind: "jsonb" },
   cast: (input) => {
     try {
-      return isJsonValue(input, new Map(), 0) ? { success: true, data: input } : INVALID;
+      return jsonHeight(input, new Map(), 0) === NOT_JSON ? INVALID : { success: true, data: input };
     } catch {
       // A getter or a proxy trap threw.
       return INVALID;
@@ -148,18 +157,20 @@ const arrayOf = parameterized((element: AnyFieldType): AnyFieldType => {
   const elementToDb = detached(element, "toDb");
   const nested = arrayElements.has(element);
 
-  /** The failure of the element at `index`, with the element's own message and metadata. */
+  /**
+   * The failure of the element at `index`, with the element's own message and metadata.
+   * `path` holds the indexes that lead to the value that failed: `[index]`, or for an
+   * array of arrays `[1, 2]` for element 2 of element 1. Every array type writes `path`
+   * itself, so an outer array only ever extends a path that an inner array wrote, never
+   * a `path` that an element type happened to put in its own metadata.
+   */
   const elementFailure = (
     result: CastResult<unknown> & { success: false },
     index: number,
   ): CastResult<never> => {
-    const meta: Record<string, unknown> = { ...result.meta, index };
-    // For an array of arrays, `path` leads to the value that failed: [1, 2] is element 2 of
-    // element 1. An inner value that is not an array at all has no index of its own.
-    if (nested) {
-      const inner = result.meta?.path ?? (result.meta?.index === undefined ? [] : [result.meta.index]);
-      meta.path = [index, ...(inner as readonly unknown[])];
-    }
+    const inner = nested ? result.meta?.path : undefined;
+    const path = Array.isArray(inner) ? [index, ...(inner as readonly unknown[])] : [index];
+    const meta = { ...result.meta, index, path };
     return result.message === undefined
       ? { success: false, meta }
       : { success: false, message: result.message, meta };
@@ -214,9 +225,9 @@ const arrayOf = parameterized((element: AnyFieldType): AnyFieldType => {
 
 /**
  * An array of `element`. Accepts an array and casts each element with the element type;
- * if one fails, the cast fails with that element's message and `meta.index` (for an array
- * of arrays also `meta.path`, the indexes that lead to the value). A `null` element is
- * rejected.
+ * if one fails, the cast fails with that element's message, `meta.index` and `meta.path`
+ * (the indexes that lead to the value: `[1]`, or `[1, 2]` in an array of arrays). A `null`
+ * element is rejected.
  *
  * `fromDb` and `toDb` convert each element, and are skipped entirely when the element
  * type needs no conversion. Two arrays are equal when they have the same length and
@@ -228,7 +239,7 @@ const arrayOf = parameterized((element: AnyFieldType): AnyFieldType => {
  * ```ts
  * const tags = arrayType(stringType());
  * tags.cast(["a", "b"]); // { success: true, data: ["a", "b"] }
- * tags.cast(["a", 2]); // { success: false, meta: { index: 1 } }
+ * tags.cast(["a", 2]); // { success: false, meta: { index: 1, path: [1] } }
  * ```
  */
 export function arrayType<TApp, TDb>(element: FieldType<TApp, TDb>): FieldType<TApp[], TDb[]> {

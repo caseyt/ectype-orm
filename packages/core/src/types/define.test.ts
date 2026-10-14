@@ -120,7 +120,32 @@ describe("defineType", () => {
     const nested = defineType<string>({ name: "y", db: { kind: "array", of: inner }, cast: castString });
     inner.sql = "y'; --";
     expect(nested.db).toEqual({ kind: "array", of: { kind: "custom", sql: "mood" } });
+    expect(Object.isFrozen(nested.db)).toBe(true);
     expect(Object.isFrozen((nested.db as { of: object }).of)).toBe(true);
+
+    // An object that answers differently each time it is asked is read once per property.
+    let reads = 0;
+    const shifting = {
+      get kind() {
+        return reads++ === 0 ? "text" : "custom";
+      },
+      sql: "x; drop table users",
+    };
+    expect(defineType<string>({ name: "s", db: shifting as never, cast: castString }).db).toEqual({
+      kind: "text",
+    });
+    expect(reads).toBe(1);
+    let sqlReads = 0;
+    const shiftingSql = {
+      kind: "custom",
+      get sql() {
+        return sqlReads++ === 0 ? "citext" : "x; drop table users";
+      },
+    };
+    expect(defineType<string>({ name: "s", db: shiftingSql as never, cast: castString }).db).toEqual({
+      kind: "custom",
+      sql: "citext",
+    });
 
     // Extra properties of the caller's object are not carried over.
     const extra = defineType<string>({
