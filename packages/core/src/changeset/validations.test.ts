@@ -467,6 +467,16 @@ describe("validateConfirmation", () => {
     ).toEqual(errors);
   });
 
+  test("a confirmation key holding undefined counts as missing", () => {
+    const params = { password: "abcdefgh", passwordConfirmation: undefined };
+    expect(cast(User, params, ["password"]).validateConfirmation("password").errors).toEqual({});
+    expect(
+      cast(User, params, ["password"]).validateConfirmation("password", { required: true }).errors,
+    ).toEqual({
+      passwordConfirmation: [{ message: "can't be blank", validation: "required", meta: {} }],
+    });
+  });
+
   test("confirms a change made with putChange; the field need not be in the params", () => {
     const put = cast(User, { passwordConfirmation: "pw1" }, []).putChange("password", "pw1");
     expect(put.validateConfirmation("password").valid).toBe(true);

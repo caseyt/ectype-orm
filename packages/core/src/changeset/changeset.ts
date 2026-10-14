@@ -1088,7 +1088,8 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
     const value = this.#changed(field);
     let error: ChangesetError | undefined;
     if (params !== null && value !== undefined && value !== null) {
-      if (hasOwn(params, key)) {
+      // A key holding undefined counts as absent, as it does in cast.
+      if (hasOwn(params, key) && params[key] !== undefined) {
         if (!confirms(meta, params[key], value)) {
           error = errorOf(
             messageOf(options?.message, "does not match confirmation", EMPTY),
