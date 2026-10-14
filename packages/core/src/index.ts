@@ -36,6 +36,7 @@ export type {
   MessageOption,
   MessageOptions,
   NumberOptions,
+  PrepareFunction,
   RequiredOptions,
   RowSchema,
   SchemalessTarget,

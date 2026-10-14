@@ -180,6 +180,15 @@ describe("merge", () => {
     expect(both.prepare).toHaveLength(1);
   });
 
+  test("is invalid when either side is", () => {
+    const row = margaret();
+    const valid = change(row, { name: "A" });
+    const invalid = change(row).addError("age", "is wrong");
+    expect(valid.merge(invalid).valid).toBe(false);
+    expect(invalid.merge(valid).valid).toBe(false);
+    expect(valid.merge(change(row, { age: 1 })).valid).toBe(true);
+  });
+
   test("the other changeset's changes win", () => {
     const row = margaret();
     expect(change(row, { name: "A" }).merge(change(row, { name: "B" })).changes).toEqual({ name: "B" });

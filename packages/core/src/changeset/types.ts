@@ -9,6 +9,7 @@ import type {
   AnySchema,
   AssocKeys,
   FieldBuilder,
+  FieldFlagsOf,
   FieldsOf,
   FieldsShape,
   Row,
@@ -94,14 +95,28 @@ export type FieldOfType<S, T> =
 export type Changes<S> = { readonly [K in FieldName<S>]?: FieldValues<S>[K] };
 
 /**
- * The association names of `S` (none for a changeset without a schema class).
+ * The association names of `S`: none for a changeset without a schema class, and any
+ * string for a changeset made from a row alone (its class, and so its associations, is
+ * not known to the types; the name is checked when the method runs).
  *
  * @example
  * ```ts
  * type Names = AssocName<typeof Post>; // "author" | "comments" | "tags"
  * ```
  */
-export type AssocName<S> = string extends FieldName<S> ? string : S extends AnySchema ? AssocKeys<S> : never;
+export type AssocName<S> =
+  string extends FieldName<S>
+    ? string
+    : S extends FromRow
+      ? string
+      : S extends AnySchema
+        ? AssocKeys<S>
+        : never;
+
+/** The mark of a {@link RowSchema}: the class, and so its associations, is not known. */
+interface FromRow {
+  readonly "~fromRow": true;
+}
 
 /**
  * The existing record of a changeset whose target has one: the row for a schema class,
@@ -117,7 +132,8 @@ export type ChangesetData<S> =
 
 /**
  * What `applyChanges()` returns: a row for a schema class; for a changeset without one,
- * the data object with every field, those that have no value being `undefined`.
+ * the data object with every field. A field the data lacks takes its default, or `null`
+ * when nullable; only a field with neither may be `undefined`.
  *
  * @example
  * ```ts
@@ -128,7 +144,7 @@ export type AppliedData<S> =
   S extends SchemalessTarget<infer F, infer D>
     ? Simplify<
         Omit<D, keyof F> & {
-          -readonly [K in keyof F]: RowOf<F>[K] | (K extends keyof D ? never : undefined);
+          -readonly [K in keyof F]: RowOf<F>[K] | (K extends keyof D ? never : MissingValue<F[K]>);
         }
       >
     : S extends AnySchema
@@ -136,6 +152,10 @@ export type AppliedData<S> =
       : never;
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
+
+/** What a schemaless field the data lacks holds after `applyChanges`: its default, `null`, or `undefined`. */
+type MissingValue<B> =
+  FieldFlagsOf<B> extends { readonly defaulted: false; readonly nullable: false } ? undefined : never;
 
 /**
  * The class of a changeset's records, typed by its rows: a schema class whose instances
@@ -184,6 +204,7 @@ type RowFieldKeys<R> = {
  * ```
  */
 export type RowSchema<R extends object> = SchemaStatic<{ [K in RowFieldKeys<R>]: FieldBuilder<R[K]> }> &
+  FromRow &
   (abstract new (
     ...args: never[]
   ) => R);

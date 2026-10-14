@@ -381,6 +381,11 @@ describe("validateNumber", () => {
     expect(seats(5).validateNumber("seats", options).valid).toBe(true);
   });
 
+  test("needs at least one limit", () => {
+    expect(() => seats(1).validateNumber("seats", {})).toThrow(/at least one limit/);
+    expect(() => seats(1).validateNumber("seats", { message: "x" })).toThrow(/at least one limit/);
+  });
+
   test("NaN fails every comparison", () => {
     const cs = change({ data: {}, types: { ratio: t.float() } }).forceChange("ratio", Number.NaN);
     expect(cs.validateNumber("ratio", { notEqualTo: 1 }).valid).toBe(false);
@@ -420,7 +425,21 @@ describe("validateConfirmation", () => {
   test("compares the raw params, not the cast values", () => {
     const cs = cast(User, { age: "36", ageConfirmation: 36 }, ["age"]).validateConfirmation("age");
     expect(cs.valid).toBe(false);
-    expect(cast(User, { ageConfirmation: "x" }, []).validateConfirmation("age").valid).toBe(false);
+  });
+
+  test("runs only when the field has a change", () => {
+    // A profile form that leaves the password alone is not asked to confirm it.
+    expect(cast(User, { passwordConfirmation: "x" }, ["name"]).validateConfirmation("password").valid).toBe(
+      true,
+    );
+    expect(
+      cast(User, { name: "Zora" }, ["name"]).validateConfirmation("password", { required: true }).valid,
+    ).toBe(true);
+    const row = loaded(User, { id: 5, email: "z@example.com", role: "member", lockVersion: 1 });
+    expect(
+      cast(row, { email: null, emailConfirmation: "x" }, ["email"]).validateConfirmation("email").errors
+        .emailConfirmation,
+    ).toBeUndefined();
   });
 
   test("does nothing on a changeset made by change, and takes a message", () => {

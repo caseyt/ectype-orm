@@ -9,6 +9,8 @@
  *
  * @module
  */
+
+export type { PrepareFunction } from "./changeset.js";
 export {
   addValidation,
   applyAction,

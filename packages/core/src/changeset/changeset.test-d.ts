@@ -87,7 +87,7 @@ describe("constructors", () => {
     expectTypeOf(cs.data).toEqualTypeOf<Record<never, never>>();
     expectTypeOf(cs.applyChanges()).toEqualTypeOf<{
       q: string | undefined;
-      page: number | null | undefined;
+      page: number | null;
     }>();
     // @ts-expect-error not one of the types
     cast({ data: {}, types: { q: t.string() } }, params, ["page"]);
@@ -112,6 +112,29 @@ describe("the changeset members", () => {
   test("a changeset satisfies ChangesetLike", () => {
     expectTypeOf(cast(User, params, ["email"])).toExtend<ChangesetLike>();
     expectTypeOf(cast(either, params, ["email"])).toExtend<ChangesetLike<User | null>>();
+  });
+
+  test("a field with a default, or nullable, is present in a schemaless result", () => {
+    const cs = cast({ data: {}, types: { q: t.string(), page: t.integer().default(1) } }, params, [
+      "q",
+      "page",
+    ]);
+    expectTypeOf(cs.applyChanges()).toEqualTypeOf<{ q: string | undefined; page: number }>();
+  });
+
+  test("prepare functions are typed with the changeset's own parameters, never any", () => {
+    const cs = cast(User, params, ["email"]);
+    expectTypeOf(cs.prepare).toEqualTypeOf<
+      readonly ((changeset: Changeset<typeof User, true>) => Changeset<typeof User, true>)[]
+    >();
+    expectTypeOf(cs.prepare[0]).not.toBeAny();
+  });
+
+  test("association constraints compile on a changeset made from a row alone", () => {
+    change(user).noAssocConstraint("posts");
+    cast(user, params, ["email"]).assocConstraint("anything, checked when called");
+    // @ts-expect-error a field of a changeset with a known class is not an association
+    change(User).noAssocConstraint("email");
   });
 
   test("a changeset of a new record fits a parameter typed for either kind", () => {

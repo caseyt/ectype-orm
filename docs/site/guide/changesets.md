@@ -80,7 +80,8 @@ works on nullable fields.
 ## Validations
 
 Each validation runs only when its field has a change (a change to `null` is not
-validated), unless noted.
+validated). The exceptions are `validateRequired`, which also checks the existing data,
+and `validateAcceptance`, which checks the params whatever changed.
 
 <<< @/examples/changesets.ts#validations
 
@@ -119,13 +120,15 @@ validated), unless noted.
   that fails: `must be less than {number}`, `must be greater than {number}`,
   `must be less than or equal to {number}`, `must be greater than or equal to {number}`,
   `must be equal to {number}`, `must be not equal to {number}`. It works on `number` and
-  `bigint` fields.
+  `bigint` fields. Like `validateLength`, it throws when given no limit.
 - `validateConfirmation("password")` compares with `passwordConfirmation` in the params
   and puts the error on `passwordConfirmation`. A missing confirmation is an error only
-  with `{ required: true }`. Like `validateAcceptance`, it reads the params, so it does
-  nothing on a changeset made with `change`.
+  with `{ required: true }`. Like the other validations it runs only when the field has a
+  change, so a form that leaves the password alone is not asked to confirm it. It reads
+  the params, so it does nothing on a changeset made with `change`.
 - `validateAcceptance("termsOfService")` passes when the params hold `true`, `"true"`,
-  `1` or `"1"` under that key. The key need not be a field.
+  `1` or `"1"` under that key. The key need not be a field. It does nothing on a
+  changeset made with `change` (there are no params).
 
 For Zod and other schema validators, see [Validation](/guide/validation).
 
@@ -167,8 +170,11 @@ from `meta`.
 
 <<< @/examples/changesets.ts#traverse-errors
 
-Errors are plain, serialisable objects and never contain the value of a redacted field
-(nor any field value: `meta` holds the rule, such as `{ count: 2 }`, not the input).
+Errors are plain, serialisable objects. The errors the built-in validations and casts
+produce never contain a field's value: their `meta` holds the rule, such as
+`{ count: 2 }`, not the input. Errors you add yourself (`addError`, `validateChange`, a
+custom type's failure `meta`) hold what you put in them, so keep the values of redacted
+fields out of those.
 
 ## Working with changes
 
@@ -230,7 +236,8 @@ are in `cs.constraints`.
 
 A changeset can validate input that has no table, such as a search form. The types are
 field builders, with their modifiers: `t.integer().default(1)` gives `page` the value 1
-when the input has none, and fields are non-null unless `.nullable()`.
+when the input has none, and fields are non-null unless `.nullable()`. `.autogenerate()`
+and `.dbGenerated()` mean nothing without a table and are refused.
 
 <<< @/examples/changesets.ts#schemaless
 

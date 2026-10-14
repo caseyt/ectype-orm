@@ -177,6 +177,6 @@ export function schemaless() {
   ]).validateNumber("page", { greaterThan: 0 });
 
   const result = applyAction(cs, "insert");
-  if (result.success) result.data; // { q: string | undefined; page: number | undefined }
+  if (result.success) result.data; // { q: string | undefined; page: number }: page has a default
   // #endregion schemaless
 }

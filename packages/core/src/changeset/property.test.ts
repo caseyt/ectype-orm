@@ -86,6 +86,21 @@ describe("properties", () => {
     );
   });
 
+  test("casting a changeset again never leaves a change equal to the row's value", () => {
+    fc.assert(
+      fc.property(userRow, params(userFields), params(userFields), (row, first, second) => {
+        const cs = cast(cast(row, first, userFields), second, userFields);
+        const fields = meta(User).fieldsByName;
+        for (const [name, value] of Object.entries(cs.changes)) {
+          const field = fields.get(name);
+          const current = (row as unknown as Record<string, unknown>)[name];
+          if (field === undefined || value === null || current === null || current === undefined) continue;
+          expect(field.type.equal(value, current)).toBe(false);
+        }
+      }),
+    );
+  });
+
   test("change(row, applied values) gives back exactly the changes", () => {
     fc.assert(
       fc.property(userRow, params(userFields), (row, given) => {

@@ -80,13 +80,18 @@ interface ValidationNode {
 }
 
 /** A function `prepareChanges` registered: run by the repo just before the write. */
-// biome-ignore lint/suspicious/noExplicitAny: the changeset passed back is the caller's own, whatever its type parameters.
-type PrepareFn = (changeset: Changeset<any, any>) => Changeset<any, any>;
+/**
+ * A function `prepareChanges` registered: run by the repo just before the write, with
+ * the changeset, returning the changeset to write. Stored without its type parameters;
+ * the public member `prepare` gives them back.
+ */
+type PrepareFn = (changeset: never) => unknown;
 
 const EMPTY: Values = Object.freeze({});
 const NO_ERRORS: Errors = Object.freeze({});
 const NO_CONSTRAINTS: readonly Constraint[] = Object.freeze([]);
 const NO_PREPARE: readonly PrepareFn[] = Object.freeze([]);
+const NO_ISSUES: readonly ChangesetError[] = Object.freeze([]);
 const DEFAULT_EMPTY_VALUES: readonly unknown[] = Object.freeze([""]);
 const ACTIONS: ReadonlySet<unknown> = new Set<Action>(["insert", "update", "delete", "replace", "ignore"]);
 
@@ -97,6 +102,19 @@ const NOT_NULL: ChangesetError = Object.freeze({
   validation: "required",
   meta: Object.freeze({}),
 });
+
+/**
+ * A function given to `prepareChanges`: the repo calls it with the changeset just before
+ * the write and writes the changeset it returns.
+ *
+ * @example
+ * ```ts
+ * const stamp: PrepareFunction<typeof Post, boolean> = (cs) => cs.putChange("slug", "launch");
+ * ```
+ */
+export type PrepareFunction<S extends ChangesetSource, New extends boolean> = (
+  changeset: Changeset<S, New>,
+) => Changeset<S, New>;
 
 /** The `data` member: `null` for a new record. */
 type DataMember<S, New extends boolean> = New extends true ? null : ChangesetData<S>;
@@ -130,8 +148,8 @@ let construct: (
 let specOf: (changeset: AnyChangeset) => Spec;
 let nodeOf: (changeset: AnyChangeset) => ValidationNode | null;
 
-// biome-ignore lint/suspicious/noExplicitAny: internal code works on changesets of every type.
-type AnyChangeset = Changeset<any, any>;
+/** A changeset of any source, as internal code handles it. */
+type AnyChangeset = Changeset<ChangesetSource, boolean>;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -280,7 +298,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
   /** Values the row must still have in the database for an update or delete to apply (`optimisticLock`). */
   readonly filters: Readonly<Record<string, unknown>>;
   /** The functions `prepareChanges` registered, in order. The repo runs them just before the write. */
-  readonly prepare: readonly PrepareFn[];
+  readonly prepare: readonly PrepareFunction<S, New>[];
   /** The repo running the write, while `prepare` functions run; `null` otherwise. */
   readonly repo: unknown;
 
@@ -317,7 +335,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
     this.action = action;
     this.constraints = constraints;
     this.filters = filters;
-    this.prepare = prepare;
+    this.prepare = prepare as readonly PrepareFunction<S, New>[];
     this.repo = repo;
     this.#spec = spec;
     this.#node = node;
@@ -766,10 +784,11 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    */
   validateRequired(fields?: FieldName<S> | readonly FieldName<S>[], options?: RequiredOptions): this {
     const spec = this.#spec;
-    const names: readonly string[] =
-      fields === undefined ? spec.requiredByDefault : typeof fields === "string" ? [fields] : fields;
-    if (!Array.isArray(names))
+    // A single name is not wrapped in an array, so that a passing check allocates nothing.
+    const names: string | readonly string[] = fields === undefined ? spec.requiredByDefault : fields;
+    if (typeof names !== "string" && !Array.isArray(names)) {
       throw new QueryError("validateRequired() takes a field name or a list of them.");
+    }
     checkMessage(options?.message, "validateRequired");
     const trim = options?.trim !== false;
     const changes = this.changes as Values;
@@ -997,7 +1016,8 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * cs.validateNumber("age", { greaterThanOrEqualTo: 13 });
    * ```
    *
-   * @throws QueryError when `field` is not a field, or an option is unknown or not a number.
+   * @throws QueryError when `field` is not a field, no limit is given, or an option is
+   * unknown or not a number.
    */
   validateNumber(field: FieldOfType<S, number | bigint>, options: NumberOptions): this {
     fieldOf(this.#spec, field, "validateNumber");
@@ -1005,8 +1025,10 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
       throw new QueryError("validateNumber() takes its limits as an object: { greaterThan: 0 }.");
     }
     // Two passes with for…in, so that a passing check allocates nothing.
+    let limits = 0;
     for (const key in options) {
       if (!hasOwn(options, key) || key === "message") continue;
+      limits++;
       if (!hasOwn(NUMBER_CHECKS, key)) {
         throw new QueryError(
           `validateNumber(): unknown option "${key}". The options are ${Object.keys(NUMBER_CHECKS).join(", ")} and message.`,
@@ -1016,6 +1038,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
       if (typeof limit !== "bigint" && (typeof limit !== "number" || Number.isNaN(limit))) {
         throw new QueryError(`validateNumber(): ${key} must be a number.`);
       }
+    }
+    if (limits === 0) {
+      throw new QueryError("validateNumber() needs at least one limit, such as { greaterThan: 0 }.");
     }
     checkMessage(options.message, "validateNumber");
     const value = this.#changed(field);
@@ -1043,7 +1068,8 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * Checks that the params hold `<field>Confirmation` with the same value as `<field>`
    * (`passwordConfirmation` for `password`). The error, `does not match confirmation`,
    * goes on the confirmation key. A missing confirmation is an error only with
-   * `required: true` (`can't be blank`). Runs only on a changeset made by `cast`.
+   * `required: true` (`can't be blank`). Like the other validations it runs only when the
+   * field has a change (not a change to `null`), and only on a changeset made by `cast`.
    *
    * @example
    * ```ts
@@ -1057,8 +1083,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
     checkMessage(options?.message, "validateConfirmation");
     const key = `${field}Confirmation`;
     const params = this.params;
+    const value = this.#changed(field);
     let error: ChangesetError | undefined;
-    if (params !== null) {
+    if (params !== null && value !== undefined && value !== null) {
       if (hasOwn(params, key)) {
         if (!deepEqual(params[key], hasOwn(params, field) ? params[field] : undefined)) {
           error = errorOf(
@@ -1428,7 +1455,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
       );
     }
     const next = (increment ?? incrementWithRollover)(current as never) as unknown;
-    const bump: PrepareFn = (changeset) => changeset.forceChange(field, next as never);
+    const bump: PrepareFunction<S, New> = (changeset) => changeset.forceChange(field, next as never);
     return construct(
       this.#spec,
       this.data,
@@ -1456,7 +1483,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    *
    * @throws QueryError when `fn` is not a function.
    */
-  prepareChanges(fn: (changeset: Changeset<S, New>) => Changeset<S, New>): this {
+  prepareChanges(fn: PrepareFunction<S, New>): this {
     if (typeof fn !== "function") throw new QueryError("prepareChanges() takes a function.");
     return construct(
       this.#spec,
@@ -1469,7 +1496,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
       this.#node,
       this.constraints,
       this.filters,
-      [...this.prepare, fn as PrepareFn],
+      [...this.prepare, fn],
       this.repo,
     ) as this;
   }
@@ -1612,7 +1639,8 @@ function notOfType(fn: string, field: string, expected: string): QueryError {
 
 /** The errors a `validateChange` function returned. */
 function issuesOf(result: unknown): readonly ChangesetError[] {
-  if (result === undefined || result === null) return [];
+  if (result === undefined || result === null) return NO_ISSUES;
+  if (Array.isArray(result) && result.length === 0) return NO_ISSUES;
   const list: readonly unknown[] = Array.isArray(result) ? result : [result];
   return list.map((item) => {
     if (typeof item === "string") return { message: item, meta: EMPTY };
@@ -1907,8 +1935,18 @@ export function cast(
       }
       value = result.data;
     }
-    const current = hasOwn(baseChanges, name) ? baseChanges[name] : currentValue(spec, data, field);
-    if (!force && same(field, current, value)) continue;
+    if (!force) {
+      if (hasOwn(baseChanges, name)) {
+        if (same(field, baseChanges[name], value)) continue;
+        if (same(field, currentValue(spec, data, field), value)) {
+          // Back to the value the record already has: the earlier change goes.
+          changes = without(changes ?? baseChanges, name) as Record<string, unknown>;
+          continue;
+        }
+      } else if (same(field, currentValue(spec, data, field), value)) {
+        continue;
+      }
+    }
     changes ??= { ...baseChanges };
     changes[name] = value;
   }
