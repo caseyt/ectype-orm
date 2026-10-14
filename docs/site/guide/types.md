@@ -91,12 +91,7 @@ import { defineType, t } from "egon-orm";
 
 <<< @/examples/types.ts#custom-type
 
-```ts
-class Product extends Schema("products", {
-  id: t.integer().primaryKey(),
-  price: t.type(MoneyType),
-}) {}
-```
+<<< @/examples/types.ts#custom-type-field
 
 | Member | Purpose |
 |---|---|
@@ -144,9 +139,7 @@ import { defineType, parameterized } from "egon-orm";
 
 <<< @/examples/types.ts#parameterized
 
-```ts
-price: t.type(currency({ code: "EUR" }));
-```
+<<< @/examples/types.ts#parameterized-field
 
 Options are compared by content: `{ code: "EUR", digits: 2 }` and
 `{ digits: 2, code: "EUR" }` give the same type. A type, a function or a class instance
