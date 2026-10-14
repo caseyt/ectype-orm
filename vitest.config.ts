@@ -41,6 +41,9 @@ function projectsFor(pkg: (typeof PACKAGES)[number]): TestProjectConfiguration[]
           enabled: true,
           only: true,
           checker: "tsc",
+          // `tsc --build`: a package whose tests import another package (through a project
+          // reference) needs that package's declarations built first, as on a fresh checkout.
+          build: true,
           tsconfig: "./tsconfig.json",
           include: ["src/**/*.test-d.ts", "test/**/*.test-d.ts"],
         },

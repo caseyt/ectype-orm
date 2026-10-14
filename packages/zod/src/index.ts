@@ -1,7 +1,15 @@
 /**
- * The version of the `@egon-orm/zod` package.
+ * `@egon-orm/zod`: Zod schemas derived from Egon schema classes.
  *
- * Placeholder export from step 01 (foundation); the public API arrives in later steps.
+ * @module
+ */
+
+export { castWith } from "./cast-with.js";
+export type { ToZodKeys, ToZodMode, ToZodOptions, ToZodShape, ZodHint } from "./to-zod.js";
+export { toZod } from "./to-zod.js";
+
+/**
+ * The version of the `@egon-orm/zod` package.
  *
  * @example
  * ```ts

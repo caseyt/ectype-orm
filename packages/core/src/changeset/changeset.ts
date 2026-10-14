@@ -10,7 +10,7 @@
  *
  * @module
  */
-import type { Action, ChangesetError, ChangesetLike, Constraint } from "../contracts/changeset.js";
+import type { Action, ChangesetError, ChangesetLike, Constraint, Validator } from "../contracts/changeset.js";
 import type { Failure, Result, Success } from "../contracts/result.js";
 import type { AnyFieldBuilder, AnySchema, AssocMeta, FieldMeta, Row, RowMeta } from "../contracts/schema.js";
 import { ROW } from "../contracts/schema.js";
@@ -50,6 +50,13 @@ import type {
   UniqueAsyncOptions,
   ValidationEntry,
 } from "./types.js";
+import type { FieldValidator, ValidateOptions } from "./validators/types.js";
+import {
+  validateChangeset,
+  validateChangesetAsync,
+  validateFieldOf,
+  validateFieldOfAsync,
+} from "./validators/validate.js";
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -1162,6 +1169,93 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
       appendErrors(this.errors, field, found, false),
       false,
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Schema and function validators (step 06: ./validators/)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Validates the record with a Standard Schema (Zod, Valibot, ArkType, recent Yup) or a
+   * function. The validator receives every field with the changes applied; each issue
+   * becomes an error on the field its path starts with (`validation: "schema"`), or on
+   * `$base` (exported as `BASE`) when the path is empty or does not start with a field.
+   *
+   * Every issue is kept by default; `{ scope: "changed" }` keeps only issues on changed
+   * fields. `{ apply: true }` writes a schema's output back as changes when it finds no
+   * issue. `{ only: [...] }` narrows the values and the issues to those fields.
+   *
+   * @example
+   * ```ts
+   * const UserInput = z.object({ email: z.string().email(), age: z.number().int().min(13).nullish() });
+   * cast(User, params, ["email", "age"]).validate(UserInput);
+   *
+   * cs.validate((v, { isChanged }) =>
+   *   isChanged("endsAt") && v.endsAt <= v.startsAt ? [{ path: "endsAt", message: "must be after start" }] : [],
+   * );
+   * ```
+   *
+   * @throws TypeError when `validator` is neither a Standard Schema nor a function.
+   * @throws QueryError when the validator answers with a promise (use `validateAsync`), or an option is wrong.
+   */
+  validate(validator: Validator<FieldValues<S>>, options?: ValidateOptions<S>): this {
+    return validateChangeset(this, validator, options as ValidateOptions<ChangesetSource> | undefined);
+  }
+
+  /**
+   * Like {@link Changeset.validate}, for validators that answer with a promise (a remote
+   * check, a schema with async refinements). Also accepts synchronous validators.
+   *
+   * @example
+   * ```ts
+   * const checked = await cs.validateAsync(async (v) =>
+   *   (await isDisposable(v.email)) ? [{ path: "email", message: "is not allowed" }] : [],
+   * );
+   * ```
+   *
+   * @throws TypeError (as a rejected promise) when `validator` is neither a Standard Schema nor a function.
+   */
+  validateAsync(validator: Validator<FieldValues<S>>, options?: ValidateOptions<S>): Promise<this> {
+    return validateChangesetAsync(this, validator, options as ValidateOptions<ChangesetSource> | undefined);
+  }
+
+  /**
+   * Validates the change of one field with a Standard Schema or a function. It runs only
+   * when the field has a change (not a change to `null`), and receives that value alone;
+   * every issue goes on the field, its path in `meta.path`.
+   *
+   * @example
+   * ```ts
+   * cast(User, params, ["email"]).validateField("email", z.string().email());
+   * ```
+   *
+   * @throws TypeError when `validator` is neither a Standard Schema nor a function.
+   * @throws QueryError when `field` is not a field, or the validator answers with a promise.
+   */
+  validateField<K extends FieldName<S>>(
+    field: K,
+    validator: FieldValidator<NonNullable<FieldValues<S>[K]>, FieldValues<S>>,
+  ): this {
+    return validateFieldOf(this, field, validator);
+  }
+
+  /**
+   * Like {@link Changeset.validateField}, for validators that answer with a promise.
+   *
+   * @example
+   * ```ts
+   * const checked = await cs.validateFieldAsync("email", async (email) =>
+   *   (await isDisposable(email)) ? [{ path: [], message: "is not allowed" }] : [],
+   * );
+   * ```
+   *
+   * @throws TypeError (as a rejected promise) when `validator` is neither a Standard Schema nor a function.
+   */
+  validateFieldAsync<K extends FieldName<S>>(
+    field: K,
+    validator: FieldValidator<NonNullable<FieldValues<S>[K]>, FieldValues<S>>,
+  ): Promise<this> {
+    return validateFieldOfAsync(this, field, validator);
   }
 
   // -------------------------------------------------------------------------

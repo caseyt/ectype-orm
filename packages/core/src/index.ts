@@ -44,12 +44,21 @@ export type {
   ValidationEntry,
 } from "./changeset/index.js";
 export { applyAction, Changeset, cast, change, traverseErrors } from "./changeset/index.js";
+// Step 06: schema and function validators. The contract types a developer names when
+// writing a validator are public with them.
+export type { FieldValidator, FieldValidatorFn, ValidateOptions } from "./changeset/validators/index.js";
+export { BASE } from "./changeset/validators/index.js";
 export type {
   Action,
   ChangesetError,
   ChangesetLike,
   Constraint,
   ConstraintType,
+  ValidationIssue,
+  Validator,
+  ValidatorContext,
+  ValidatorFn,
+  ValidatorResult,
 } from "./contracts/changeset.js";
 // Step 02: the two parts of the contracts that are public API by themselves. The contract
 // types (Row, Loaded, FieldType, Adapter, ...) are exported by the step that implements them.
@@ -83,6 +92,12 @@ export type {
   SchemaMeta,
   Writable,
 } from "./contracts/schema.js";
+export type {
+  StandardSchemaV1,
+  StandardSchemaV1Issue,
+  StandardSchemaV1PathSegment,
+  StandardSchemaV1Result,
+} from "./contracts/standard-schema.js";
 // Step 03: the type system. The built-in types are reached through the field builder `t`
 // (step 04); what is public here is how to write your own.
 export type {
