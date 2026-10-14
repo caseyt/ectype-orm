@@ -1,0 +1,513 @@
+import { Post, User } from "@egon-orm/test-support";
+import { describe, expect, test } from "vitest";
+import type { AnySchema, Row } from "../contracts/schema.js";
+import { QueryError } from "../errors.js";
+import { meta, Schema, t } from "../schema/index.js";
+import { cast, change } from "./changeset.js";
+
+function loaded<S extends AnySchema>(schema: S, values: Readonly<Record<string, unknown>>): Row<S> {
+  const info = meta(schema);
+  return info.create(
+    info.persisted.map((field) => (Object.hasOwn(values, field.name) ? values[field.name] : null)),
+    info.rowMeta("loaded", undefined),
+  ) as Row<S>;
+}
+
+const hedy = (): User =>
+  loaded(User, { id: 2, email: "hedy@radio.example", name: "Hedy", age: 50, role: "member", lockVersion: 1 });
+
+class Event extends Schema("events", {
+  id: t.integer().primaryKey().dbGenerated(),
+  title: t.string(),
+  slug: t.string(),
+  seats: t.integer().nullable(),
+  score: t.float().nullable(),
+  big: t.bigint().nullable(),
+  startsOn: t.date({ as: "date" }).nullable(),
+  labels: t.array(t.string()).nullable(),
+  sizes: t.array(t.integer()).nullable(),
+}) {}
+
+describe("validateRequired", () => {
+  test("adds can't be blank to missing fields, in the order given", () => {
+    const cs = cast(User, { name: "" }, ["name"]).validateRequired(["email", "name"]);
+    expect(cs.errors).toEqual({
+      email: [{ message: "can't be blank", validation: "required", meta: {} }],
+      name: [{ message: "can't be blank", validation: "required", meta: {} }],
+    });
+    expect(cs.valid).toBe(false);
+  });
+
+  test("checks the data too: a loaded row's values count", () => {
+    expect(change(hedy()).validateRequired(["email", "name"]).valid).toBe(true);
+    expect(change(hedy(), { name: null }).validateRequired(["name"]).valid).toBe(false);
+  });
+
+  test("a new record's defaults count as values", () => {
+    expect(change(User).validateRequired(["role", "lockVersion"]).valid).toBe(true);
+  });
+
+  test("whitespace-only strings are missing unless trim is false", () => {
+    const cs = cast(User, { email: "  \n" }, ["email"]);
+    expect(cs.validateRequired(["email"]).valid).toBe(false);
+    expect(cs.validateRequired(["email"], { trim: false }).valid).toBe(true);
+    expect(
+      cast(hedy(), { name: "" }, ["name"], { emptyValues: [] }).validateRequired("name", { trim: false })
+        .valid,
+    ).toBe(false);
+  });
+
+  test("removes the change of a field found missing", () => {
+    const cs = cast(hedy(), { name: " ", age: "51" }, ["name", "age"]).validateRequired(["name"]);
+    expect(cs.changes).toEqual({ age: 51 });
+  });
+
+  test("skips a field that already has an error", () => {
+    const cs = cast(User, { email: null }, ["email"]).validateRequired(["email"]);
+    expect(cs.errors.email).toHaveLength(1);
+  });
+
+  test("with no list checks the non-nullable stored fields that nothing else fills", () => {
+    const cs = change(User).validateRequired();
+    expect(Object.keys(cs.errors)).toEqual(["email"]);
+    expect(change(Post).validateRequired().errors).toEqual({
+      authorId: [{ message: "can't be blank", validation: "required", meta: {} }],
+      title: [{ message: "can't be blank", validation: "required", meta: {} }],
+    });
+    expect(cs.validations).toEqual([["email", { validation: "required" }]]);
+  });
+
+  test("takes a message, as text or a function", () => {
+    expect(change(User).validateRequired("email", { message: "is needed" }).errors.email?.[0]?.message).toBe(
+      "is needed",
+    );
+    expect(
+      change(User).validateRequired(["email"], { message: () => "fill me in" }).errors.email?.[0]?.message,
+    ).toBe("fill me in");
+  });
+
+  test("throws for an unknown field or a bad argument", () => {
+    expect(() => change(User).validateRequired(["nope" as "email"])).toThrow(QueryError);
+    expect(() => change(User).validateRequired(42 as never)).toThrow(QueryError);
+    expect(() => change(User).validateRequired(["email"], { message: 1 as never })).toThrow(QueryError);
+    expect(() => change(User).validateRequired(["email"], { message: () => 1 as never })).toThrow(QueryError);
+  });
+});
+
+describe("validations run only when the field has a change", () => {
+  test("no change, or a change to null, is not validated", () => {
+    const row = hedy();
+    const untouched = change(row)
+      .validateFormat("email", /^never$/)
+      .validateLength("name", { is: 100 })
+      .validateNumber("age", { lessThan: 0 })
+      .validateInclusion("role", ["admin"])
+      .validateExclusion("name", ["Hedy"])
+      .validateChange("name", () => "always fails");
+    expect(untouched.valid).toBe(true);
+    const nulled = change(row, { name: null })
+      .validateLength("name", { min: 3 })
+      .validateChange("name", () => "x");
+    expect(nulled.valid).toBe(true);
+    expect(cast(Event, {}, []).validateSubset("labels", ["a"]).valid).toBe(true);
+  });
+});
+
+describe("validateFormat", () => {
+  test("adds has invalid format when the change does not match", () => {
+    const cs = cast(User, { email: "not an address" }, ["email"]).validateFormat(
+      "email",
+      /^[^@\s]+@[^@\s]+$/,
+    );
+    expect(cs.errors).toEqual({ email: [{ message: "has invalid format", validation: "format", meta: {} }] });
+    expect(cast(User, { email: "a@b" }, ["email"]).validateFormat("email", /@/).valid).toBe(true);
+  });
+
+  test("a global or sticky pattern gives the same answer every time", () => {
+    const global = /@/g;
+    const cs = cast(User, { email: "a@b" }, ["email"]);
+    for (let i = 0; i < 3; i++) expect(cs.validateFormat("email", global).valid).toBe(true);
+    expect(global.lastIndex).toBe(0);
+    expect(cs.validateFormat("email", /a/y).valid).toBe(true);
+  });
+
+  test("takes a message; throws without a regular expression", () => {
+    const cs = cast(User, { email: "x" }, ["email"]);
+    expect(
+      cs.validateFormat("email", /@/, { message: "is not an email address" }).errors.email?.[0]?.message,
+    ).toBe("is not an email address");
+    expect(() => cs.validateFormat("email", "@" as never)).toThrow(QueryError);
+    expect(() => cast(User, { age: 3 }, ["age"]).validateFormat("age" as never, /3/)).toThrow(/not a string/);
+  });
+});
+
+describe("validateInclusion and validateExclusion", () => {
+  test("inclusion adds is invalid with the allowed values in meta", () => {
+    const cs = cast(hedy(), { role: "admin" }, ["role"]).validateInclusion("role", ["member"]);
+    expect(cs.errors).toEqual({
+      role: [{ message: "is invalid", validation: "inclusion", meta: { enum: ["member"] } }],
+    });
+    expect(
+      cast(hedy(), { role: "admin" }, ["role"]).validateInclusion("role", ["admin", "member"]).valid,
+    ).toBe(true);
+  });
+
+  test("exclusion adds is reserved", () => {
+    const cs = cast(User, { name: "root" }, ["name"]).validateExclusion("name", ["root", "admin"]);
+    expect(cs.errors).toEqual({
+      name: [{ message: "is reserved", validation: "exclusion", meta: { enum: ["root", "admin"] } }],
+    });
+    expect(cast(User, { name: "Hedy" }, ["name"]).validateExclusion("name", ["root"]).valid).toBe(true);
+  });
+
+  test("values compare by the field's type, so dates compare by time", () => {
+    const cs = cast(Event, { startsOn: "2026-12-24" }, ["startsOn"]);
+    expect(cs.validateInclusion("startsOn", [new Date("2026-12-24T00:00:00Z")]).valid).toBe(true);
+    expect(cs.validateExclusion("startsOn", [new Date("2026-12-24T00:00:00Z")]).valid).toBe(false);
+  });
+
+  test("message option; values must be an array", () => {
+    const cs = cast(User, { name: "root" }, ["name"]);
+    expect(
+      cs.validateExclusion("name", ["root"], { message: (meta) => `is one of ${String(meta.enum)}` }).errors
+        .name?.[0]?.message,
+    ).toBe("is one of root");
+    expect(() => cs.validateInclusion("name", "root" as never)).toThrow(QueryError);
+    expect(() => cs.validateExclusion("name", null as never)).toThrow(QueryError);
+  });
+});
+
+describe("validateSubset", () => {
+  test("adds has an invalid entry when an element is not allowed", () => {
+    const cs = cast(Event, { labels: ["talk", "party"] }, ["labels"]).validateSubset("labels", [
+      "talk",
+      "workshop",
+    ]);
+    expect(cs.errors).toEqual({
+      labels: [
+        { message: "has an invalid entry", validation: "subset", meta: { enum: ["talk", "workshop"] } },
+      ],
+    });
+  });
+
+  test("passes when every element is allowed, including an empty list", () => {
+    expect(cast(Event, { sizes: [1, 2, 2] }, ["sizes"]).validateSubset("sizes", [1, 2, 3]).valid).toBe(true);
+    expect(cast(Event, { labels: [] }, ["labels"]).validateSubset("labels", []).valid).toBe(true);
+  });
+
+  test("throws for values that are not an array, or a change that is not one", () => {
+    const cs = cast(Event, { labels: ["a"] }, ["labels"]);
+    expect(() => cs.validateSubset("labels", "a" as never)).toThrow(QueryError);
+    expect(() => cast(User, { name: "x" }, ["name"]).validateSubset("name" as never, ["x"] as never)).toThrow(
+      /not an array/,
+    );
+  });
+});
+
+describe("validateLength", () => {
+  const titled = (title: string) => cast(Event, { title }, ["title"]);
+  const first = (cs: ReturnType<typeof titled>) => cs.errors.title?.[0];
+
+  test("strings: is, min and max, with their messages and meta", () => {
+    expect(first(titled("abc").validateLength("title", { is: 4 }))).toEqual({
+      message: "should be {count} character(s)",
+      validation: "length",
+      meta: { count: 4, kind: "is", type: "string" },
+    });
+    expect(first(titled("abc").validateLength("title", { min: 4 }))).toEqual({
+      message: "should be at least {count} character(s)",
+      validation: "length",
+      meta: { count: 4, kind: "min", type: "string" },
+    });
+    expect(first(titled("abc").validateLength("title", { max: 2 }))).toEqual({
+      message: "should be at most {count} character(s)",
+      validation: "length",
+      meta: { count: 2, kind: "max", type: "string" },
+    });
+    expect(titled("abc").validateLength("title", { min: 3, max: 3, is: 3 }).valid).toBe(true);
+  });
+
+  test("is is checked before min, and min before max; one error at most", () => {
+    const cs = titled("abcdef").validateLength("title", { is: 2, min: 10, max: 4 });
+    expect(cs.errors.title).toHaveLength(1);
+    expect(cs.errors.title?.[0]?.meta.kind).toBe("is");
+    expect(first(titled("abcdef").validateLength("title", { min: 10, max: 4 }))?.meta.kind).toBe("min");
+  });
+
+  test("counts grapheme clusters by default", () => {
+    expect(titled("café").validateLength("title", { is: 4 }).valid).toBe(true);
+    expect(titled("café").validateLength("title", { is: 4 }).valid).toBe(true);
+    expect(titled("👩‍👩‍👧").validateLength("title", { is: 1 }).valid).toBe(true);
+    expect(titled("a\r\nb").validateLength("title", { is: 3 }).valid).toBe(true);
+    expect(titled("\t x").validateLength("title", { is: 3 }).valid).toBe(true);
+  });
+
+  test("count: codepoints counts code points", () => {
+    expect(titled("café").validateLength("title", { is: 5, count: "codepoints" }).valid).toBe(true);
+    expect(titled("😀x").validateLength("title", { is: 2, count: "codepoints" }).valid).toBe(true);
+    expect(titled("\ud800x").validateLength("title", { is: 2, count: "codepoints" }).valid).toBe(true);
+  });
+
+  test("count: bytes counts UTF-8 bytes and says byte(s)", () => {
+    expect(titled("é😀aŁ€").validateLength("title", { is: 2 + 4 + 1 + 2 + 3, count: "bytes" }).valid).toBe(
+      true,
+    );
+    expect(titled("\ud800").validateLength("title", { is: 3, count: "bytes" }).valid).toBe(true);
+    expect(titled("\ud800x").validateLength("title", { is: 4, count: "bytes" }).valid).toBe(true);
+    expect(
+      [
+        first(titled("abc").validateLength("title", { is: 1, count: "bytes" })),
+        first(titled("abc").validateLength("title", { min: 5, count: "bytes" })),
+        first(titled("abc").validateLength("title", { max: 1, count: "bytes" })),
+      ].map((error) => [error?.message, error?.meta.type]),
+    ).toEqual([
+      ["should be {count} byte(s)", "binary"],
+      ["should be at least {count} byte(s)", "binary"],
+      ["should be at most {count} byte(s)", "binary"],
+    ]);
+  });
+
+  test("arrays count items and say item(s)", () => {
+    const tagged = cast(Event, { labels: ["a", "b", "c"] }, ["labels"]);
+    expect(
+      [
+        tagged.validateLength("labels", { is: 2 }),
+        tagged.validateLength("labels", { min: 4 }),
+        tagged.validateLength("labels", { max: 1 }),
+      ].map((cs) => [cs.errors.labels?.[0]?.message, cs.errors.labels?.[0]?.meta.type]),
+    ).toEqual([
+      ["should have {count} item(s)", "list"],
+      ["should have at least {count} item(s)", "list"],
+      ["should have at most {count} item(s)", "list"],
+    ]);
+    expect(tagged.validateLength("labels", { min: 1, max: 3 }).valid).toBe(true);
+  });
+
+  test("message option overrides every variant", () => {
+    expect(first(titled("a").validateLength("title", { min: 2, message: "too short" }))?.message).toBe(
+      "too short",
+    );
+  });
+
+  test("throws without a limit, with a bad limit or count, or on a value with no length", () => {
+    const cs = titled("abc");
+    expect(() => cs.validateLength("title", {})).toThrow(QueryError);
+    expect(() => cs.validateLength("title", null as never)).toThrow(QueryError);
+    expect(() => cs.validateLength("title", { min: -1 })).toThrow(QueryError);
+    expect(() => cs.validateLength("title", { max: 1.5 })).toThrow(QueryError);
+    expect(() => cs.validateLength("title", { min: 1, count: "words" as never })).toThrow(QueryError);
+    expect(() => cast(Event, { seats: 3 }, ["seats"]).validateLength("seats" as never, { min: 1 })).toThrow(
+      /not a string or an array/,
+    );
+  });
+});
+
+describe("validateNumber", () => {
+  const seats = (value: number) => cast(Event, { seats: value }, ["seats"]);
+
+  test("each comparison, with its message and meta", () => {
+    const cases = [
+      [{ lessThan: 10 }, 10, "must be less than {number}"],
+      [{ greaterThan: 10 }, 10, "must be greater than {number}"],
+      [{ lessThanOrEqualTo: 10 }, 11, "must be less than or equal to {number}"],
+      [{ greaterThanOrEqualTo: 10 }, 9, "must be greater than or equal to {number}"],
+      [{ equalTo: 10 }, 9, "must be equal to {number}"],
+      [{ notEqualTo: 10 }, 10, "must be not equal to {number}"],
+    ] as const;
+    for (const [options, value, message] of cases) {
+      const kind = Object.keys(options)[0];
+      expect(seats(value).validateNumber("seats", options).errors).toEqual({
+        seats: [{ message, validation: "number", meta: { kind, number: 10 } }],
+      });
+    }
+    const passing = [
+      [{ lessThan: 10 }, 9],
+      [{ greaterThan: 10 }, 11],
+      [{ lessThanOrEqualTo: 10 }, 10],
+      [{ greaterThanOrEqualTo: 10 }, 10],
+      [{ equalTo: 10 }, 10],
+      [{ notEqualTo: 10 }, 9],
+    ] as const;
+    for (const [options, value] of passing)
+      expect(seats(value).validateNumber("seats", options).valid).toBe(true);
+  });
+
+  test("checks options in the order given and reports the first failure only", () => {
+    const cs = seats(50).validateNumber("seats", { lessThan: 20, greaterThan: 60 });
+    expect(cs.errors.seats).toEqual([
+      { message: "must be less than {number}", validation: "number", meta: { kind: "lessThan", number: 20 } },
+    ]);
+    expect(
+      seats(50).validateNumber("seats", { greaterThan: 60, lessThan: 20 }).errors.seats?.[0]?.meta.kind,
+    ).toBe("greaterThan");
+  });
+
+  test("floats and bigints compare with number and bigint limits", () => {
+    expect(cast(Event, { score: 0.5 }, ["score"]).validateNumber("score", { greaterThan: 0 }).valid).toBe(
+      true,
+    );
+    expect(
+      cast(Event, { big: "9007199254740993" }, ["big"]).validateNumber("big", { greaterThan: 2 ** 53 }).valid,
+    ).toBe(true);
+    expect(cast(Event, { big: 5 }, ["big"]).validateNumber("big", { equalTo: 5 }).valid).toBe(true);
+    expect(cast(Event, { big: 5 }, ["big"]).validateNumber("big", { lessThan: 5n }).valid).toBe(false);
+  });
+
+  test("message option", () => {
+    expect(
+      seats(1).validateNumber("seats", {
+        greaterThan: 1,
+        message: (meta) => `more than ${String(meta.number)}`,
+      }).errors.seats?.[0]?.message,
+    ).toBe("more than 1");
+  });
+
+  test("throws for unknown options, limits that are not numbers, or a value that is not a number", () => {
+    expect(() =>
+      seats(1).validateNumber("seats", { atLeast: 1 } as never),
+    ).toThrowErrorMatchingInlineSnapshot(
+      `[QueryError: validateNumber(): unknown option "atLeast". The options are lessThan, greaterThan, lessThanOrEqualTo, greaterThanOrEqualTo, equalTo, notEqualTo and message.]`,
+    );
+    expect(() => seats(1).validateNumber("seats", { lessThan: "2" } as never)).toThrow(QueryError);
+    expect(() => seats(1).validateNumber("seats", { lessThan: Number.NaN })).toThrow(QueryError);
+    expect(() => seats(1).validateNumber("seats", null as never)).toThrow(QueryError);
+    expect(() =>
+      cast(Event, { title: "x" }, ["title"]).validateNumber("title" as never, { lessThan: 1 }),
+    ).toThrow(/not a number/);
+  });
+
+  test("only the options object's own keys are read", () => {
+    const options = Object.assign(Object.create({ lessThan: 0 }) as object, { greaterThan: 0 });
+    expect(seats(5).validateNumber("seats", options).valid).toBe(true);
+  });
+
+  test("NaN fails every comparison", () => {
+    const cs = change({ data: {}, types: { ratio: t.float() } }).forceChange("ratio", Number.NaN);
+    expect(cs.validateNumber("ratio", { notEqualTo: 1 }).valid).toBe(false);
+  });
+});
+
+describe("validateConfirmation", () => {
+  const signUp = (params: Record<string, unknown>) => cast(User, params, ["email", "password"]);
+
+  test("passes when the confirmation equals the value", () => {
+    expect(
+      signUp({ password: "hunter22", passwordConfirmation: "hunter22" }).validateConfirmation("password")
+        .valid,
+    ).toBe(true);
+  });
+
+  test("puts does not match confirmation on the confirmation key", () => {
+    const cs = signUp({ password: "hunter22", passwordConfirmation: "hunter23" }).validateConfirmation(
+      "password",
+    );
+    expect(cs.errors).toEqual({
+      passwordConfirmation: [
+        { message: "does not match confirmation", validation: "confirmation", meta: {} },
+      ],
+    });
+  });
+
+  test("a missing confirmation is an error only when required", () => {
+    expect(signUp({ password: "hunter22" }).validateConfirmation("password").valid).toBe(true);
+    expect(
+      signUp({ password: "hunter22" }).validateConfirmation("password", { required: true }).errors,
+    ).toEqual({
+      passwordConfirmation: [{ message: "can't be blank", validation: "required", meta: {} }],
+    });
+  });
+
+  test("compares the raw params, not the cast values", () => {
+    const cs = cast(User, { age: "36", ageConfirmation: 36 }, ["age"]).validateConfirmation("age");
+    expect(cs.valid).toBe(false);
+    expect(cast(User, { ageConfirmation: "x" }, []).validateConfirmation("age").valid).toBe(false);
+  });
+
+  test("does nothing on a changeset made by change, and takes a message", () => {
+    expect(change(User).validateConfirmation("password", { required: true }).valid).toBe(true);
+    expect(
+      signUp({ password: "a", passwordConfirmation: "b" }).validateConfirmation("password", {
+        message: "differs",
+      }).errors.passwordConfirmation?.[0]?.message,
+    ).toBe("differs");
+  });
+});
+
+describe("validateAcceptance", () => {
+  test("accepts true and its form spellings", () => {
+    for (const value of [true, "true", "1", 1]) {
+      expect(cast(User, { termsOfService: value }, []).validateAcceptance("termsOfService").valid).toBe(true);
+    }
+  });
+
+  test("adds must be accepted otherwise, including when the key is missing", () => {
+    for (const params of [
+      {},
+      { termsOfService: false },
+      { termsOfService: "yes" },
+      { termsOfService: null },
+    ]) {
+      expect(cast(User, params, []).validateAcceptance("termsOfService").errors).toEqual({
+        termsOfService: [{ message: "must be accepted", validation: "acceptance", meta: {} }],
+      });
+    }
+  });
+
+  test("does nothing on a changeset made by change; rejects a bad key", () => {
+    expect(change(User).validateAcceptance("termsOfService").valid).toBe(true);
+    expect(() => change(User).validateAcceptance("")).toThrow(QueryError);
+    expect(() => change(User).validateAcceptance("__proto__")).toThrow(QueryError);
+  });
+});
+
+describe("validateChange", () => {
+  const named = (name: string) => cast(User, { name }, ["name"]);
+
+  test("a returned message becomes an error on the field", () => {
+    const cs = named("Bob").validateChange("name", (name, field) =>
+      name === "Bob" ? `${field} is taken` : undefined,
+    );
+    expect(cs.errors).toEqual({ name: [{ message: "name is taken", meta: {} }] });
+  });
+
+  test("an error object, a list, or nothing", () => {
+    expect(
+      named("x").validateChange("name", () => ({
+        message: "is short",
+        validation: "short",
+        meta: { min: 2 },
+      })).errors,
+    ).toEqual({ name: [{ message: "is short", validation: "short", meta: { min: 2 } }] });
+    expect(named("x").validateChange("name", () => ["one", { message: "two" }]).errors.name).toEqual([
+      { message: "one", meta: {} },
+      { message: "two", meta: {} },
+    ]);
+    expect(named("x").validateChange("name", () => []).valid).toBe(true);
+    expect(named("x").validateChange("name", () => undefined).valid).toBe(true);
+  });
+
+  test("throws for a result of another kind, or when not given a function", () => {
+    expect(() => named("x").validateChange("name", () => 1 as never)).toThrow(QueryError);
+    expect(() => named("x").validateChange("name", () => [{}] as never)).toThrow(QueryError);
+    expect(() => named("x").validateChange("name", "x" as never)).toThrow(QueryError);
+  });
+});
+
+describe("validations on unknown fields", () => {
+  test("each throws", () => {
+    const cs = change(User);
+    const nope = "nope" as never;
+    for (const call of [
+      () => cs.validateFormat(nope, /x/),
+      () => cs.validateInclusion(nope, []),
+      () => cs.validateExclusion(nope, []),
+      () => cs.validateSubset(nope, []),
+      () => cs.validateLength(nope, { min: 1 }),
+      () => cs.validateNumber(nope, { lessThan: 1 }),
+      () => cs.validateConfirmation(nope),
+      () => cs.validateChange(nope, () => undefined),
+    ]) {
+      expect(call).toThrow(QueryError);
+    }
+  });
+});
