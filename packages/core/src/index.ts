@@ -12,6 +12,45 @@
  */
 export const VERSION: string = "0.0.0";
 
+// Step 05: changesets. The contract types a developer names when reading a changeset
+// (its errors, its constraints, its action) are public with it.
+export type {
+  AppliedData,
+  AssocName,
+  CastOptions,
+  Changes,
+  ChangesetData,
+  ChangesetModel,
+  ChangesetSource,
+  ChangeValidatorError,
+  ChangeValidatorResult,
+  CheckConstraintOptions,
+  ConfirmationOptions,
+  ConstraintOptions,
+  ErrorFormatter,
+  ErrorTree,
+  FieldName,
+  FieldOfType,
+  FieldValues,
+  LengthOptions,
+  MessageOption,
+  MessageOptions,
+  NumberOptions,
+  PrepareFunction,
+  RequiredOptions,
+  RowSchema,
+  SchemalessTarget,
+  UniqueAsyncOptions,
+  ValidationEntry,
+} from "./changeset/index.js";
+export { applyAction, Changeset, cast, change, traverseErrors } from "./changeset/index.js";
+export type {
+  Action,
+  ChangesetError,
+  ChangesetLike,
+  Constraint,
+  ConstraintType,
+} from "./contracts/changeset.js";
 // Step 02: the two parts of the contracts that are public API by themselves. The contract
 // types (Row, Loaded, FieldType, Adapter, ...) are exported by the step that implements them.
 export type { Failure, Result, Success } from "./contracts/result.js";

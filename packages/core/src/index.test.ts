@@ -12,6 +12,7 @@ test("the public entry point exports exactly these values", () => {
   // Adding a public export is a decision: update this list in the same change.
   expect(Object.keys(api).sort()).toEqual([
     "CastError",
+    "Changeset",
     "ConstraintError",
     "DatabaseError",
     "EgonError",
@@ -25,7 +26,10 @@ test("the public entry point exports exactly these values", () => {
     "SchemaDefinitionError",
     "StaleEntryError",
     "VERSION",
+    "applyAction",
     "belongsTo",
+    "cast",
+    "change",
     "defineType",
     "failure",
     "fieldNames",
@@ -42,6 +46,7 @@ test("the public entry point exports exactly these values", () => {
     "success",
     "t",
     "timestamps",
+    "traverseErrors",
   ]);
 });
 
@@ -57,6 +62,14 @@ test("nothing from contracts/ or internal/ leaks out beyond the Result helpers",
     "fieldTypeOf",
     "fieldState",
     "uuidv7",
+    "withAction",
+    "withRepo",
+    "rebuild",
+    "addValidation",
+    "withErrors",
+    "fieldsOf",
+    "valueBefore",
+    "provideValidateUniqueAsync",
   ]) {
     expect(Object.hasOwn(api, name)).toBe(false);
   }

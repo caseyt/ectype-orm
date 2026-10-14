@@ -111,10 +111,7 @@ You never write `new User()`. A `User` object comes only from the database: from
 or from a successful insert or update. A record that does not exist yet is described by a
 [changeset](/guide/changesets):
 
-```ts
-cast(User, params, ["email", "name"]);   // from untrusted input
-change(User, { email: "a@b.c" });        // from trusted values
-```
+<<< @/examples/changesets.ts#new-record
 
 Calling the constructor throws `SchemaDefinitionError`, which says so.
 
