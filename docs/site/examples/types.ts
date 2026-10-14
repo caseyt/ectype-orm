@@ -1,7 +1,7 @@
 // The checked sources of the code blocks in guide/types.md. Each `#region` is included
 // in the page by name; everything outside a region is the scaffolding that makes the
 // regions compile.
-import { defineType, parameterized } from "egon-orm";
+import { defineType, parameterized, Schema, t } from "egon-orm";
 
 /** A stand-in for the decimal class of a library such as decimal.js. */
 class Money {
@@ -42,6 +42,13 @@ export const MoneyType = defineType<Money, string>({
 });
 // #endregion custom-type
 
+// #region custom-type-field
+export class Product extends Schema("products", {
+  id: t.integer().primaryKey(),
+  price: t.type(MoneyType),
+}) {}
+// #endregion custom-type-field
+
 // #region identity-type
 /** Lower-cased text. The driver's value is already the value, so there is no `fromDb` or `toDb`. */
 export const SlugType = defineType<string>({
@@ -73,6 +80,13 @@ export const currency = parameterized((options: { code: string }) =>
 export const euros = currency({ code: "EUR" });
 export const alsoEuros = currency({ code: "EUR" });
 // #endregion parameterized
+
+export class Order extends Schema("orders", {
+  id: t.integer().primaryKey(),
+  // #region parameterized-field
+  price: t.type(currency({ code: "EUR" })),
+  // #endregion parameterized-field
+}) {}
 
 // #region custom-sql
 /** A Postgres `citext` column: the type name is written into the SQL, so it is a constant. */

@@ -15,24 +15,49 @@ test("the public entry point exports exactly these values", () => {
     "ConstraintError",
     "DatabaseError",
     "EgonError",
+    "EmbeddedSchema",
     "InvalidChangesetError",
     "MultipleResultsError",
     "NoResultsError",
     "NotLoadedError",
     "QueryError",
+    "Schema",
     "SchemaDefinitionError",
     "StaleEntryError",
     "VERSION",
+    "belongsTo",
     "defineType",
     "failure",
+    "fieldNames",
+    "hasMany",
+    "hasOne",
     "isEgonError",
+    "isRow",
+    "isSchema",
+    "manyToMany",
+    "meta",
     "parameterized",
+    "primaryKeyOf",
+    "stateOf",
     "success",
+    "t",
+    "timestamps",
   ]);
 });
 
 test("nothing from contracts/ or internal/ leaks out beyond the Result helpers", () => {
-  for (const name of ["IDENTITY", "META", "ROW", "LruCache", "hashString", "camelToSnake", "formatValue"]) {
+  for (const name of [
+    "IDENTITY",
+    "META",
+    "ROW",
+    "LruCache",
+    "hashString",
+    "camelToSnake",
+    "formatValue",
+    "fieldTypeOf",
+    "fieldState",
+    "uuidv7",
+  ]) {
     expect(Object.hasOwn(api, name)).toBe(false);
   }
 });

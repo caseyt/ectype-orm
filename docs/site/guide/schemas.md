@@ -5,23 +5,9 @@ from the database.
 
 ```ts
 import { Schema, t, timestamps, type Row, type InsertShape } from "egon-orm";
-
-export class User extends Schema("users", {
-  id: t.integer().primaryKey(),
-  email: t.string(),
-  name: t.string().nullable(),
-  role: t.enum(["admin", "member"]).default("member"),
-  loginCount: t.integer().default(0),
-  password: t.string().virtual(),
-  passwordHash: t.string().redact().column("pw_hash"),
-  settings: t.json<{ theme: string }>().nullable(),
-  ...timestamps(),
-}) {
-  get displayName() {
-    return this.name ?? this.email;
-  }
-}
 ```
+
+<<< @/examples/schemas.ts#user
 
 `Schema(table, fields, options?)` returns a base class to extend. The class name is the
 row type: a function that takes a `User` takes a row of the `users` table.
@@ -33,7 +19,7 @@ for the full list of types and what each accepts.
 
 | Modifier | Effect |
 |---|---|
-| `.nullable()` | The column may be `NULL`; the TypeScript type gains `\| null`. |
+| `.nullable()` | The column may be `NULL`; the TypeScript type gains `\| null`. A new record starts with `null`. |
 | `.default(value \| () => value)` | Used for a new record when no value is given. A function is called once per record. |
 | `.primaryKey(options?)` | Part of the primary key. See [Primary keys](#primary-keys). |
 | `.autogenerate(fn?)` | A value generated in your process on insert when none is given (UUIDs, timestamps). |
@@ -43,56 +29,79 @@ for the full list of types and what each accepts.
 | `.redact()` | Hidden from `toJSON`, `console.log`, logs and error messages. |
 | `.writable("always" \| "insert" \| "never")` | Restricts when the field may be written. The default is `"always"`. |
 
+Every modifier returns a new field, so a field can be declared once and shared by several
+schemas.
+
 **Fields are non-null by default.** A field without `.nullable()` is `string`, not
 `string | null`, and the library enforces it: see
 [Required fields](/guide/changesets#required-fields).
 
+Use a function for a default that is an object or an array, such as
+`t.json<string[]>().default(() => [])`. A value is shared by every new record, and
+changing it in one record would change it in all of them.
+
+`.autogenerate()` without a function works for two types: `t.uuid()` gets a UUID
+version 7 (time-ordered, so new keys go to the end of the index) and the timestamp types
+get the current time. For anything else, pass the function:
+`t.uuid().autogenerate(() => crypto.randomUUID())` for a random version 4 UUID.
+
 ## Primary keys
 
-```ts
-id: t.integer().primaryKey()                          // 32-bit serial / identity column
-id: t.bigint({ mode: "number" }).primaryKey()         // 64-bit bigserial, as a JS number
-id: t.uuid().primaryKey().autogenerate()              // UUID v7 generated in your process
-code: t.string().primaryKey()                         // natural key; you supply the value
-```
+<<< @/examples/schemas.ts#primary-keys
 
-- `.primaryKey()` on an `integer` or `bigint` field means the database generates the
-  value. Pass `.primaryKey({ dbGenerated: false })` when you supply it yourself.
-- Several fields with `.primaryKey()` form a composite key.
-- A table with no key is declared with `Schema("events", fields, { primaryKey: false })`.
-  Such rows cannot be updated or deleted individually.
+- `.primaryKey()` on an `integer` or `bigint` field that is the only key field means the
+  database generates the value. Pass `.primaryKey({ dbGenerated: false })` when you
+  supply it yourself.
+- In a composite key, each `integer` or `bigint` part must say which it is:
+  `.primaryKey({ dbGenerated: false })` for a value you supply, or
+  `.primaryKey().dbGenerated()` for one the database generates. A `float` key always
+  takes `{ dbGenerated: false }`. Otherwise the class is refused when it is defined.
+- A key generated in your process (`.autogenerate()`) is not database-generated. Asking
+  for both on an integer key is refused: pass `{ dbGenerated: false }`.
+- Several fields with `.primaryKey()` form a composite key, in declaration order:
+
+<<< @/examples/schemas.ts#composite-key
+
+- A table with no key is declared with `{ primaryKey: false }`. Such rows cannot be
+  updated or deleted individually.
+
+<<< @/examples/schemas.ts#keyless
 
 There is no special "id" type. A foreign key is an ordinary field of the same type as the
 key it points at:
 
-```ts
-export class Post extends Schema("posts", {
-  id: t.integer().primaryKey(),
-  authorId: t.integer(),
-  title: t.string(),
-}) {}
-```
+<<< @/examples/schemas.ts#foreign-key
 
 ## Timestamps
 
 `...timestamps()` adds `createdAt` and `updatedAt`, both set on insert; `updatedAt` is set
 again on every update that changes something.
 
-```ts
-...timestamps()                                        // createdAt, updatedAt
-...timestamps({ createdAt: "insertedAt" })             // rename one
-...timestamps({ updatedAt: false })                    // leave one out
-```
+<<< @/examples/schemas.ts#timestamps
+
+Both are `t.timestamp()` (`timestamptz`) unless you pass another type that holds a
+`Date`, such as `t.localTimestamp()`. The time is taken in your process, at the type's
+precision.
 
 ## Schema options
 
-```ts
-class Invoice extends Schema("invoices", fields, {
-  schema: "billing",        // database schema (Postgres schema, MySQL database)
-  naming: "snake_case",     // how field names become column names; the default
-  primaryKey: false,        // only for tables without a key
-}) {}
-```
+<<< @/examples/schemas.ts#schema-options
+
+| Option | Effect |
+|---|---|
+| `schema` | The database schema (a Postgres schema, a MySQL database) the table is in. |
+| `naming` | `"snake_case"` (the default), `"camelCase"` to use the field names as they are, or a function from field name to column name. |
+| `primaryKey: false` | The table has no primary key. |
+| `codegen: false` | Build rows without generating code. This happens by itself where generating code is forbidden (a Content Security Policy without `unsafe-eval`); rows are the same either way, only slower to build. |
+
+## Column names
+
+Field names are camelCase in TypeScript and snake_case in the database. An upper-case
+run counts as one word. `.column()` overrides one field, `naming` the whole schema.
+
+<<< @/examples/schemas.ts#column-names
+
+Two fields that end up in the same column are refused when the class is defined.
 
 ## Getters and methods
 
@@ -111,15 +120,14 @@ cast(User, params, ["email", "name"]);   // from untrusted input
 change(User, { email: "a@b.c" });        // from trusted values
 ```
 
+Calling the constructor throws `SchemaDefinitionError`, which says so.
+
 This is why a row's type can be trusted: a `User` whose `email` is `undefined` cannot
 exist.
 
 ## Derived types
 
-```ts
-type UserRow = Row<typeof User>;              // the same as the instance type, User
-type NewUser = InsertShape<typeof User>;      // what an insert needs
-```
+<<< @/examples/schemas.ts#derived-types
 
 `InsertShape` makes a field optional when it is nullable, has a default, is autogenerated
 or is database-generated. Virtual fields are left out.
@@ -127,27 +135,83 @@ or is database-generated. Virtual fields are left out.
 A row with preloaded associations has the type `Loaded<typeof User, "posts">`; see
 [Associations](/guide/associations#the-loaded-type).
 
+## Associations
+
+Associations are `static` members of the class. The foreign key is always a field you
+declare; the association refers to it by field name.
+
+<<< @/examples/schemas.ts#associations
+
+Where the keys are, for each kind:
+
+```
+belongsTo   books.author_id ──────────▶ authors.id        the key is on this table
+hasOne      authors.id      ◀────────── profiles.author_id the key is on the other table
+hasMany     authors.id      ◀────────── books.author_id    (any number of rows)
+manyToMany  posts.id ◀── posts_tags.post_id                a join table holds
+                         posts_tags.tag_id ──▶ tags.id     both keys
+```
+
+`hasOne` and `hasMany` need `foreignKey`; `belongsTo` defaults it to the property name
+plus `Id`. Associations are checked the first time they are used, not when the class is
+defined, because the class they point at may not exist yet. See
+[Associations and preloading](/guide/associations).
+
+## Embedded schemas
+
+An embedded schema has fields but no table. It is stored in a JSON column of its parent:
+
+<<< @/examples/schemas.ts#embedded
+
+Embedded rows are instances of their class. See [Embeds](/guide/embeds).
+
 ## Serialisation
 
 - `JSON.stringify(user)` gives a plain object of the fields. Redacted fields are omitted.
 - `console.log(user)` shows redacted fields as `**redacted**`.
-- Preloaded associations are included in both.
+- Preloaded associations and embeds are included in both, with their own redacted fields
+  hidden at every level.
+- `toJSON` lives on the class's prototype. A schema class may define its own.
 
 ## Reflection
 
+<<< @/examples/schemas.ts#reflection
+
 | Function | Returns |
 |---|---|
-| `meta(User)` | The schema's metadata: `source`, `fields`, `primaryKey`, associations. |
+| `meta(User)` | The schema's metadata: `source`, `fields`, `primaryKey`, `assocs()`. |
 | `fieldNames(User)` | The field names, in declaration order. |
 | `isSchema(x)` / `isRow(x)` | Type guards. |
-| `primaryKeyOf(row)` | The key value, or an object for a composite key. |
+| `primaryKeyOf(row, User?)` | The key value, or an object for a composite key. Typed when the class is passed. |
 | `stateOf(row)` | `"loaded"` or `"deleted"`. |
+| `User.fields` | The field declarations the class was defined with. |
 
 ## Reserved names
 
-A field cannot be named `constructor`, `__proto__` or `toJSON`, or start with `$`. A
-mistake in a schema throws `SchemaDefinitionError` when the class is defined, with a
-message that names the schema, the field and the fix.
+A field cannot be named `constructor`, `__proto__` or `toJSON`, or start with `$`. An
+association cannot have those names either, nor `fields`. A mistake in a schema throws
+`SchemaDefinitionError` when the class is defined, with a message that names the schema,
+the field and the fix.
+
+::: tip Good to know
+- **No constructor.** Rows come from the database; new records are changesets. A schema
+  class holds getters and methods only.
+- **Non-null by default.** Add `.nullable()` where the column allows `NULL`.
+- **camelCase fields, snake_case columns.** `createdAt` is stored in `created_at`.
+- **You declare the foreign key.** `belongsTo(() => User)` does not add `userId`; the
+  field must exist, and is checked the first time the association is used.
+:::
+
+## Why classes and static associations
+
+Two schemas that refer to each other (a user has posts, a post has an author) must both
+be typed without either being written first. A schema as a constant
+(`const User = schema({ posts: hasMany(() => Post) })`) makes TypeScript give up on such a
+cycle and type it as `any`. A class whose fields are in its base and whose associations
+are `static` members does not: the base mentions only fields, and TypeScript works out
+static members lazily. The class also gives the row type a name, `User`, and a place for
+getters and methods. The decision and the experiment behind it are recorded in
+[ADR 0001](https://github.com/caseyt/ectype-orm/blob/main/docs/adr/0001-schema-classes.md).
 
 ## Next
 
