@@ -422,9 +422,25 @@ describe("validateConfirmation", () => {
     });
   });
 
-  test("compares the raw params, not the cast values", () => {
-    const cs = cast(User, { age: "36", ageConfirmation: 36 }, ["age"]).validateConfirmation("age");
-    expect(cs.valid).toBe(false);
+  test("compares the confirmation as sent with the field's change", () => {
+    expect(cast(User, { age: "36", ageConfirmation: 36 }, ["age"]).validateConfirmation("age").valid).toBe(
+      true,
+    );
+    expect(cast(User, { age: "36", ageConfirmation: "36" }, ["age"]).validateConfirmation("age").valid).toBe(
+      false,
+    );
+    // A change made with putChange is confirmed too; the field need not be in the params.
+    const put = cast(User, { passwordConfirmation: "pw1" }, []).putChange("password", "pw1");
+    expect(put.validateConfirmation("password").valid).toBe(true);
+    expect(put.putChange("password", "pw2").validateConfirmation("password").valid).toBe(false);
+  });
+
+  test("a change to null is not confirmed", () => {
+    const row = loaded(User, { id: 6, email: "n@example.com", name: "Nell", role: "member", lockVersion: 1 });
+    const cs = cast(row, { name: "", nameConfirmation: "x" }, ["name"]);
+    expect(cs.changes).toEqual({ name: null });
+    expect(cs.validateConfirmation("name").valid).toBe(true);
+    expect(cs.validateConfirmation("name", { required: true }).valid).toBe(true);
   });
 
   test("runs only when the field has a change", () => {

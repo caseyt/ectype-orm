@@ -280,6 +280,8 @@ describe("cast: a changeset again", () => {
     const renamed = cast(row, { name: "Bob" }, ["name"]);
     const back = cast(renamed, { name: "Grace" }, ["name"]);
     expect(back.changes).toEqual({});
+    expect(renamed.changes).toEqual({ name: "Bob" });
+    expect(back.changes).not.toBe(renamed.changes);
     expect(back.isChanged("name")).toBe(false);
     expect(cast(renamed, { name: "Grace" }, ["name"], { forceChanges: true }).changes).toEqual({
       name: "Grace",

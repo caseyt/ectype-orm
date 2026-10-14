@@ -1065,8 +1065,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
   }
 
   /**
-   * Checks that the params hold `<field>Confirmation` with the same value as `<field>`
-   * (`passwordConfirmation` for `password`). The error, `does not match confirmation`,
+   * Checks that the params hold `<field>Confirmation` equal to the field's change
+   * (`passwordConfirmation` for `password`). The confirmation is compared as sent, with
+   * the changed value. The error, `does not match confirmation`,
    * goes on the confirmation key. A missing confirmation is an error only with
    * `required: true` (`can't be blank`). Like the other validations it runs only when the
    * field has a change (not a change to `null`), and only on a changeset made by `cast`.
@@ -1087,7 +1088,8 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
     let error: ChangesetError | undefined;
     if (params !== null && value !== undefined && value !== null) {
       if (hasOwn(params, key)) {
-        if (!deepEqual(params[key], hasOwn(params, field) ? params[field] : undefined)) {
+        // The confirmation, as sent, against the changed value of the field.
+        if (!deepEqual(params[key], value)) {
           error = errorOf(
             messageOf(options?.message, "does not match confirmation", EMPTY),
             "confirmation",
