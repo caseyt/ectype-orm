@@ -105,7 +105,7 @@ A schema class may define getters and methods, as `displayName` does above. It m
 define a constructor or field initialisers: rows are built without running a constructor,
 so neither would run.
 
-## There is no constructor
+### There is no constructor
 
 You never write `new User()`. A `User` object comes only from the database: from a query,
 or from a successful insert or update. A record that does not exist yet is described by a
@@ -207,7 +207,7 @@ static members lazily. The class also gives the row type a name, `User`, and a p
 getters and methods. The decision and the experiment behind it are recorded in
 [ADR 0001](https://github.com/caseyt/ectype-orm/blob/main/docs/adr/0001-schema-classes.md).
 
-## Next
+Next:
 
 - [Types](/guide/types)
 - [Associations and preloading](/guide/associations)

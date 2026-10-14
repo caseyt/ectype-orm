@@ -1,0 +1,32 @@
+/*
+ * Brand colours from the logo: green #1fc962 and navy #141f25.
+ * The logo green is too light for text on white (2.2:1), so light mode uses darker shades
+ * of the same hue for links (brand-1, 5.3:1) and keeps the logo green for fills. Buttons
+ * use navy text, which reads at 7.7:1 on the green.
+ */
+:root {
+  --egon-green: #1fc962;
+  --egon-navy: #141f25;
+
+  --vp-c-brand-1: #137c3d;
+  --vp-c-brand-2: #116a34;
+  --vp-c-brand-3: var(--egon-green);
+  --vp-c-brand-soft: rgba(31, 201, 98, 0.14);
+
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: var(--egon-navy);
+  --vp-button-brand-bg: var(--egon-green);
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: var(--egon-navy);
+  --vp-button-brand-hover-bg: #1cb558;
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: var(--egon-navy);
+  --vp-button-brand-active-bg: #19a14f;
+}
+
+.dark {
+  --vp-c-brand-1: var(--egon-green);
+  --vp-c-brand-2: #40dd7f;
+  --vp-c-brand-3: var(--egon-green);
+  --vp-c-brand-soft: rgba(31, 201, 98, 0.16);
+}
