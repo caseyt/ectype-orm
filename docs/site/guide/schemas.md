@@ -49,8 +49,13 @@ get the current time. For anything else, pass the function:
 
 <<< @/examples/schemas.ts#primary-keys
 
-- `.primaryKey()` on an `integer` or `bigint` field means the database generates the
-  value. Pass `.primaryKey({ dbGenerated: false })` when you supply it yourself.
+- `.primaryKey()` on an `integer` or `bigint` field that is the only key field means the
+  database generates the value. Pass `.primaryKey({ dbGenerated: false })` when you
+  supply it yourself.
+- In a composite key, each `integer` or `bigint` part must say which it is:
+  `.primaryKey({ dbGenerated: false })` for a value you supply, or
+  `.primaryKey().dbGenerated()` for one the database generates. A `float` key always
+  takes `{ dbGenerated: false }`. Otherwise the class is refused when it is defined.
 - A key generated in your process (`.autogenerate()`) is not database-generated. Asking
   for both on an integer key is refused: pass `{ dbGenerated: false }`.
 - Several fields with `.primaryKey()` form a composite key, in declaration order:
