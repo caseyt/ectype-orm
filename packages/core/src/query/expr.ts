@@ -1672,7 +1672,10 @@ function membership(op: "in" | "notIn", left: AnyExpr, values: unknown): AnyExpr
     const copy = new Array<unknown>(length);
     for (let i = 0; i < length; i++) {
       const value: unknown = values[i];
-      if (value === null || value === undefined) {
+      if (value === undefined) {
+        throw new QueryError(`${op}() was given a list holding undefined, which is not a value.`);
+      }
+      if (value === null) {
         throw new QueryError(
           `${op}() was given a list holding null. x ${op === "in" ? "IN" : "NOT IN"} (…, NULL) never matches the null: filter it out and add isNull() separately.`,
         );

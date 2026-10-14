@@ -277,9 +277,15 @@ describe("in and notIn", () => {
     expectConsistent(e);
   });
 
-  test("a list holding null or undefined is refused", () => {
-    expect(() => u.name.in(["a", null] as never)).toThrow(/in\(\) was given a list holding null/);
-    expect(() => u.name.notIn([undefined] as never)).toThrow(/notIn\(\) was given a list holding null/);
+  test("a list holding null or undefined is refused, each named as what it is", () => {
+    expect(() => u.name.in(["a", null] as never)).toThrow(/^in\(\) was given a list holding null\./);
+    expect(() => u.name.notIn([null] as never)).toThrow(/^notIn\(\) was given a list holding null\./);
+    expect(() => u.age.in([1, undefined] as never)).toThrow(
+      /^in\(\) was given a list holding undefined, which is not a value\.$/,
+    );
+    expect(() => u.name.notIn([undefined] as never)).toThrow(
+      /^notIn\(\) was given a list holding undefined, which is not a value\.$/,
+    );
   });
 
   test("an expression of array type is used as it is", () => {
