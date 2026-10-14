@@ -2,51 +2,55 @@
 
 Besides the [built-in validations](/guide/changesets#validations), a changeset can be
 validated by Zod, by any other [Standard Schema](https://standardschema.dev) library
-(Valibot, ArkType, recent Yup), or by a plain function. The core package depends on none
-of them.
+(Valibot, ArkType, Yup), or by a plain function. The core package depends on none of
+them: it talks to every library through the Standard Schema interface.
 
-```ts
-cs.validate(validator, opts?)             // synchronous
-cs.validateAsync(validator, opts?)        // returns Promise<Changeset>
-cs.validateField("email", validator)      // one field; runs only when it changed
-cs.validateFieldAsync("email", validator)
-```
+<<< @/examples/validation.ts#overview
+
+Each method returns a new changeset, like every other changeset method. A validator that
+finds problems adds errors; it never removes changes.
+
+## Choosing
+
+- **Built-in validations** (`validateRequired`, `validateLength`, …) for single-field
+  rules with standard, translatable messages.
+- **A Zod schema** (or Valibot, ArkType, Yup) when you already have one, when the same
+  definition is shared with a client, or when `@egon-orm/zod` can derive it for you.
+- **A function** for rules that need several fields, outside state, or a message of your
+  own, without a library.
+
+They mix freely: a changeset function can call `validateRequired`, then `validate` with a
+schema, then `validate` with a function.
 
 ## With Zod
 
-```ts
-import { z } from "zod";
-
-const UserInput = z.object({
-  email: z.string().email(),
-  age: z.number().int().min(13).nullish(),
-});
-
-cast(User, params, ["email", "age"]).validate(UserInput);
-```
+<<< @/examples/validation.ts#zod
 
 Each issue becomes a changeset error on the field named by the first segment of its path,
-with `validation: "schema"`. An issue with an empty path, or for a key that is not a
-field, is stored under the key `BASE` (`"$base"`).
+with `validation: "schema"`. The rest of the path is kept in `meta.path` (`["theme"]` for
+an issue at `settings.theme`). Path segments written as `{ key }` objects, as some
+libraries report them, are unwrapped.
 
-Cross-field rules work the same way:
+An issue with an empty path, or one whose path does not start with a field name, belongs
+to the record as a whole: it is stored under the key `BASE` (`"$base"`), with its whole
+path in `meta.path`.
 
-```ts
-cs.validate(
-  z.object({ startsAt: z.date(), endsAt: z.date() })
-    .refine((v) => v.endsAt > v.startsAt, { path: ["endsAt"], message: "must be after start" }),
-);
-```
+<<< @/examples/validation.ts#base
+
+Errors are appended after the errors the changeset already has, in the order the
+validator reported them.
+
+## Cross-field rules
+
+A rule that compares fields reports on the field the user should fix:
+
+<<< @/examples/validation.ts#cross-field-zod
 
 ## With a function
 
-```ts
-cs.validate((values, { isChanged }) =>
-  isChanged("endsAt") && values.endsAt <= values.startsAt
-    ? [{ path: "endsAt", message: "must be after start" }]
-    : [],
-);
-```
+<<< @/examples/validation.ts#function
+
+A function receives the values and a context, and returns a list of issues, or nothing:
 
 ```ts
 type ValidatorFn<T> = (
@@ -57,70 +61,152 @@ type ValidatorFn<T> = (
 type ValidationIssue = { path: PropertyKey | readonly PropertyKey[]; message: string; meta?: Record<string, unknown> };
 ```
 
-`ctx.data` is the record before the changes. For a new record it holds the field defaults.
+`path` is a field name, or a list whose first element is the field name. `meta` is
+merged into the error's `meta`, so it can fill `{placeholders}` in the message. Anything
+returned that is not a list counts as no issues.
+
+`ctx.data` is the record before the changes: the loaded row, or, for a new record, an
+object of the field defaults (`undefined` for a field without one). It is never `null`.
 
 ## What the validator receives
 
-A plain object of **every field with the changes applied**: the current data, overlaid
-with the changes, using the converted values (`Date`, numbers, enum strings). Virtual
-fields are included.
+A plain object of **every field with the changes applied**: the loaded row (or a new
+record's defaults), overlaid with the changes, in field order. The values are the
+converted ones (`Date`, numbers, enum strings), as `cast` produced them. Virtual fields
+are included, and so are redacted fields.
+
+A field with no value (a new record's field that has neither a change nor a default) is
+**left out** of the object, not set to `undefined`, so that a schema's optional keys
+accept it and a required key reports it as missing.
 
 ## Options
 
 | Option | Default | Effect |
 |---|---|---|
-| `scope` | `"all"` | `"all"` keeps every issue. `"changed"` keeps only issues on fields that have a change. |
-| `apply` | `false` | When `true` and there are no issues, the validator's output is written back as changes, so transforms such as `.trim()` take effect. |
-| `only` | all fields | Restrict the object, and the issues, to these fields. |
+| `scope` | `"all"` | `"all"` keeps every issue. `"changed"` keeps only issues on fields that have a change (and issues on the record as a whole). |
+| `apply` | `false` | When `true` and the schema finds no issue, its output is written back as changes, so transforms such as `.trim()` take effect. Standard Schemas only. |
+| `only` | all fields | Gives the validator only these fields, and keeps only issues on them (and on the record as a whole). |
 
-`scope: "all"` is the default so that a cross-field rule is never dropped because the
-field it reports on happened not to change. Use `"changed"` when existing rows may hold
-data that would no longer pass and should not block unrelated updates.
+<<< @/examples/validation.ts#options
+
+### Why `scope: "all"` is the default
+
+A cross-field rule reports on one field, but is often broken by a change to another. In
+the example above, moving `startsAt` past `endsAt` reports on `endsAt`, which did not
+change. Keeping every issue makes sure that rule is never dropped.
+
+Use `"changed"` when existing rows may hold data that would no longer pass a new rule,
+and that old data should not block unrelated updates: a user editing their name is then
+not told that the email they registered years ago is no longer accepted.
+
+## Transforms with `apply`
+
+<<< @/examples/validation.ts#apply
+
+For each key of the schema's output that is a field, a value that differs from the
+field's current value (compared by the field's type, so an equal `Date` is not a change)
+is recorded as a change, as `putChange` would record it. Output keys that are not fields
+are ignored. Nothing is applied when there are issues. A function validator has no
+output, so `apply` with a function throws.
+
+## One field: `validateField`
+
+<<< @/examples/validation.ts#validate-field
+
+`validateField` runs only when the field has a change, and not on a change to `null`
+(like the built-in validations). The validator receives the changed value alone. Every
+issue goes on that field, its path in `meta.path`.
 
 ## Async validation
 
-A changeset is synchronous. `validate` throws if the validator returns a promise; use
-`validateAsync` and await it.
+A changeset is synchronous: `validate` throws `validator returned a Promise; use
+validateAsync` if the validator answers with a promise. Use `validateAsync` for a check
+that has to wait, such as a call to another service, and await it:
 
-```ts
-const checked = await cs.validateAsync(async (v) =>
-  (await isDisposable(v.email)) ? [{ path: "email", message: "is not allowed" }] : [],
-);
-```
+<<< @/examples/validation.ts#async
+
+Keeping the two apart means that the ordinary path never waits, and that an accidental
+`async` function in a synchronous chain is an error you see at once, not a validation
+that silently never ran. `validateAsync` accepts synchronous validators too.
 
 A validator that throws is a bug in the validator: the exception propagates and is not
 turned into a validation error.
 
 ## Other libraries
 
-Any object with a Standard Schema `~standard` property works: Valibot, ArkType, and Yup
-versions that implement it. For a library that does not, wrap it in a function that
-returns issues.
+Any value with a Standard Schema `~standard` property works, whatever library made it.
+
+**Valibot**
+
+<<< @/examples/validation.ts#valibot
+
+**ArkType**
+
+<<< @/examples/validation.ts#arktype
+
+**Yup** implements Standard Schema from version 1.7, but its `validate` always answers
+with a promise, so its schemas go to `validateAsync`:
+
+<<< @/examples/validation.ts#yup
+
+To validate with Yup synchronously, wrap the schema in a function that calls
+`validateSync` and returns issues. The same approach works for any library without
+Standard Schema support:
+
+<<< @/examples/validation.ts#yup-sync
+
+<<< @/examples/validation.ts#yup-sync-use
+
+A function has no output, so `apply` is not available this way.
 
 ## Deriving Zod schemas from a schema class
 
 `@egon-orm/zod` builds a Zod schema from a schema class, so the shape is written once.
+It needs Zod 4.3 or later as a peer dependency.
 
-```ts
-import { toZod } from "@egon-orm/zod";
-
-const UserZ = toZod(User);                                   // matches Row<typeof User>
-const CreateUser = toZod(User, { mode: "insert", pick: ["email", "name", "age"] })
-  .extend({ email: z.string().email() });
-type CreateUser = z.infer<typeof CreateUser>;                // { email: string; name?: string | null; age?: number | null }
-```
+<<< @/examples/validation.ts#to-zod
 
 | Mode | Shape |
 |---|---|
-| `"row"` | Every field, exactly as in a row. The default. |
-| `"insert"` | Fields are optional where an insert does not need them. |
-| `"update"` | Every field optional. |
+| `"row"` | Every field, exactly as in a row, virtual and redacted fields included. The default. |
+| `"insert"` | The fields an insert takes (no virtual fields). A field is optional when it is nullable, has a default, or is generated (by `.autogenerate()` or by the database). |
+| `"update"` | Every field, all optional. |
 
-`pick` and `omit` are typed. `castWith(target, params, zodSchema)` is shorthand for `cast`
-with the schema's keys as the permitted list, followed by `.validate(zodSchema)`.
+`pick` and `omit` are typed and checked. An optional key may be absent but may not hold
+`undefined` (Zod's `exactOptional`).
 
-## Choosing
+Each field type maps to the Zod type for its values (`z.string()`, `z.int()`,
+`z.bigint()`, `z.date()`, `z.boolean()`, `z.array(...)`, a nested object for an embed),
+refined so that the schema accepts exactly the values the field type accepts: the
+members of an enum, a decimal's scale, a timestamp's precision, a UUID in lower case.
+`null` is accepted only for a `.nullable()` field.
 
-- **Built-in validations** for single-field rules with standard messages.
-- **A Zod schema** when you already have one, or want one definition shared with a client.
-- **A function** for rules that need more than one field or outside state.
+The result is an ordinary Zod object: `.extend()` it to add rules, and pass it to
+`validate`. `castWith(target, params, schema)` is shorthand for `cast` with the schema's
+keys as the permitted list, followed by `.validate(schema)`; every key of the schema must
+be a field:
+
+<<< @/examples/validation.ts#cast-with
+
+A custom type becomes a check that accepts what the type's own `cast` accepts. To give
+it a proper Zod schema instead, add a `zod` hint to the type:
+
+<<< @/examples/validation.ts#zod-hint
+
+## Writing a reusable validator
+
+A validator is a value, so a rule used by several schemas is a function that returns one.
+Type it with `ValidatorFn<T>` for the fields it needs:
+
+<<< @/examples/validation.ts#reusable
+
+::: tip Good to know
+- **Validation keeps every issue by default.** A rule that reports on a field the user
+  did not change is still reported (`scope: "all"`); opt in to `scope: "changed"` per call.
+- **`validate` is synchronous.** A validator that returns a promise, such as any Yup
+  schema, needs `validateAsync`.
+- **Validators never change values** unless you pass `apply: true`, and then only when
+  they found no issue.
+- **Errors are plain data.** A schema error is `{ message, validation: "schema", meta: { path } }`,
+  serialisable like every other changeset error.
+:::

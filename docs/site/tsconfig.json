@@ -6,5 +6,5 @@
     "tsBuildInfoFile": "./.tsbuild/tsconfig.tsbuildinfo"
   },
   "include": [".vitepress/config.ts", "examples"],
-  "references": [{ "path": "../../packages/core" }]
+  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/zod" }]
 }

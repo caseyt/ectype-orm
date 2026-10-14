@@ -1,0 +1,269 @@
+/**
+ * `toZod`: a Zod object schema derived from a schema class, so that the shape of a record
+ * is written once.
+ *
+ * @module
+ */
+import type { AnyFieldType, AnySchema, EmbedMeta, FieldMeta, FieldValues, InsertShape } from "egon-orm";
+import { meta, QueryError } from "egon-orm";
+import { z } from "zod";
+
+/**
+ * Which shape `toZod` derives: `"row"` (every field, as in a row), `"insert"` (the
+ * fields an insert takes, optional where the insert does not need them) or `"update"`
+ * (every field, all optional).
+ *
+ * @example
+ * ```ts
+ * const mode: ToZodMode = "insert";
+ * ```
+ */
+export type ToZodMode = "row" | "insert" | "update";
+
+/**
+ * The field names `toZod` can pick from in a mode: every field for `"row"` and
+ * `"update"`, the fields an insert takes (no virtual fields) for `"insert"`.
+ *
+ * @example
+ * ```ts
+ * type Insertable = ToZodKeys<typeof User, "insert">; // "id" | "email" | "name" | …, not "password"
+ * ```
+ */
+export type ToZodKeys<S extends AnySchema, M extends ToZodMode> = M extends "insert"
+  ? keyof InsertShape<S> & string
+  : keyof FieldValues<S> & string;
+
+/** The optional keys of `T`: a key is optional when `T` does not require it. */
+type OptionalKeys<T> = { [K in keyof T]-?: T extends Record<K, T[K]> ? never : K }[keyof T];
+
+/** Whether a key of the mode's shape is optional. */
+type IsOptional<S extends AnySchema, M extends ToZodMode, K> = M extends "update"
+  ? true
+  : M extends "insert"
+    ? K extends OptionalKeys<InsertShape<S>>
+      ? true
+      : false
+    : false;
+
+/**
+ * The shape of the Zod object `toZod` returns: one Zod type per field, typed with the
+ * field's value, and optional (`exactOptional`) where the mode makes it optional.
+ *
+ * @example
+ * ```ts
+ * type Shape = ToZodShape<typeof User, "insert", "email" | "name">;
+ * // { email: z.ZodType<string>; name: z.ZodExactOptional<z.ZodType<string | null>> }
+ * ```
+ */
+export type ToZodShape<S extends AnySchema, M extends ToZodMode, K extends string> = {
+  [P in K]: IsOptional<S, M, P> extends true
+    ? z.ZodExactOptional<z.ZodType<FieldValues<S>[P & keyof FieldValues<S>]>>
+    : z.ZodType<FieldValues<S>[P & keyof FieldValues<S>]>;
+};
+
+/**
+ * Options of `toZod`. `pick` keeps only the named fields; `omit` leaves the named fields
+ * out. Both are checked against the mode's fields.
+ *
+ * @example
+ * ```ts
+ * const options: ToZodOptions<typeof User, "insert", "email" | "name", never> = {
+ *   mode: "insert",
+ *   pick: ["email", "name"],
+ * };
+ * ```
+ */
+export interface ToZodOptions<S extends AnySchema, M extends ToZodMode, P extends string, O extends string> {
+  readonly mode?: M;
+  readonly pick?: readonly (P & ToZodKeys<S, M>)[];
+  readonly omit?: readonly (O & ToZodKeys<S, M>)[];
+}
+
+/**
+ * The hint a custom type gives `toZod`: the Zod schema for its values (or a function
+ * that returns it). Without one, a custom type becomes a `z.custom()` check that accepts
+ * exactly the values the type itself accepts.
+ *
+ * `defineType` keeps only the members it knows, so add the hint to the type it returns:
+ *
+ * @example
+ * ```ts
+ * const Slug = defineType<string>({ name: "slug", db: { kind: "text" }, cast: castSlug });
+ * const SlugWithZod: FieldType<string, string> & ZodHint<string> = {
+ *   ...Slug,
+ *   zod: z.string().regex(/^[a-z0-9-]+$/),
+ * };
+ * class Article extends Schema("articles", { slug: t.type(SlugWithZod) }) {}
+ * ```
+ */
+export interface ZodHint<T = unknown> {
+  readonly zod: z.ZodType<T> | (() => z.ZodType<T>);
+}
+
+// ---------------------------------------------------------------------------
+// Field types to Zod types
+// ---------------------------------------------------------------------------
+
+const INVALID = "is invalid";
+
+/** Whether `value` is already a value of `type`: the type casts it to an equal value. */
+function accepts(type: AnyFieldType, value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  const result = type.cast(value);
+  return result.success && (result.data === value || type.equal(result.data, value));
+}
+
+function hintOf(type: AnyFieldType): z.ZodType | undefined {
+  const hint: unknown = (type as Partial<ZodHint>).zod;
+  if (hint === undefined) return undefined;
+  const schema: unknown = typeof hint === "function" ? (hint as () => unknown)() : hint;
+  if (!(schema instanceof z.ZodType)) {
+    throw new QueryError(
+      `toZod(): the zod hint of the type "${type.name}" is not a Zod schema (or a function returning one).`,
+    );
+  }
+  return schema;
+}
+
+/** The Zod type of a non-null value of `type`. */
+function valueSchema(type: AnyFieldType): z.ZodType {
+  const hint = hintOf(type);
+  if (hint !== undefined) return hint;
+  const check = (value: unknown): boolean => accepts(type, value);
+  const name = type.name;
+  // The Zod base gives Zod's own message for a value of the wrong kind; the refinement
+  // makes the schema accept exactly what the field type accepts (ranges, formats, members).
+  if (name === "string") return z.string();
+  if (name === "boolean") return z.boolean();
+  if (name === "integer" || name === "bigint(number)") return z.int().refine(check, INVALID);
+  if (name === "float") return z.number().refine(check, INVALID);
+  if (name === "bigint") return z.bigint().refine(check, INVALID);
+  if (name === "uuid") return z.string().refine(check, "is not a valid UUID");
+  if (name === "binary") return z.instanceof(Uint8Array).refine(check, INVALID);
+  if (name === "json") return z.custom(check, INVALID);
+  if (name === "enum" || name === "date" || name === "time" || name.startsWith("decimal")) {
+    return z.string().refine(check, INVALID);
+  }
+  if (name.startsWith("array(")) return z.array(z.unknown()).refine(check, INVALID);
+  if (type.db.kind === "timestamp" || type.db.kind === "timestamptz" || name === "date(date)") {
+    return z.date().refine(check, INVALID);
+  }
+  return z.custom(check, INVALID);
+}
+
+function embedSchema(embed: EmbedMeta): z.ZodType {
+  const one = z.lazy(() => rowObject(embed.schema()));
+  return embed.cardinality === "one" ? one : z.array(one);
+}
+
+function fieldSchema(field: FieldMeta, embed: EmbedMeta | undefined): z.ZodType {
+  const base = embed === undefined ? valueSchema(field.type) : embedSchema(embed);
+  return field.nullable ? base.nullable() : base;
+}
+
+function isOptional(field: FieldMeta, mode: ToZodMode): boolean {
+  if (mode === "update") return true;
+  if (mode === "row") return false;
+  return (
+    field.nullable || field.default !== undefined || field.autogenerate !== undefined || field.dbGenerated
+  );
+}
+
+/** The fields of the mode, in declaration order. */
+function fieldsFor(schema: AnySchema, mode: ToZodMode): readonly FieldMeta[] {
+  const fields = meta(schema).fields;
+  return mode === "insert" ? fields.filter((field) => !field.virtual) : fields;
+}
+
+function build(schema: AnySchema, mode: ToZodMode, keep: (name: string) => boolean): z.ZodObject {
+  const info = meta(schema);
+  const embeds = new Map(info.embeds.map((embed) => [embed.name, embed]));
+  const shape: Record<string, z.ZodType> = {};
+  for (const field of fieldsFor(schema, mode)) {
+    if (!keep(field.name)) continue;
+    const zod = fieldSchema(field, embeds.get(field.name));
+    shape[field.name] = isOptional(field, mode) ? zod.exactOptional() : zod;
+  }
+  return z.object(shape);
+}
+
+/** The whole-row schema of a class, cached: used for embeds and for `toZod` without pick or omit. */
+const cache = new WeakMap<AnySchema, Map<ToZodMode, z.ZodObject>>();
+
+function cached(schema: AnySchema, mode: ToZodMode): z.ZodObject {
+  let byMode = cache.get(schema);
+  if (byMode === undefined) {
+    byMode = new Map();
+    cache.set(schema, byMode);
+  }
+  let object = byMode.get(mode);
+  if (object === undefined) {
+    object = build(schema, mode, () => true);
+    byMode.set(mode, object);
+  }
+  return object;
+}
+
+function rowObject(schema: AnySchema): z.ZodObject {
+  return cached(schema, "row");
+}
+
+function namesOf(list: unknown, option: string, allowed: ReadonlySet<string>): ReadonlySet<string> {
+  if (!Array.isArray(list)) throw new QueryError(`toZod(): ${option} must be a list of field names.`);
+  for (const name of list) {
+    if (typeof name !== "string" || !allowed.has(name)) {
+      throw new QueryError(
+        `toZod(): ${option} names ${typeof name === "string" ? `"${name}"` : String(name)}, which is not one of the fields: ${[...allowed].join(", ")}.`,
+      );
+    }
+  }
+  return new Set(list as readonly string[]);
+}
+
+/**
+ * Derives a Zod object schema from a schema class: one key per field, with the field's
+ * type and nullability, so the shape is written once. Virtual and redacted fields are
+ * included in `"row"` mode; `"insert"` leaves virtual fields out and makes a field
+ * optional where an insert does not need it; `"update"` makes every field optional.
+ *
+ * The result is an ordinary Zod object: `.extend()` it to add rules
+ * (`z.string().email()`), and pass it to `cs.validate()`.
+ *
+ * @example
+ * ```ts
+ * const UserZ = toZod(User); // matches the fields of a User row
+ * const CreateUser = toZod(User, { mode: "insert", pick: ["email", "name", "age"] })
+ *   .extend({ email: z.string().email() });
+ * type CreateUser = z.infer<typeof CreateUser>; // { email: string; name?: string | null; age?: number | null }
+ * ```
+ *
+ * @throws QueryError when `schema` is not a schema class, `mode` is unknown, or `pick` or
+ * `omit` names something that is not a field of the mode.
+ */
+export function toZod<
+  S extends AnySchema,
+  M extends ToZodMode = "row",
+  const P extends string = ToZodKeys<S, M>,
+  const O extends string = never,
+>(
+  schema: S,
+  options?: ToZodOptions<S, M, P, O>,
+): z.ZodObject<ToZodShape<S, M, Exclude<P & ToZodKeys<S, M>, O>>> {
+  const mode: unknown = options?.mode ?? "row";
+  if (mode !== "row" && mode !== "insert" && mode !== "update") {
+    throw new QueryError('toZod(): mode must be "row", "insert" or "update".');
+  }
+  const pick = options?.pick;
+  const omit = options?.omit;
+  if (pick === undefined && omit === undefined) {
+    return cached(schema, mode) as unknown as z.ZodObject<ToZodShape<S, M, Exclude<P & ToZodKeys<S, M>, O>>>;
+  }
+  const allowed = new Set(fieldsFor(schema, mode).map((field) => field.name));
+  const picked = pick === undefined ? undefined : namesOf(pick, "pick", allowed);
+  const omitted = omit === undefined ? undefined : namesOf(omit, "omit", allowed);
+  return build(
+    schema,
+    mode,
+    (name) => (picked === undefined || picked.has(name)) && (omitted === undefined || !omitted.has(name)),
+  ) as unknown as z.ZodObject<ToZodShape<S, M, Exclude<P & ToZodKeys<S, M>, O>>>;
+}
