@@ -466,17 +466,11 @@ export interface FieldBuilder<T, F extends FieldFlags = DefaultFieldFlags> {
   /** The value a new record takes when its changeset sets none: a constant, or a function called per record. */
   default(value: T | (() => T)): FieldBuilder<T, WithFlag<F, "defaulted">>;
   /**
-   * Makes the field part of the primary key (several fields form a composite key). On an
-   * integer or bigint field the key is database-generated, as with `.dbGenerated()`,
-   * unless `{ dbGenerated: false }` is passed (a natural key).
+   * Makes the field part of the primary key (several fields form a composite key). The
+   * value is one you supply, whatever the type; add `.dbGenerated()` for a serial or
+   * identity column, or `.autogenerate()` for a value made in your process.
    */
-  primaryKey(): FieldBuilder<
-    T,
-    [T] extends [number | bigint]
-      ? WithFlag<WithFlag<F, "primaryKey">, "defaulted">
-      : WithFlag<F, "primaryKey">
-  >;
-  primaryKey(options: { readonly dbGenerated: false }): FieldBuilder<T, WithFlag<F, "primaryKey">>;
+  primaryKey(): FieldBuilder<T, WithFlag<F, "primaryKey">>;
   /** Generates the value client-side at insert when it is unset. */
   autogenerate(fn?: () => T): FieldBuilder<T, WithFlag<F, "defaulted">>;
   /** Keeps the field out of the database: never selected, never written. */

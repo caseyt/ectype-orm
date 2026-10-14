@@ -23,7 +23,7 @@ class Phone extends EmbeddedSchema({
 }) {}
 
 class User extends Schema("users", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   email: t.string(),
   address: t.embedOne(() => Address).nullable(),
   phones: t.embedMany(() => Phone),
@@ -61,6 +61,10 @@ and `with` defaulting to the embed's static `changeset`.
 Each embedded field is written with its own type, so a `timestamp` is stored as an ISO
 string and read back as a `Date`. When reading, keys that are not fields are ignored and
 missing keys get the field's default.
+
+The JSON keys are the field names as written: `postCode` is stored as `"postCode"`, not
+`"post_code"`. `.column("pc")` renames one key, and `EmbeddedSchema(fields, { naming: "snake_case" })`
+switches the whole embed to snake_case keys.
 
 ## Querying inside an embed
 

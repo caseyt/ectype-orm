@@ -5,7 +5,7 @@ import { belongsTo, hasMany, meta, Schema, t, timestamps } from "egon-orm";
 import { bench, doNotOptimize, group, runBenchmarks } from "../src/harness.js";
 
 const fields = {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   age: t.integer().nullable(),

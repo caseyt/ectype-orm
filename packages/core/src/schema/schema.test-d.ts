@@ -51,7 +51,7 @@ import {
 // --- Circular, self-referential and mutually recursive schemas (decision D1) ---
 
 class User extends Schema("users", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   age: t.integer().nullable(),
@@ -83,7 +83,7 @@ class Profile extends Schema("profiles", {
 }
 
 class Post extends Schema("posts", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   title: t.string(),
   published: t.boolean().default(false),
   authorId: t.integer(),
@@ -106,7 +106,7 @@ class Tag extends Schema("tags", { id: t.integer().primaryKey(), name: t.string(
 
 class Membership extends Schema("memberships", {
   orgId: t.uuid().primaryKey(),
-  userId: t.integer().primaryKey({ dbGenerated: false }),
+  userId: t.integer().primaryKey(),
   role: t.string().default("member"),
 }) {
   static user = belongsTo(() => User, { foreignKey: ["userId"] });
@@ -677,34 +677,43 @@ describe("t", () => {
 });
 
 describe("primaryKey", () => {
-  test("an integer or bigint key is database-generated, so optional on insert", () => {
+  test("a key is required on insert, whatever its type", () => {
     class Serial extends Schema("a", { id: t.integer().primaryKey(), name: t.string() }) {}
     class Big extends Schema("b", { id: t.bigint().primaryKey(), name: t.string() }) {}
-    class BigNumber extends Schema("c", { id: t.bigint({ mode: "number" }).primaryKey() }) {}
-    expectTypeOf<InsertShape<typeof Serial>>().toEqualTypeOf<{ name: string; id?: number }>();
-    expectTypeOf<InsertShape<typeof Big>>().toEqualTypeOf<{ name: string; id?: bigint }>();
-    expectTypeOf<InsertShape<typeof BigNumber>>().toEqualTypeOf<{ id?: number }>();
-    expectTypeOf<PrimaryKeyOf<typeof Big>>().toEqualTypeOf<bigint>();
-  });
-
-  test("{ dbGenerated: false } and other key types make the key required", () => {
-    class Natural extends Schema("a", { id: t.integer().primaryKey({ dbGenerated: false }) }) {}
-    class Code extends Schema("b", { code: t.string().primaryKey(), name: t.string() }) {}
-    class Uuid extends Schema("c", { id: t.uuid().primaryKey() }) {}
-    class UuidGenerated extends Schema("d", { id: t.uuid().primaryKey().autogenerate() }) {}
-    expectTypeOf<InsertShape<typeof Natural>>().toEqualTypeOf<{ id: number }>();
+    class Real extends Schema("c", { id: t.float().primaryKey() }) {}
+    class Code extends Schema("d", { code: t.string().primaryKey(), name: t.string() }) {}
+    class Uuid extends Schema("e", { id: t.uuid().primaryKey() }) {}
+    class Pair extends Schema("f", { a: t.integer().primaryKey(), b: t.integer().primaryKey() }) {}
+    expectTypeOf<InsertShape<typeof Serial>>().toEqualTypeOf<{ id: number; name: string }>();
+    expectTypeOf<InsertShape<typeof Big>>().toEqualTypeOf<{ id: bigint; name: string }>();
+    expectTypeOf<InsertShape<typeof Real>>().toEqualTypeOf<{ id: number }>();
     expectTypeOf<InsertShape<typeof Code>>().toEqualTypeOf<{ code: string; name: string }>();
     expectTypeOf<InsertShape<typeof Uuid>>().toEqualTypeOf<{ id: string }>();
-    expectTypeOf<InsertShape<typeof UuidGenerated>>().toEqualTypeOf<{ id?: string }>();
+    expectTypeOf<InsertShape<typeof Pair>>().toEqualTypeOf<{ a: number; b: number }>();
+    expectTypeOf<PrimaryKeyOf<typeof Big>>().toEqualTypeOf<bigint>();
     expectTypeOf<PrimaryKeyOf<typeof Code>>().toEqualTypeOf<string>();
-    // @ts-expect-error the only option value is false
-    t.integer().primaryKey({ dbGenerated: "no" });
+    // @ts-expect-error primaryKey() takes no options; generation is said by .dbGenerated()
+    t.integer().primaryKey({ dbGenerated: false });
+  });
+
+  test(".dbGenerated() and .autogenerate() make the key optional", () => {
+    class Serial extends Schema("a", { id: t.integer().primaryKey().dbGenerated(), name: t.string() }) {}
+    class BigNumber extends Schema("b", { id: t.bigint({ mode: "number" }).primaryKey().dbGenerated() }) {}
+    class UuidGenerated extends Schema("c", { id: t.uuid().primaryKey().autogenerate() }) {}
+    class Versioned extends Schema("d", {
+      id: t.integer().primaryKey().dbGenerated(),
+      version: t.integer().primaryKey(),
+    }) {}
+    expectTypeOf<InsertShape<typeof Serial>>().toEqualTypeOf<{ name: string; id?: number }>();
+    expectTypeOf<InsertShape<typeof BigNumber>>().toEqualTypeOf<{ id?: number }>();
+    expectTypeOf<InsertShape<typeof UuidGenerated>>().toEqualTypeOf<{ id?: string }>();
+    expectTypeOf<InsertShape<typeof Versioned>>().toEqualTypeOf<{ version: number; id?: number }>();
   });
 });
 
 describe("InsertShape, by modifier", () => {
   class Every extends Schema("every", {
-    id: t.integer().primaryKey(),
+    id: t.integer().primaryKey().dbGenerated(),
     plain: t.string(),
     nullable: t.string().nullable(),
     defaulted: t.integer().default(0),
@@ -750,7 +759,7 @@ describe("timestamps", () => {
       createdAt: FieldBuilder<Date, WithFlag<DefaultFieldFlags, "defaulted">>;
       updatedAt: FieldBuilder<Date, WithFlag<DefaultFieldFlags, "defaulted">>;
     }>();
-    class Note extends Schema("notes", { id: t.integer().primaryKey(), ...timestamps() }) {}
+    class Note extends Schema("notes", { id: t.integer().primaryKey().dbGenerated(), ...timestamps() }) {}
     expectTypeOf<Note["createdAt"]>().toEqualTypeOf<Date>();
     expectTypeOf<Note["updatedAt"]>().toEqualTypeOf<Date>();
     expectTypeOf<InsertShape<typeof Note>>().toEqualTypeOf<{
@@ -800,7 +809,7 @@ describe("embedded schemas", () => {
   }
   class Phone extends EmbeddedSchema({ id: t.uuid().primaryKey().autogenerate(), number: t.string() }) {}
   class Contact extends Schema("contacts", {
-    id: t.integer().primaryKey(),
+    id: t.integer().primaryKey().dbGenerated(),
     address: t.embedOne(() => Address),
     previous: t.embedOne(() => Address, { onReplace: "update" }).nullable(),
     phones: t.embedMany(() => Phone),

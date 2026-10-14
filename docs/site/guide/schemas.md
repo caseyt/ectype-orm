@@ -21,9 +21,9 @@ for the full list of types and what each accepts.
 |---|---|
 | `.nullable()` | The column may be `NULL`; the TypeScript type gains `\| null`. A new record starts with `null`. |
 | `.default(value \| () => value)` | Used for a new record when no value is given. A function is called once per record. |
-| `.primaryKey(options?)` | Part of the primary key. See [Primary keys](#primary-keys). |
+| `.primaryKey()` | Part of the primary key. See [Primary keys](#primary-keys). |
 | `.autogenerate(fn?)` | A value generated in your process on insert when none is given (UUIDs, timestamps). |
-| `.dbGenerated()` | The database produces the value; it is read back after insert and update. |
+| `.dbGenerated()` | The database produces the value; it is read back after insert and update. A serial key is `.primaryKey().dbGenerated()`. |
 | `.virtual()` | Exists on the row and in changesets, but is never stored or selected. |
 | `.column("name")` | The column name, when it is not the snake_case form of the field name. |
 | `.redact()` | Hidden from `toJSON`, `console.log`, logs and error messages. |
@@ -49,15 +49,11 @@ get the current time. For anything else, pass the function:
 
 <<< @/examples/schemas.ts#primary-keys
 
-- `.primaryKey()` on an `integer` or `bigint` field that is the only key field means the
-  database generates the value. Pass `.primaryKey({ dbGenerated: false })` when you
-  supply it yourself.
-- In a composite key, each `integer` or `bigint` part must say which it is:
-  `.primaryKey({ dbGenerated: false })` for a value you supply, or
-  `.primaryKey().dbGenerated()` for one the database generates. A `float` key always
-  takes `{ dbGenerated: false }`. Otherwise the class is refused when it is defined.
-- A key generated in your process (`.autogenerate()`) is not database-generated. Asking
-  for both on an integer key is refused: pass `{ dbGenerated: false }`.
+- `.primaryKey()` marks the key and nothing else: the value is one you supply, whatever
+  its type. Add `.dbGenerated()` when the database generates it (a `serial`, `bigserial`
+  or identity column), or `.autogenerate()` when your process does (a UUID).
+- The same holds for every part of a composite key, so a join table's two foreign keys
+  are plain `.primaryKey()`.
 - Several fields with `.primaryKey()` form a composite key, in declaration order:
 
 <<< @/examples/schemas.ts#composite-key
@@ -159,7 +155,8 @@ defined, because the class they point at may not exist yet. See
 
 ## Embedded schemas
 
-An embedded schema has fields but no table. It is stored in a JSON column of its parent:
+An embedded schema has fields but no table. It is stored in a JSON column of its parent,
+with the field names as JSON keys (they are not converted to snake_case):
 
 <<< @/examples/schemas.ts#embedded
 

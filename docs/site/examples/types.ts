@@ -44,7 +44,7 @@ export const MoneyType = defineType<Money, string>({
 
 // #region custom-type-field
 export class Product extends Schema("products", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   price: t.type(MoneyType),
 }) {}
 // #endregion custom-type-field
@@ -82,7 +82,7 @@ export const alsoEuros = currency({ code: "EUR" });
 // #endregion parameterized
 
 export class Order extends Schema("orders", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   // #region parameterized-field
   price: t.type(currency({ code: "EUR" })),
   // #endregion parameterized-field

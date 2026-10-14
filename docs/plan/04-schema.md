@@ -17,7 +17,7 @@ import { Schema, EmbeddedSchema, t, timestamps, hasMany, hasOne, belongsTo, many
          type Row, type InsertShape, type Loaded, meta } from "egon-orm";
 
 class User extends Schema("users", {
-  id: t.integer().primaryKey(),                 // primary key, database-generated
+  id: t.integer().primaryKey().dbGenerated(),   // primary key, database-generated
   email: t.string(),
   name: t.string().nullable(),
   role: t.enum(["admin", "member"]).default("member"),
@@ -46,11 +46,12 @@ meta(User).source;                         // "users"
 `t.<type>(opts?)` for every type in step 03, plus `t.type(customType)`. `t` is the only
 public namespace for types; a builder exposes its `FieldType` so that `param`, `expr.cast`,
 `values` and schemaless changesets can take a builder. There is **no `t.id()`**: a key is
-`t.integer().primaryKey()` (or `t.bigint({ mode: "number" }).primaryKey()` for a 64-bit
-column) and a foreign key is a plain `t.integer()`. `.primaryKey()` on an integer or
-bigint implies `dbGenerated()`; `.primaryKey({ dbGenerated: false })` opts out (natural
-keys). `t.uuid().primaryKey().autogenerate()` gives a client-generated UUID key (v7 by
-default: index-friendly; option for v4) and is not database-generated.
+`t.integer().primaryKey().dbGenerated()` for a serial column (or
+`t.bigint({ mode: "number" })` for a 64-bit one) and a foreign key is a plain
+`t.integer()`. `.primaryKey()` never implies `dbGenerated()`, whatever the type: a key
+is a value you supply unless `.dbGenerated()` or `.autogenerate()` says otherwise.
+`t.uuid().primaryKey().autogenerate()` gives a client-generated UUID key (v7 by default:
+index-friendly; option for v4) and is not database-generated.
 
 Chainable modifiers; each returns a new builder and narrows the builder's type flags:
 
@@ -58,7 +59,7 @@ Chainable modifiers; each returns a new builder and narrows the builder's type f
 |---|---|---|
 | `.nullable()` | adds `\| null` to the row type; default becomes `null` | (Ecto default) |
 | `.default(v \| () => v)` | value used for a new record when none is given; optional in `InsertShape` | `default:` |
-| `.primaryKey(opts?)` | part of the primary key (composite allowed); integer and bigint keys are database-generated unless `{ dbGenerated: false }` | `primary_key: true` |
+| `.primaryKey()` | part of the primary key (composite allowed); a value you supply unless `.dbGenerated()` or `.autogenerate()` is added | `primary_key: true` |
 | `.autogenerate(fn?)` | client-side value on insert when unset | `autogenerate:` |
 | `.virtual()` | not persisted, not selected | `virtual: true` |
 | `.column("col")` | column name override | `source:` |

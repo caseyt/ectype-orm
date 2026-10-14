@@ -124,7 +124,7 @@ import { z } from "zod";
 
 // --- Schema ------------------------------------------------------------------
 export class User extends Schema("users", {
-  id: t.integer().primaryKey(),               // database-generated unless { dbGenerated: false }
+  id: t.integer().primaryKey().dbGenerated(), // serial: the database generates it
   email: t.string(),                          // non-null by default
   name: t.string().nullable(),
   age: t.integer().nullable(),
@@ -147,7 +147,7 @@ export class User extends Schema("users", {
 }
 
 export class Post extends Schema("posts", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   title: t.string(),
   published: t.boolean().default(false),
   authorId: t.integer(),                      // a plain column; the association points at it
@@ -414,9 +414,10 @@ your status note.
 
 ### Schemas (steps 03, 04)
 
-- **No `t.id()`** (and no `types.id`). A key is `t.integer().primaryKey()`; a foreign key is
-  a plain `t.integer()` (or `t.uuid()`). `.primaryKey()` on an integer or bigint implies
-  database-generated; `.primaryKey({ dbGenerated: false })` opts out.
+- **No `t.id()`** (and no `types.id`). A serial key is `t.integer().primaryKey().dbGenerated()`;
+  a foreign key is a plain `t.integer()` (or `t.uuid()`). `.primaryKey()` never implies
+  database-generated, whatever the type: a key is a value you supply unless `.dbGenerated()`
+  or `.autogenerate()` says otherwise. This holds for every part of a composite key.
 - `t.bigint({ mode: "number" })` maps a 64-bit column to a JS `number` and throws
   `CastError` beyond the safe range. Plain `t.bigint()` is a JS `bigint`.
 - **No public constructor** (D2). `new User(...)` is not written by developers.

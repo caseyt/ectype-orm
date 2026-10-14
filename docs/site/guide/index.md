@@ -19,7 +19,7 @@ import { Schema, t, timestamps, hasMany, cast, from, createRepo } from "egon-orm
 import { postgres } from "@egon-orm/postgres";
 
 class User extends Schema("users", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   ...timestamps(),

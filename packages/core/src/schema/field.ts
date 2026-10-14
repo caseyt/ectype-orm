@@ -78,8 +78,6 @@ export interface FieldState {
   readonly type: AnyFieldType;
   readonly nullable: boolean;
   readonly primaryKey: boolean;
-  /** What `.primaryKey({ dbGenerated })` said; `undefined` when it said nothing. */
-  readonly keyGenerated: boolean | undefined;
   readonly virtual: boolean;
   readonly redact: boolean;
   readonly writable: Writable;
@@ -124,21 +122,8 @@ class Builder<T, F extends FieldFlags> implements FieldBuilder<T, F> {
     });
   }
 
-  primaryKey(): FieldBuilder<
-    T,
-    [T] extends [number | bigint]
-      ? WithFlag<WithFlag<F, "primaryKey">, "defaulted">
-      : WithFlag<F, "primaryKey">
-  >;
-  primaryKey(options: { readonly dbGenerated: false }): FieldBuilder<T, WithFlag<F, "primaryKey">>;
-  primaryKey(options?: { readonly dbGenerated?: boolean }): FieldBuilder<T, never> {
-    const keyGenerated = options?.dbGenerated;
-    if (keyGenerated !== undefined && typeof keyGenerated !== "boolean") {
-      throw new SchemaDefinitionError(
-        "primaryKey({ dbGenerated }) takes true or false. Pass { dbGenerated: false } for a key you supply yourself.",
-      );
-    }
-    return new Builder({ ...this[FIELD], primaryKey: true, keyGenerated });
+  primaryKey(): FieldBuilder<T, WithFlag<F, "primaryKey">> {
+    return new Builder({ ...this[FIELD], primaryKey: true });
   }
 
   autogenerate(fn?: () => T): FieldBuilder<T, WithFlag<F, "defaulted">> {
@@ -212,7 +197,6 @@ function pristine(type: AnyFieldType): FieldState {
     type,
     nullable: false,
     primaryKey: false,
-    keyGenerated: undefined,
     virtual: false,
     redact: false,
     writable: "always",

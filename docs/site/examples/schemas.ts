@@ -20,7 +20,7 @@ import {
 
 // #region user
 export class User extends Schema("users", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   email: t.string(),
   name: t.string().nullable(),
   role: t.enum(["admin", "member"]).default("member"),
@@ -38,17 +38,17 @@ export class User extends Schema("users", {
 
 export const keys = {
   // #region primary-keys
-  serial: t.integer().primaryKey(), //                   32-bit serial / identity column
-  big: t.bigint({ mode: "number" }).primaryKey(), //     64-bit bigserial, as a JS number
-  uuid: t.uuid().primaryKey().autogenerate(), //         UUID v7 generated in your process
-  natural: t.string().primaryKey(), //                   natural key; you supply the value
+  serial: t.integer().primaryKey().dbGenerated(), //                 32-bit serial / identity column
+  big: t.bigint({ mode: "number" }).primaryKey().dbGenerated(), //   64-bit bigserial, as a JS number
+  uuid: t.uuid().primaryKey().autogenerate(), //                     UUID v7 generated in your process
+  natural: t.string().primaryKey(), //                               natural key; you supply the value
   // #endregion primary-keys
 };
 
 // #region composite-key
 export class Membership extends Schema("memberships", {
   orgId: t.uuid().primaryKey(),
-  userId: t.integer().primaryKey({ dbGenerated: false }),
+  userId: t.integer().primaryKey(),
   role: t.string(),
 }) {}
 // #endregion composite-key
@@ -59,7 +59,7 @@ export class Event extends Schema("events", { name: t.string(), at: t.timestamp(
 
 // #region foreign-key
 export class Post extends Schema("posts", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   authorId: t.integer(),
   title: t.string(),
 }) {}
@@ -74,7 +74,7 @@ export const variants = [
   // #endregion timestamps
 ];
 
-const fields = { id: t.integer().primaryKey(), totalCents: t.integer() };
+const fields = { id: t.integer().primaryKey().dbGenerated(), totalCents: t.integer() };
 // #region schema-options
 class Invoice extends Schema("invoices", fields, {
   schema: "billing", //        database schema (Postgres schema, MySQL database)
@@ -84,7 +84,7 @@ class Invoice extends Schema("invoices", fields, {
 
 // #region column-names
 class Customer extends Schema("customers", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   firstName: t.string(), //                       column first_name
   vatID: t.string(), //                           column vat_id
   legacyCode: t.string().column("LEGACY_CODE"), // column LEGACY_CODE
@@ -98,12 +98,12 @@ type NewUser = InsertShape<typeof User>; //    what an insert needs
 // #endregion derived-types
 
 // #region associations
-class Author extends Schema("authors", { id: t.integer().primaryKey(), name: t.string() }) {
+class Author extends Schema("authors", { id: t.integer().primaryKey().dbGenerated(), name: t.string() }) {
   static books = hasMany(() => Book, { foreignKey: "authorId" });
 }
 
 class Book extends Schema("books", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   authorId: t.integer(), // the foreign key is a field you declare
   title: t.string(),
 }) {
@@ -119,7 +119,7 @@ class Address extends EmbeddedSchema({
 }) {}
 
 class Shop extends Schema("shops", {
-  id: t.integer().primaryKey(),
+  id: t.integer().primaryKey().dbGenerated(),
   address: t.embedOne(() => Address),
 }) {}
 // #endregion embedded
