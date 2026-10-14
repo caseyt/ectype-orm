@@ -573,7 +573,7 @@ export interface SchemaStatic<F extends FieldsShape = FieldsShape> {
  * declare function Schema<const F extends FieldsShape>(source: string, fields: F): SchemaClass<F>;
  * declare const t: { integer(): FieldBuilder<number>; string(): FieldBuilder<string> };
  *
- * class User extends Schema("users", { id: t.integer().primaryKey(), email: t.string() }) {
+ * class User extends Schema("users", { id: t.integer().primaryKey().dbGenerated(), email: t.string() }) {
  *   get domain(): string {
  *     return this.email.split("@")[1] ?? "";
  *   }

@@ -9,10 +9,10 @@ import { EmbeddedSchema, Schema, t, cast } from "egon-orm";
 class Address extends EmbeddedSchema({
   street: t.string(),
   city: t.string(),
-  postcode: t.string().nullable(),
+  postCode: t.string().nullable(),
 }) {
   static changeset(address: Address | typeof Address, params: unknown) {
-    return cast(address, params, ["street", "city", "postcode"]).validateRequired(["street", "city"]);
+    return cast(address, params, ["street", "city", "postCode"]).validateRequired(["street", "city"]);
   }
 }
 

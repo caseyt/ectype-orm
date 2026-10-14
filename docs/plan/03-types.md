@@ -26,7 +26,7 @@ t.json<T>()                                      // jsonb
 t.array(inner)   t.enum(["a", "b"])   t.enum({ a: 1, b: 2 })
 t.type(customType)
 
-// There is no `id` type: a key is t.integer().primaryKey(), a foreign key t.integer().
+// There is no `id` type: a serial key is t.integer().primaryKey().dbGenerated(), a foreign key t.integer().
 
 const Money = defineType<Money, string>({
   name: "money",

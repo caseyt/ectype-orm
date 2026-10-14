@@ -297,7 +297,7 @@ const emptyList = (): unknown[] => [];
  * @example
  * ```ts
  * const fields = {
- *   id: t.integer().primaryKey(),
+ *   id: t.integer().primaryKey().dbGenerated(),
  *   email: t.string(),
  *   role: t.enum(["admin", "member"]).default("member"),
  *   tags: t.array(t.string()).nullable(),
@@ -357,7 +357,7 @@ export interface FieldTypes {
  * @example
  * ```ts
  * class User extends Schema("users", {
- *   id: t.integer().primaryKey(),
+ *   id: t.integer().primaryKey().dbGenerated(),
  *   email: t.string(),
  *   name: t.string().nullable(),
  *   passwordHash: t.string().redact().column("pw_hash"),
@@ -451,7 +451,7 @@ export type TimestampFields<C extends string | false, U extends string | false> 
  * @example
  * ```ts
  * class Post extends Schema("posts", {
- *   id: t.integer().primaryKey(),
+ *   id: t.integer().primaryKey().dbGenerated(),
  *   title: t.string(),
  *   ...timestamps(),                                  // createdAt, updatedAt
  * }) {}

@@ -111,7 +111,7 @@ interface RowLike {
 // ---------------------------------------------------------------------------
 
 function columnNamer(label: string, naming: unknown): (field: string) => string {
-  if (naming === undefined || naming === "snake_case") return camelToSnake;
+  if (naming === "snake_case") return camelToSnake;
   if (naming === "camelCase") return (field) => field;
   if (typeof naming === "function") {
     return (field) => {
@@ -615,7 +615,7 @@ function defineSchema(
  * @example
  * ```ts
  * class User extends Schema("users", {
- *   id: t.integer().primaryKey(),
+ *   id: t.integer().primaryKey().dbGenerated(),
  *   email: t.string(),
  *   name: t.string().nullable(),
  *   ...timestamps(),
@@ -660,7 +660,7 @@ export function Schema<const F extends FieldsShape>(
  * }) {}
  *
  * class User extends Schema("users", {
- *   id: t.integer().primaryKey(),
+ *   id: t.integer().primaryKey().dbGenerated(),
  *   address: t.embedOne(() => Address).nullable(),
  * }) {}
  * ```

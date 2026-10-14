@@ -115,7 +115,7 @@ class Book extends Schema("books", {
 class Address extends EmbeddedSchema({
   street: t.string(),
   city: t.string(),
-  postcode: t.string().nullable(),
+  postCode: t.string().nullable(),
 }) {}
 
 class Shop extends Schema("shops", {
