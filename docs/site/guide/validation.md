@@ -65,10 +65,13 @@ type ValidationIssue = { path: PropertyKey | readonly PropertyKey[]; message: st
 merged into the error's `meta`, so it can fill `{placeholders}` in the message.
 
 Return an array, even for one issue: `[{ path: "email", message: "is taken" }]`. An empty
-array, `undefined` (no `return`) and `null` mean no issues. Anything else is a bug in
+array and `undefined` (no `return`) mean no issues; so does `null` at run time, for
+untyped code, although the type does not include it. Anything else is a bug in
 the function, and `validate` throws a `TypeError` that says what it got: a single issue
 without its array, a string, a number, any other object. With `validateAsync`, the same
 holds for what the promise resolves to, and the promise rejects with the `TypeError`.
+This includes a function typed as returning `void`, which TypeScript lets return a
+value: `(v) => seen.push(v)` returns a number, so write `(v) => { seen.push(v); }`.
 
 `ctx.data` is the record before the changes: the loaded row, or, for a new record, an
 object of the field defaults (`undefined` for a field without one). It is never `null`.

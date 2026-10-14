@@ -502,6 +502,27 @@ describe("validate: a function's result that is not an array", () => {
     expect(() => cs.validate(() => long as never)).toThrow(`the string "${"x".repeat(60)}…".`);
   });
 
+  test("a string of exactly 60 characters is shown whole", () => {
+    const cs = cast(User, {}, []);
+    const sixty = "y".repeat(60);
+    expect(() => cs.validate(() => sixty as never)).toThrow(`but it returned the string "${sixty}".`);
+  });
+
+  test("shortening never splits a character made of two code units", () => {
+    const cs = cast(User, {}, []);
+    const text = `${"x".repeat(59)}😀 and more`;
+    expect(() => cs.validate(() => text as never)).toThrow(`the string "${"x".repeat(59)}…".`);
+    const fits = `${"x".repeat(58)}😀 and more`;
+    expect(() => cs.validate(() => fits as never)).toThrow(`the string "${"x".repeat(58)}😀…".`);
+  });
+
+  test("an object whose message is not a string is not called a single issue", () => {
+    const cs = cast(User, {}, []);
+    expect(() => cs.validate(() => ({ path: "email", message: 5 }) as never)).toThrow(
+      "but it returned an object that is not an array.",
+    );
+  });
+
   test("other kinds of value name their type", () => {
     const cs = cast(User, {}, []);
     expect(() => cs.validate(() => 5n as never)).toThrow("but it returned the bigint 5.");

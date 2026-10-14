@@ -21,9 +21,13 @@ cs.validate(() => ({ path: "email", message: "is taken" })); // valid
 cs.validate(() => "is taken");                               // valid
 ```
 
-The type checker rejects both returns when the function is typed against `ValidatorFn`,
-but not when the function comes from JavaScript, from code typed loosely (`any`, a cast,
-a helper returning `unknown`), or from an async function whose promise type was widened.
+The type checker rejects both returns when the function is written against
+`ValidatorFn`, but not when the function comes from JavaScript, from code typed loosely
+(`any`, a cast, a helper returning `unknown`), from an async function whose promise type
+was widened, or when it is typed as returning `void`. The contract's return type includes
+`void` on purpose (so that a function with no `return` is accepted), and TypeScript lets a
+function typed `(…) => void` return any value: `const logOnly: (v: unknown) => void = (v)
+=> seen.push(v)` is a valid `ValidatorFn` and returns a number at run time.
 In all those cases the mistake is silent, and the failure it causes (invalid data
 accepted) is the one a validator exists to prevent. Step 06 left the question to the
 owner because the answer changes the contract's documented behaviour.
@@ -46,15 +50,15 @@ Schema result of the wrong shape each throw a `TypeError`.
 
 ## Decision
 
-**Option 2**, decided by the owner on 2026-10-14.
+**Option 2**, decided by the owner on 2026-10-14: a validator function's result that is
+not a list of issues or nothing throws.
 
 A validator function given to `validate`, `validateAsync`, `validateField` or
 `validateFieldAsync` may return, or resolve to:
 
 - an **array** (an `Array.isArray` value) of issues, empty or not;
 - **nothing**: `undefined`, which is what a function without a `return` gives;
-- **`null`**, which untyped code commonly returns for "nothing". The contract's type does
-  not include `null`; the run time keeps accepting it as before.
+- **`null`**, for now (see "Open question" below).
 
 Anything else throws a `TypeError` (from the async forms, the promise rejects with it).
 The message names the method, shows an example of a valid result and says what was
@@ -67,6 +71,16 @@ validate(): a validator function must return an array of issues, such as
 [{ path: "email", message: "is invalid" }], or nothing, but it returned a single issue,
 not an array. Put it in an array: return [issue].
 ```
+
+### Open question: `null`
+
+The owner's decision does not say whether `null` counts as "nothing". It is accepted at
+run time, as it was before, as the coordinator's interim choice while the question is
+with the owner. The arguments: untyped code often returns `null` for "nothing", and
+`null` cannot be the forgotten-brackets mistake this decision is about. Against it: the
+contract's type does not include `null` (`() => null` is a type error), so the run time
+is more lenient than the type. The alternative is to make `null` throw like every other
+non-list value. This ADR will be amended with the owner's answer.
 
 Standard Schemas are not affected: their result shape is defined by the Standard Schema
 specification and was already checked.
@@ -82,4 +96,8 @@ specification and was already checked.
 - The check runs only after `Array.isArray` has failed, so the passing path costs nothing
   more (the function-validator benchmark stays at about 85 ns).
 - A validator that returned some other value to mean "no issues" now throws at its first
-  run. Such code did not type-check against the contract.
+  run. Such code did not type-check against the contract, except a function typed as
+  returning `void`, which TypeScript lets return any value (`(v) => seen.push(v)`,
+  `(v) => map.set(k, v)`). Such a function now throws too, which is what the owner's
+  rule asks for: a `void` function that happens to return a value is indistinguishable
+  at run time from one that returns the wrong thing.

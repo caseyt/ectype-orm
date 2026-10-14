@@ -366,13 +366,22 @@ const ISSUE_EXAMPLE = '[{ path: "email", message: "is invalid" }]';
 const FIELD_ISSUE_EXAMPLE = '[{ path: [], message: "is invalid" }]';
 const SHOWN_LENGTH = 60;
 
+/**
+ * `text` cut to {@link SHOWN_LENGTH} code units with a `…` mark, one unit shorter when the
+ * cut would split a surrogate pair (which would show as an escaped lone surrogate).
+ */
+function shorten(text: string): string {
+  if (text.length <= SHOWN_LENGTH) return text;
+  const last = text.charCodeAt(SHOWN_LENGTH - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? SHOWN_LENGTH - 1 : SHOWN_LENGTH;
+  return `${text.slice(0, end)}…`;
+}
+
 /** What a validator function returned instead of an array, for the error message. */
 function describeResult(result: unknown): string {
   switch (typeof result) {
-    case "string": {
-      const shown = result.length > SHOWN_LENGTH ? `${result.slice(0, SHOWN_LENGTH)}…` : result;
-      return `the string ${JSON.stringify(shown)}`;
-    }
+    case "string":
+      return `the string ${JSON.stringify(shorten(result))}`;
     case "number":
     case "bigint":
     case "boolean":
