@@ -200,13 +200,14 @@ function adults(): Expr<boolean, { minAge: number }> {
   return u.age.gte(param("minAge", t.integer()));
 }
 
-function anyCondition(condition: Expr<boolean | null, SomeParams>) {
-  return condition;
+// Accepts any condition; returns nothing that carries it.
+function isNegation(condition: Expr<boolean | null, SomeParams>): boolean {
+  return condition.node.kind === "unary" && condition.node.op === "not";
 }
 // #endregion named-params-helper
 
 export function helpers() {
-  return anyCondition(adults());
+  return isNegation(adults());
 }
 
 export function logic() {

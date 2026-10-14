@@ -407,7 +407,7 @@ describe("round 1 review", () => {
   test("fragment refuses an order item and plain objects, and binds the value kinds it lists", () => {
     expect(() => fragment`${u.name.asc() as never}`).toThrow(/fragment\(\) was given an order item/);
     expect(() => fragment`${{ theme: "dark" } as never}`).toThrow(
-      /For a JSON object pass val\(object, t.json\(\)\)/,
+      /For a JSON value pass val\(value, t.json\(\)\)/,
     );
     expect(() => fragment`${new Map() as never}`).toThrow(QueryError);
     const when = new Date("2026-01-01T00:00:00Z");
@@ -470,5 +470,26 @@ describe("round 1 review", () => {
     );
     expect(exists(asSubquery(postsByViews(1))).named).toEqual([]);
     expect(param("x", t.integer()).named.map((node) => node.name)).toEqual(["x"]);
+  });
+});
+
+describe("round 2 review", () => {
+  test("fragment refuses symbols, functions, and arrays that hold expressions or objects", () => {
+    const message =
+      /fragment\(\) binds strings, numbers, bigints, booleans, dates, bytes, null, and arrays of those/;
+    expect(() => fragment`f(${Symbol("x") as never})`).toThrow(message);
+    expect(() => fragment`f(${(() => 1) as never})`).toThrow(message);
+    expect(() => fragment`f(${[u.id, u.email] as never})`).toThrow(/An array of expressions is not bound/);
+    expect(() => fragment`f(${[[1], [u.id]] as never})`).toThrow(message);
+    expect(() => fragment`f(${[{ a: 1 }] as never})`).toThrow(message);
+    expect(() => fragment`f(${[u.name.asc()] as never})`).toThrow(message);
+    const when = new Date("2026-01-01T00:00:00Z");
+    expect(fragment`f(${[[1, 2], [3, null]]}, ${[when, "a", 1n, true]})`.params).toEqual([
+      [
+        [1, 2],
+        [3, null],
+      ],
+      [when, "a", 1n, true],
+    ]);
   });
 });

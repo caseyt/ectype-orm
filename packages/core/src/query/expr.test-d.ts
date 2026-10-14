@@ -529,3 +529,88 @@ describe("fragment interpolations", () => {
     fragment`${{ theme: "dark" }}`;
   });
 });
+
+describe("window specs keep their named parameters (review round 2)", () => {
+  const mp = param("minAge", t.integer());
+  const frame = fragment`ROWS ${param("rows", t.integer())} PRECEDING`;
+  test("each member on its own", () => {
+    expectTypeOf(sum(p.views).over({ partitionBy: [mp] })).toEqualTypeOf<
+      Aggregate<number | null, { minAge: number }>
+    >();
+    expectTypeOf(sum(p.views).over({ orderBy: [u.age.add(mp).desc()] })).toEqualTypeOf<
+      Aggregate<number | null, { minAge: number }>
+    >();
+    expectTypeOf(sum(p.views).over({ orderBy: [mp] })).toEqualTypeOf<
+      Aggregate<number | null, { minAge: number }>
+    >();
+    expectTypeOf(sum(p.views).over({ frame })).toEqualTypeOf<Aggregate<number | null, { rows: number }>>();
+    expectTypeOf(sum(p.views).over({})).toEqualTypeOf<Aggregate<number | null, NoParams>>();
+  });
+
+  test("members together", () => {
+    expectTypeOf(sum(p.views).over({ partitionBy: [mp], frame })).toEqualTypeOf<
+      Aggregate<number | null, { minAge: number; rows: number }>
+    >();
+    expectTypeOf(sum(p.views).over({ partitionBy: [p.authorId], orderBy: [mp.desc()], frame })).toEqualTypeOf<
+      Aggregate<number | null, { minAge: number; rows: number }>
+    >();
+    expectTypeOf(sum(p.views).over({ partitionBy: [p.authorId], orderBy: [p.id] })).toEqualTypeOf<
+      Aggregate<number | null, NoParams>
+    >();
+  });
+});
+
+describe("unknown parameters (SomeParams) stay unknown through every combinator (review round 2)", () => {
+  function erased(): Expr<boolean, SomeParams> {
+    return u.age.gte(param("minAge", t.integer()));
+  }
+  const known = u.email.eq("x");
+  test("the result needs unknown parameters, so it is not an Expr with none", () => {
+    expectTypeOf<ParamsOf<ReturnType<typeof and<[Expr<boolean, SomeParams>, typeof known]>>>>().toBeNever();
+    // @ts-expect-error and()
+    const a: Expr<boolean> = and(erased(), known);
+    // @ts-expect-error or()
+    const b: Expr<boolean> = or(known, erased());
+    // @ts-expect-error not()
+    const c: Expr<boolean> = not(erased());
+    // @ts-expect-error .and()
+    const d: Expr<boolean> = known.and(erased());
+    // @ts-expect-error .or() on the unknown side
+    const e: Expr<boolean> = erased().or(known);
+    // @ts-expect-error coalesce
+    const f: Expr<number> = coalesce(u.age, fragment`${erased()}`.as<number>());
+    // @ts-expect-error fragment
+    const g: Expr<unknown> = fragment`${known} AND ${erased()}`;
+    // @ts-expect-error caseWhen (condition)
+    const h: Expr<string> = caseWhen(erased(), "a").else("b");
+    // @ts-expect-error caseWhen (value)
+    const i: Expr<boolean | null> = caseWhen(known, erased());
+    // @ts-expect-error aggregate filter
+    const j: Expr<number> = count().filter(erased());
+    // @ts-expect-error aggregate over
+    const k: Expr<number> = count().over({ partitionBy: [erased()] });
+    // @ts-expect-error comparison with it
+    const l: Expr<boolean> = p.published.eq(erased());
+    void [a, b, c, d, e, f, g, h, i, j, k, l];
+  });
+
+  test("declared parameters compose as before", () => {
+    function adults(): Expr<boolean, { minAge: number }> {
+      return u.age.gte(param("minAge", t.integer()));
+    }
+    expectTypeOf(and(adults(), known)).toEqualTypeOf<Expr<boolean, { minAge: number }>>();
+    expectTypeOf(fragment`${adults()}`).toEqualTypeOf<Expr<unknown, { minAge: number }>>();
+  });
+});
+
+describe("fragment arrays (review round 2)", () => {
+  test("hold values, not expressions", () => {
+    fragment`${[1, 2]} ${[["a"], ["b", null]]} ${[new Date()]}`;
+    // @ts-expect-error an array of expressions is not one parameter
+    fragment`${[u.id, u.email]}`;
+    // @ts-expect-error nor of objects
+    fragment`${[{ a: 1 }]}`;
+    // @ts-expect-error a symbol is not bound
+    fragment`${Symbol("x")}`;
+  });
+});

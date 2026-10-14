@@ -18,7 +18,7 @@ import {
   type SomeParams,
 } from "./expr.js";
 import { asSubquery, columns, postsByViews, show } from "./expr-fixtures.js";
-import { coalesce, lit, param, val } from "./functions.js";
+import { coalesce, lit, now, param, sum, val } from "./functions.js";
 
 const u = columns(User, "u");
 const p = columns(Post, "p");
@@ -586,5 +586,73 @@ describe("named parameters", () => {
     expect(() => coalesce(u.age.add(param("n", t.integer())), param("n", t.string()) as never)).toThrow(
       message,
     );
+  });
+});
+
+describe("redaction through value-preserving wrappers (review round 2)", () => {
+  test("a parameter under cast, lower, arithmetic or concat beside a redacted field is redacted", () => {
+    expect(shown(u.passwordHash.eq(val("s").cast(t.string())))).toBe(
+      '(eq u.password_hash (cast $"s"! :string))',
+    );
+    expect(shown(u.passwordHash.lower().eq(val("s").lower()))).toBe(
+      '(eq lower(u.password_hash) lower($"s"!))',
+    );
+    expect(shown(u.passwordHash.eq(val("a").concat("b")))).toBe(
+      '(eq u.password_hash (concat $"a"! $"b":string!))',
+    );
+    expect(shown(l.secret.eq(val("a").upper().cast(t.string())))).toBe(
+      '(eq l.secret (cast upper($"a"!) :string))',
+    );
+    expect(shown(u.passwordHash.eq(coalesce(val<string | null>(null), "x")))).toBe(
+      '(eq u.password_hash coalesce($null!, $"x"!))',
+    );
+    expect(shown(u.passwordHash.eq(param("p", t.string()).lower()))).toBe(
+      "(eq u.password_hash lower(:p:string!))",
+    );
+  });
+
+  test("in either order", () => {
+    expect(shown(val("s").cast(t.string()).eq(u.passwordHash))).toBe(
+      '(eq (cast $"s"! :string) u.password_hash)',
+    );
+    expect(shown(val("s").lower().eq(u.passwordHash.lower()))).toBe(
+      '(eq lower($"s"!) lower(u.password_hash))',
+    );
+  });
+
+  test("a value-preserving wrapper keeps marking; a comparison or aggregate is not entered", () => {
+    const viaNeg = redacted(val(1).neg());
+    expect(show(viaNeg.node)).toBe("(neg $1!)");
+    const viaPath = redacted(val({ a: "s" }).path("a"));
+    expect(viaPath.node.kind === "jsonPath" && viaPath.node.expr).toMatchObject({
+      kind: "param",
+      redact: true,
+    });
+    const comparison = val<string>("s").eq("t");
+    expect(redacted(comparison)).toBe(comparison);
+    const notNeg = val(true).not();
+    expect(redacted(notNeg)).toBe(notNeg);
+    const plainFn = u.email.lower();
+    expect(redacted(plainFn)).toBe(plainFn);
+    const otherFn = now();
+    expect(redacted(otherFn)).toBe(otherFn);
+    const otherOp = val<number>(1).add(u.age);
+    expect(show(redacted(otherOp).node)).toBe("(add $1! u.age)");
+    const neither = u.age.add(u.lockVersion);
+    expect(redacted(neither)).toBe(neither);
+    const castColumn = u.age.cast(t.string());
+    expect(redacted(castColumn)).toBe(castColumn);
+    const pathOfColumn = u.settings.path("a");
+    expect(redacted(pathOfColumn)).toBe(pathOfColumn);
+    const negColumn = u.age.neg();
+    expect(redacted(negColumn)).toBe(negColumn);
+    const count = redacted(sum(val(1) as never));
+    expect(show(count.node)).toBe("sum($1)");
+  });
+
+  test("marked expressions stay consistent with their nodes", () => {
+    const e = u.passwordHash.eq(param("p", t.string()).lower().concat(val("x")));
+    expectConsistent(e);
+    expect(e.named[0]?.redact).toBe(true);
   });
 });

@@ -112,17 +112,13 @@ type Value = NonNullable<unknown> | null;
  * What a `fragment` interpolation takes: an expression, a query, or a value bound as a
  * parameter. Not an order item, and not a plain object (no type to write it with).
  */
-type FragmentValue =
-  | Expr<unknown, SomeParams>
-  | SubqueryOperand<unknown, SomeParams>
-  | string
-  | number
-  | bigint
-  | boolean
-  | Date
-  | Uint8Array
-  | readonly unknown[]
-  | null;
+type FragmentValue = Expr<unknown, SomeParams> | SubqueryOperand<unknown, SomeParams> | BoundValue;
+
+/**
+ * A value a fragment binds as one parameter: a scalar, or an array of them (one array
+ * parameter). An array never holds an expression: it would be sent as an object, not as SQL.
+ */
+type BoundValue = string | number | bigint | boolean | Date | Uint8Array | null | readonly BoundValue[];
 
 /** A boolean expression, as `filter`, `caseWhen` and the logical functions take it. */
 type Condition = Expr<boolean | null, SomeParams>;
@@ -157,8 +153,12 @@ export interface WindowSpec {
 
 type ElementOf<X> = X extends readonly (infer E)[] ? E : never;
 
+/** One member of a window spec, `never` when the spec does not have it. */
+type Member<W, K extends string> = W extends { readonly [P in K]?: infer V } ? Exclude<V, undefined> : never;
+
+/** The named parameters of a window spec's expressions: `partitionBy`, `orderBy` and `frame`. */
 type WindowParams<W extends WindowSpec> = ParamsOfAll<
-  readonly (ElementOf<W["partitionBy"]> | ElementOf<W["orderBy"]> | Exclude<W["frame"], undefined>)[]
+  readonly (ElementOf<Member<W, "partitionBy">> | ElementOf<Member<W, "orderBy">> | Member<W, "frame">)[]
 >;
 
 /**
@@ -946,20 +946,37 @@ function fragmentTag(strings: TemplateStringsArray, ...args: unknown[]): AnyExpr
  */
 function fragmentArgument(value: unknown): AnyExpr {
   if (value instanceof Expr) return value;
-  if (typeof value === "object" && value !== null) {
-    if (isSubqueryOperand(value)) return subqueryOf(value, "fragment");
-    if (value instanceof OrderExpr) {
-      throw new QueryError(
-        "fragment() was given an order item (asc() or desc()), which is not an expression. Interpolate the expression, and write ASC or DESC in the template.",
-      );
-    }
-    if (!Array.isArray(value) && !(value instanceof Date) && !(value instanceof Uint8Array)) {
-      throw new QueryError(
-        "fragment() binds strings, numbers, bigints, booleans, dates, bytes, arrays and null. For a JSON object pass val(object, t.json()).",
-      );
-    }
+  if (typeof value === "object" && value !== null && isSubqueryOperand(value))
+    return subqueryOf(value, "fragment");
+  if (value instanceof OrderExpr) {
+    throw new QueryError(
+      "fragment() was given an order item (asc() or desc()), which is not an expression. Interpolate the expression, and write ASC or DESC in the template.",
+    );
+  }
+  if (value !== undefined && !isBoundValue(value)) {
+    throw new QueryError(
+      "fragment() binds strings, numbers, bigints, booleans, dates, bytes, null, and arrays of those (one array parameter). An array of expressions is not bound: interpolate each expression on its own. For a JSON value pass val(value, t.json()).",
+    );
   }
   return toOperand(value, undefined, false, "fragment", false, true);
+}
+
+/** Whether `value` is a {@link BoundValue}: a scalar, or an array of them at any depth. */
+function isBoundValue(value: unknown): boolean {
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "bigint":
+    case "boolean":
+      return true;
+    case "object":
+      if (value === null || value instanceof Date || value instanceof Uint8Array) return true;
+      if (!Array.isArray(value)) return false;
+      for (const item of value as readonly unknown[]) if (!isBoundValue(item)) return false;
+      return true;
+    default:
+      return false;
+  }
 }
 
 function ident(name: string): AnyExpr {

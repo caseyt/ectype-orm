@@ -24,6 +24,7 @@ import {
   betweenNode,
   binaryNode,
   castNode,
+  collectParams,
   columnNode,
   fnNode,
   foldShape,
@@ -34,6 +35,7 @@ import {
   naryNode,
   orderNode,
   paramNode,
+  shapeOf,
   shapeOfBetween,
   shapeOfBinary,
   shapeOfCast,
@@ -41,7 +43,6 @@ import {
   shapeOfJsonPath,
   shapeOfList,
   shapeOfLiteral,
-  shapeOfNamedParam,
   shapeOfOrder,
   shapeOfParam,
   shapeOfUnary,
@@ -70,10 +71,18 @@ export type NoParams = Record<never, never>;
  * requirement, so `Expr` is contravariant in them: an expression that needs `minAge` is not
  * an `Expr<boolean>` (which needs none), and `never` is the type every requirement accepts.
  *
+ * **A constraint only.** Use it to accept any expression (a parameter type, a generic
+ * constraint), never as a return or variable type: an expression typed with it has
+ * requirements nobody knows, and so does everything built from it, so a query made from it
+ * cannot be executed. A function that returns an expression declares the parameters it
+ * uses: `Expr<boolean, { minAge: number }>`.
+ *
  * @example
  * ```ts
- * function isCondition(value: Expr<boolean | null, SomeParams>): void {}
- * isCondition(u.age.gte(param("minAge", t.integer())));
+ * function describe(condition: Expr<boolean | null, SomeParams>): string {
+ *   return condition.node.kind;
+ * }
+ * describe(u.age.gte(param("minAge", t.integer())));
  * ```
  */
 export type SomeParams = never;
@@ -113,17 +122,33 @@ export type ParamsOf<X> = X extends { readonly "~expr": { readonly params: (para
       ? Q
       : NoParams;
 
+/** `true` when some member of the union `X` has unknown named parameters (`SomeParams`). */
+type HasSomeParams<X> = true extends (
+  X extends unknown
+    ? [ParamsOf<X>] extends [never]
+      ? true
+      : false
+    : never
+)
+  ? true
+  : false;
+
 /**
- * The named parameters of every element of a list of operands, together.
+ * The named parameters of every element of a list of operands, together. When any element's
+ * parameters are unknown (`SomeParams`, that is `never`), so are the result's: an unknown
+ * requirement is never widened to "no parameters".
  *
  * @example
  * ```ts
  * type P = ParamsOfAll<[Expr<number, { a: number }>, string]>; // { a: number }
+ * type Q = ParamsOfAll<[Expr<number, SomeParams>, string]>; // never
  * ```
  */
 export type ParamsOfAll<A extends readonly unknown[]> = [A[number]] extends [never]
   ? NoParams
-  : Simplify<UnionToIntersection<ParamsOf<A[number]>>>;
+  : HasSomeParams<A[number]> extends true
+    ? SomeParams
+    : Simplify<UnionToIntersection<ParamsOf<A[number]>>>;
 
 /**
  * The value type of an operand: `T` for an `Expr<T>`, the value's own type otherwise.
@@ -1345,45 +1370,89 @@ export function toOperand(
   );
 }
 
+/** The functions whose result is made of their arguments' values, so a secret argument makes a secret result. */
+const VALUE_FUNCTIONS: ReadonlySet<string> = new Set([
+  "lower",
+  "upper",
+  "coalesce",
+  "arrayAppend",
+  "arrayRemove",
+]);
+/** The binary operators whose result is made of their operands' values. */
+const VALUE_OPERATORS: ReadonlySet<string> = new Set(["add", "sub", "mul", "div", "mod", "concat"]);
+
 /**
- * The same expression with its parameter marked `redact`, when it is a bare parameter
- * (`val(x)`, `param(…)`) that is not marked yet; otherwise the expression itself.
+ * `node` with every parameter it carries a value through marked `redact`: a bare parameter,
+ * and the parameters under value-preserving wrappers (`cast`, unary `-`, `lower`, `upper`,
+ * `coalesce`, the array functions, arithmetic, `concat`, a JSON path's value). Comparisons,
+ * aggregates and subqueries are not entered: their results are not the value. The same
+ * node object when nothing changes.
+ */
+function redactNode(node: ExprNode): ExprNode {
+  switch (node.kind) {
+    case "param":
+      return node.redact ? node : paramNode(node.value, node.type, true);
+    case "namedParam":
+      return node.redact ? node : namedParamNode(node.name, node.type, true);
+    case "cast": {
+      const inner = redactNode(node.expr);
+      return inner === node.expr ? node : castNode(inner, node.type);
+    }
+    case "unary": {
+      if (node.op !== "neg") return node;
+      const inner = redactNode(node.operand);
+      return inner === node.operand ? node : unaryNode(node.op, inner);
+    }
+    case "fn": {
+      if (!VALUE_FUNCTIONS.has(node.name)) return node;
+      let changed = false;
+      const args = node.args.map((arg) => {
+        const marked = redactNode(arg);
+        if (marked !== arg) changed = true;
+        return marked;
+      });
+      return changed ? fnNode(node.name, args) : node;
+    }
+    case "binary": {
+      if (!VALUE_OPERATORS.has(node.op)) return node;
+      const left = redactNode(node.left);
+      const right = redactNode(node.right);
+      return left === node.left && right === node.right ? node : binaryNode(node.op, left, right);
+    }
+    case "jsonPath": {
+      const inner = redactNode(node.expr);
+      return inner === node.expr ? node : jsonPathNode(inner, node.path, node.asText);
+    }
+    default:
+      return node;
+  }
+}
+
+/**
+ * The same expression with the parameters it carries a value through marked `redact`
+ * (see `redactNode`): `val(x)`, `param(…)`, and either under `cast`, `lower()`, arithmetic,
+ * `concat` and the like. The expression itself when there is nothing to mark. Used where a
+ * value meets a redacted field, so it is not on the path of ordinary comparisons.
  *
  * @example
  * ```ts
- * redacted(val("secret")).node; // { kind: "param", value: "secret", type: undefined, redact: true }
+ * redacted(val("secret").cast(t.string())).node; // cast(param "secret", redact: true)
  * ```
  */
 export function redacted(value: AnyExpr): AnyExpr {
-  const node = value.node;
-  switch (node.kind) {
-    case "param":
-      if (node.redact) return value;
-      return new Expr(
-        paramNode(node.value, node.type, true),
-        value.type,
-        value.redact,
-        value.params,
-        value.lists,
-        value.named,
-        shapeOfParam(node.type, true),
-      );
-    case "namedParam": {
-      if (node.redact) return value;
-      const marked = namedParamNode(node.name, node.type, true);
-      return new Expr(
-        marked,
-        value.type,
-        value.redact,
-        value.params,
-        value.lists,
-        [marked],
-        shapeOfNamedParam(node.name, node.type, true),
-      );
-    }
-    default:
-      return value;
-  }
+  const node = redactNode(value.node);
+  if (node === value.node) return value;
+  const named: NamedParamNode[] = [];
+  collectParams(node, [], undefined, named);
+  return new Expr(
+    node,
+    value.type,
+    value.redact,
+    value.params,
+    value.lists,
+    named.length === 0 ? NONE : named,
+    shapeOf(node),
+  );
 }
 
 /** A comparison: the operand takes the left side's type and `redact`; `null` is refused. */

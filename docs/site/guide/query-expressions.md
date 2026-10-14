@@ -22,8 +22,9 @@ The value takes the type of the other side, and is written to the driver with it
 
 A value compared with a [redacted](/guide/schemas#fields) field (`.redact()`) is redacted
 too: it is hidden in logs and telemetry, like the field. That holds in either order
-(`val(x).eq(u.passwordHash)`), for an explicit `val(x)` and a named parameter, and for a
-`caseWhen` with a redacted branch.
+(`val(x).eq(u.passwordHash)`), for an explicit `val(x)` and a named parameter, for a value
+inside a wrapper that keeps it (`cast`, `lower()`, `upper()`, `coalesce`, arithmetic,
+`concat`), and for a `caseWhen` with a redacted branch.
 
 ## Operators
 
@@ -145,9 +146,10 @@ become SQL text and every interpolation becomes an expression or a bound paramet
 - A dynamic identifier goes through `fragment.ident(name)`, which checks it against
   `/^[A-Za-z_][A-Za-z0-9_$]*$/` and quotes it.
 - An interpolated query becomes a subquery.
-- A value is bound: a string, number, bigint, boolean, `Date`, bytes, an array or `null`.
-  An order item (`u.name.asc()`) and a plain object are refused; bind a JSON object with
-  `val(object, t.json())`.
+- A value is bound: a string, number, bigint, boolean, `Date`, bytes or `null`, or an
+  array of those (one array parameter). An order item (`u.name.asc()`), a plain object,
+  and an array that holds expressions are refused: interpolate each expression on its
+  own, and bind a JSON value with `val(value, t.json())`.
 
 ## Explicit values and types
 
@@ -171,7 +173,11 @@ and type are part of the expression's type, so the query knows which parameters 
 The parameters are a requirement, so they cannot be typed away: a helper that returns
 `u.age.gte(param("minAge", t.integer()))` must say so in its return type,
 `Expr<boolean, { minAge: number }>`; `Expr<boolean>` (no parameters) does not compile.
-`Expr<boolean, SomeParams>` accepts a condition whatever parameters it needs.
+
+`SomeParams` is for accepting an expression whatever parameters it needs, as the type of a
+function's parameter. Never use it as a return or variable type: the parameters would be
+unknown, everything built from that expression would carry unknown parameters too, and a
+query made from it cannot be run.
 
 <<< @/examples/query-expressions.ts#named-params-helper
 
