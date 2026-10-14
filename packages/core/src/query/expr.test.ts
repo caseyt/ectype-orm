@@ -18,7 +18,7 @@ import {
   type SomeParams,
 } from "./expr.js";
 import { asSubquery, columns, postsByViews, show } from "./expr-fixtures.js";
-import { coalesce, lit, now, param, sum, val } from "./functions.js";
+import { caseWhen, coalesce, fragment, lit, now, param, sum, val } from "./functions.js";
 
 const u = columns(User, "u");
 const p = columns(Post, "p");
@@ -654,5 +654,33 @@ describe("redaction through value-preserving wrappers (review round 2)", () => {
     const e = u.passwordHash.eq(param("p", t.string()).lower().concat(val("x")));
     expectConsistent(e);
     expect(e.named[0]?.redact).toBe(true);
+  });
+});
+
+describe("redaction through CASE (review round 3)", () => {
+  test("branch results and ELSE are marked, in either order", () => {
+    const c = p.published.eq(true);
+    expect(shown(u.passwordHash.eq(caseWhen(c, val("s", t.string())).else("t")))).toBe(
+      '(eq u.password_hash (case (when (eq p.published $true:boolean) $"s":string!) (else $"t":string!)))',
+    );
+    expect(shown(caseWhen(c, val("s", t.string())).else("t").eq(u.passwordHash))).toBe(
+      '(eq (case (when (eq p.published $true:boolean) $"s":string!) (else $"t":string!)) u.password_hash)',
+    );
+  });
+
+  test("conditions keep their params unmarked", () => {
+    const e = u.passwordHash.eq(caseWhen(u.email.eq("visible"), "a").when(p.views.gt(3), "b"));
+    expect(shown(e)).toBe(
+      '(eq u.password_hash (case (when (eq u.email $"visible":string) $"a"!) (when (gt p.views $3:integer) $"b"!)))',
+    );
+  });
+
+  test("a CASE with nothing to mark, and a fragment, are left as they are", () => {
+    const columns = caseWhen(p.published, u.email).else(u.name);
+    expect(redacted(columns)).toBe(columns);
+    const open = caseWhen(p.published, u.email);
+    expect(redacted(open)).toBe(open);
+    const raw = fragment`lower(${"s"})`;
+    expect(redacted(raw)).toBe(raw);
   });
 });

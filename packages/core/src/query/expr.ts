@@ -23,6 +23,7 @@ import { booleanType, elementTypeOf, jsonType, stringType } from "../types/index
 import {
   betweenNode,
   binaryNode,
+  caseNode,
   castNode,
   collectParams,
   columnNode,
@@ -1358,6 +1359,9 @@ export function toOperand(
     if (!allowNull && isNullOperand(value)) throw nullOperand(method, comparison);
     return redact ? redacted(value) : value;
   }
+  if (value === undefined && allowNull) {
+    throw new QueryError(`${method}() was given undefined, which is not a value. Pass null for SQL NULL.`);
+  }
   if (value === undefined || (value === null && !allowNull)) throw nullOperand(method, comparison);
   return new Expr(
     paramNode(value, type, redact),
@@ -1384,9 +1388,11 @@ const VALUE_OPERATORS: ReadonlySet<string> = new Set(["add", "sub", "mul", "div"
 /**
  * `node` with every parameter it carries a value through marked `redact`: a bare parameter,
  * and the parameters under value-preserving wrappers (`cast`, unary `-`, `lower`, `upper`,
- * `coalesce`, the array functions, arithmetic, `concat`, a JSON path's value). Comparisons,
- * aggregates and subqueries are not entered: their results are not the value. The same
- * node object when nothing changes.
+ * `coalesce`, the array functions, arithmetic, `concat`, a JSON path's value, the results
+ * and `ELSE` of a `CASE`). Comparisons, `CASE` conditions, aggregates and subqueries are not
+ * entered: they are not the value. Nor is a fragment: its SQL is unknown, so its arguments
+ * are deliberately left as they are (mark one with `val(x)` beside the field instead). The
+ * same node object when nothing changes.
  */
 function redactNode(node: ExprNode): ExprNode {
   switch (node.kind) {
@@ -1422,6 +1428,18 @@ function redactNode(node: ExprNode): ExprNode {
     case "jsonPath": {
       const inner = redactNode(node.expr);
       return inner === node.expr ? node : jsonPathNode(inner, node.path, node.asText);
+    }
+    case "case": {
+      // The branch results and the ELSE are the value; the conditions are not.
+      let changed = false;
+      const whens = node.whens.map((branch) => {
+        const result = redactNode(branch.result);
+        if (result === branch.result) return branch;
+        changed = true;
+        return { when: branch.when, result };
+      });
+      const otherwise = node.else === undefined ? undefined : redactNode(node.else);
+      return changed || otherwise !== node.else ? caseNode(whens, otherwise) : node;
     }
     default:
       return node;

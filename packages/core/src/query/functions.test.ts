@@ -378,7 +378,9 @@ describe("fragment", () => {
   });
 
   test("an undefined interpolation is refused", () => {
-    expect(() => fragment`x = ${undefined as never}`).toThrow(/fragment\(\) was given null or undefined/);
+    expect(() => fragment`x = ${undefined as never}`).toThrow(
+      /^fragment\(\) was given undefined, which is not a value\. Pass null for SQL NULL\.$/,
+    );
   });
 
   test("ident accepts identifiers and refuses everything else", () => {

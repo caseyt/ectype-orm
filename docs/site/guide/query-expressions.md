@@ -24,7 +24,10 @@ A value compared with a [redacted](/guide/schemas#fields) field (`.redact()`) is
 too: it is hidden in logs and telemetry, like the field. That holds in either order
 (`val(x).eq(u.passwordHash)`), for an explicit `val(x)` and a named parameter, for a value
 inside a wrapper that keeps it (`cast`, `lower()`, `upper()`, `coalesce`, arithmetic,
-`concat`), and for a `caseWhen` with a redacted branch.
+`concat`, the results and `else` of a `caseWhen`, but not its conditions), and for a
+`caseWhen` with a redacted branch. The arguments of a `fragment` are deliberately left
+as they are, since what the SQL does with them is unknown: wrap a secret in `val(x)` and
+compare it with the field directly.
 
 ## Operators
 
