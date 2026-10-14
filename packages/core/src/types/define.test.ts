@@ -147,6 +147,13 @@ describe("defineType", () => {
       sql: "citext",
     });
 
+    // The copy of a simple column type is frozen as well.
+    for (const kind of ["text", "integer", "jsonb"] as const) {
+      const simple = defineType<string>({ name: "f", db: { kind }, cast: castString });
+      expect(simple.db).toEqual({ kind });
+      expect(Object.isFrozen(simple.db)).toBe(true);
+    }
+
     // Extra properties of the caller's object are not carried over.
     const extra = defineType<string>({
       name: "z",

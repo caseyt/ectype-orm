@@ -32,6 +32,14 @@ describe("isPlainObject", () => {
     ["a Date", new Date(0)],
     ["a Map", new Map()],
     ["a class instance", new Point()],
+    [
+      "an instance of a class that defines its own hasOwnProperty",
+      new (class {
+        hasOwnProperty(): boolean {
+          return true;
+        }
+      })(),
+    ],
     ["a class instance from another realm", runInNewContext("new (class Point { x = 1 })()")],
     ["a Date from another realm", runInNewContext("new Date(0)")],
     ["an object created over an ordinary object", Object.create({ inherited: 1 })],

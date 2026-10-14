@@ -83,6 +83,34 @@ describe("json", () => {
     expect(type.cast([over, a]).success).toBe(false);
   });
 
+  test("the depth limit counts objects as it counts arrays", () => {
+    let objects: unknown = 1;
+    for (let i = 0; i < 400; i++) objects = { v: objects };
+    let around: unknown = objects;
+    for (let i = 0; i < 400; i++) around = [around];
+    // `around` nests 800 deep: 400 arrays around 400 objects.
+    expect(type.cast([objects, around]).success).toBe(false);
+    expect(type.cast([around, objects]).success).toBe(false);
+    expect(type.cast({ a: objects, b: around }).success).toBe(false);
+  });
+
+  test("the depth of a container is that of its deepest child, wherever that child sits", () => {
+    const chain = (levels: number, leaf: unknown): unknown => {
+      let value = leaf;
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+    // The deep child comes first and a shallow one last, in an array and in an object.
+    const deepFirst = [chain(400, 1), 1];
+    expect(type.cast([deepFirst, chain(400, deepFirst)]).success).toBe(false);
+    const deepFirstObject = { deep: chain(400, 1), shallow: 1 };
+    expect(type.cast([deepFirstObject, chain(400, deepFirstObject)]).success).toBe(false);
+    // And in the middle.
+    const deepMiddle = [1, chain(400, 1), [2]];
+    expect(type.cast([deepMiddle, chain(400, deepMiddle)]).success).toBe(false);
+    expect(type.cast([deepMiddle, chain(98, deepMiddle)]).success).toBe(true);
+  });
+
   test("rejects an object that only looks plain", () => {
     const withToJson = Object.assign(Object.create(null), { toJSON: () => 1 });
     expect(type.cast(Object.assign(Object.create(withToJson), { a: 1 })).success).toBe(false);
