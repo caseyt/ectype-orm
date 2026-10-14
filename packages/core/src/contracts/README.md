@@ -128,4 +128,7 @@ Step 07 owns the complete expression node list. The top-level shape of `QueryAst
 rules, the clause nodes, the parameter order and `shape` are frozen now; the **fields of
 individual expression nodes** may still be refined by step 07 (it is their first
 consumer), recorded in its status note. After step 07 merges they are frozen like the
-rest. Known open point: `between` has no node kind of its own.
+rest. Step 07 added the `between` node kind (`BetweenNode`) and renamed a `CASE` branch's
+`then` to `result` (an object with a `then` member is taken for a promise); see
+`docs/plan/status/07.md`. `query/ast.ts` holds the constructors, `collectParams` and
+`shapeOf`.

@@ -110,6 +110,32 @@ export {
   SchemaDefinitionError,
   StaleEntryError,
 } from "./errors.js";
+// Step 07: query expressions. The classes are public as types only: expressions come from
+// columns, operators and these functions.
+export type { Col, Expr, NoParams, Operand, OrderExpr } from "./query/expr.js";
+export type { Aggregate, Case, FragmentFunction, WindowSpec } from "./query/functions.js";
+export {
+  and,
+  arrayAgg,
+  avg,
+  caseWhen,
+  coalesce,
+  count,
+  countDistinct,
+  exists,
+  fragment,
+  jsonAgg,
+  lit,
+  max,
+  min,
+  not,
+  now,
+  or,
+  param,
+  stringAgg,
+  sum,
+  val,
+} from "./query/functions.js";
 export type {
   AssocOrderBy,
   AssocWhere,

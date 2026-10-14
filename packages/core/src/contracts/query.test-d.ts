@@ -229,6 +229,7 @@ describe("ExprNode", () => {
           return true;
         case "unary":
         case "binary":
+        case "between":
         case "nary":
         case "fn":
         case "aggregate":
@@ -255,6 +256,7 @@ describe("ExprNode", () => {
       | "literal"
       | "unary"
       | "binary"
+      | "between"
       | "nary"
       | "fn"
       | "aggregate"
