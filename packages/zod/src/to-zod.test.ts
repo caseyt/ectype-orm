@@ -1,5 +1,5 @@
 import { Org, User, UserSettings } from "@egon-orm/test-support";
-import type { AnySchema, FieldType, Row } from "egon-orm";
+import type { AnySchema, FieldBuilder, FieldType, Row } from "egon-orm";
 import { cast, defineType, EmbeddedSchema, meta, QueryError, Schema, t } from "egon-orm";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
@@ -223,6 +223,147 @@ describe("toZod: field types", () => {
     ) {}
     expect(() => toZod(Broken)).toThrow(QueryError);
     expect(() => toZod(Broken)).toThrow(/zod hint of the type "odd"/);
+  });
+});
+
+describe("toZod: every built-in type with a Zod base", () => {
+  /** One field of a built-in type: a value it holds, one of the wrong kind, and one of the right kind it rejects. */
+  interface Case {
+    readonly builder: FieldBuilder<unknown>;
+    readonly valid: unknown;
+    /** A value of the wrong kind, and the start of Zod's own message for it. */
+    readonly wrongKind: readonly [unknown, RegExp];
+    /** A value of the right kind that the type rejects, and the refinement's message. */
+    readonly rejected?: readonly [unknown, string];
+  }
+  const at = new Date("2026-05-04T09:30:00.123Z");
+  const cases: Record<string, Case> = {
+    string: { builder: t.string(), valid: "text", wrongKind: [1, /expected string/] },
+    integer: { builder: t.integer(), valid: 3, wrongKind: ["3", /expected number/] },
+    bigint: {
+      builder: t.bigint(),
+      valid: 3n,
+      wrongKind: [3, /expected bigint/],
+      rejected: [2n ** 70n, "is invalid"],
+    },
+    bigintNumber: { builder: t.bigint({ mode: "number" }), valid: 3, wrongKind: ["3", /expected number/] },
+    float: { builder: t.float(), valid: 0.5, wrongKind: ["0.5", /expected number/] },
+    decimal: {
+      builder: t.decimal(),
+      valid: "1.5",
+      wrongKind: [1.5, /expected string/],
+      rejected: ["abc", "is invalid"],
+    },
+    boolean: { builder: t.boolean(), valid: true, wrongKind: ["true", /expected boolean/] },
+    uuid: {
+      builder: t.uuid(),
+      valid: "0190f1f4-6c1e-7cc3-9d2a-6c3f0e2b8a11",
+      wrongKind: [1, /expected string/],
+      rejected: ["not-a-uuid", "is not a valid UUID"],
+    },
+    binary: { builder: t.binary(), valid: new Uint8Array([1]), wrongKind: [[1], /^Invalid input$/] },
+    date: {
+      builder: t.date(),
+      valid: "2026-05-04",
+      wrongKind: [1, /expected string/],
+      rejected: ["2026-13-01", "is invalid"],
+    },
+    dateAsDate: {
+      builder: t.date({ as: "date" }),
+      valid: new Date("2026-05-04T00:00:00Z"),
+      wrongKind: ["2026-05-04", /expected date/],
+      rejected: [new Date("2026-05-04T10:00:00Z"), "is invalid"],
+    },
+    time: {
+      builder: t.time(),
+      valid: "09:30:00",
+      wrongKind: [1, /expected string/],
+      rejected: ["25:00:00", "is invalid"],
+    },
+    timestampS: {
+      builder: t.timestamp({ precision: "s" }),
+      valid: new Date("2026-05-04T09:30:00Z"),
+      wrongKind: ["2026-05-04T09:30:00Z", /expected date/],
+      rejected: [at, "is invalid"],
+    },
+    timestampMs: { builder: t.timestamp(), valid: at, wrongKind: ["x", /expected date/] },
+    timestampUs: { builder: t.timestamp({ precision: "us" }), valid: at, wrongKind: ["x", /expected date/] },
+    localTimestampS: {
+      builder: t.localTimestamp({ precision: "s" }),
+      valid: new Date("2026-05-04T09:30:00Z"),
+      wrongKind: ["x", /expected date/],
+      rejected: [at, "is invalid"],
+    },
+    localTimestampMs: { builder: t.localTimestamp(), valid: at, wrongKind: ["x", /expected date/] },
+    localTimestampUs: {
+      builder: t.localTimestamp({ precision: "us" }),
+      valid: at,
+      wrongKind: ["x", /expected date/],
+    },
+  };
+
+  for (const [name, { builder, valid, wrongKind, rejected }] of Object.entries(cases)) {
+    test(`${name}: accepts its values, gives Zod's message for the wrong kind${rejected ? ", and its own for a rejected value" : ""}`, () => {
+      class One extends Schema("ones", { value: builder }, { primaryKey: false }) {}
+      const OneZ = toZod(One);
+      expect(OneZ.safeParse({ value: valid }).success).toBe(true);
+      const [wrong, zodMessage] = wrongKind;
+      const wrongIssues = OneZ.safeParse({ value: wrong }).error?.issues ?? [];
+      expect(wrongIssues.map((issue) => issue.message)).toEqual([expect.stringMatching(zodMessage)]);
+      if (rejected !== undefined) {
+        const [value, message] = rejected;
+        expect(OneZ.safeParse({ value }).error?.issues.map((issue) => issue.message)).toEqual([message]);
+      }
+    });
+  }
+
+  test("a type whose cast makes objects without a prototype accepts any object it casts to an equal one", () => {
+    const Bag = defineType<Record<string, unknown>>({
+      name: "bag",
+      db: { kind: "jsonb" },
+      cast: (input) =>
+        typeof input === "object" && input !== null
+          ? { success: true, data: Object.assign(Object.create(null) as Record<string, unknown>, input) }
+          : { success: false },
+      equal: (a, b) => JSON.stringify(a) === JSON.stringify(b),
+    });
+    class Box extends Schema("boxes", { bag: t.type(Bag) }, { primaryKey: false }) {}
+    expect(rejected(toZod(Box), { bag: { a: 1 } })).toEqual([]);
+    expect(rejected(toZod(Box), { bag: "a" })).toEqual(["bag"]);
+  });
+
+  test("an object the type would convert into another kind of object is not one of its values", () => {
+    // Casts { at: millis } (form input) to a Date; only a Date is a value of the field.
+    const When = defineType<Date>({
+      name: "when",
+      db: { kind: "timestamptz" },
+      cast: (input) =>
+        input instanceof Date
+          ? { success: true, data: input }
+          : typeof input === "object" && input !== null && typeof (input as { at?: unknown }).at === "number"
+            ? { success: true, data: new Date((input as { at: number }).at) }
+            : { success: false },
+      equal: (a, b) => a.getTime() === b.getTime(),
+    });
+    class Slot extends Schema("slots", { when: t.type(When) }, { primaryKey: false }) {}
+    expect(rejected(toZod(Slot), { when: new Date(5) })).toEqual([]);
+    expect(rejected(toZod(Slot), { when: { at: 5 } })).toEqual(["when"]);
+  });
+
+  test("a Date subclass is accepted wherever cast accepts it", () => {
+    class MyDate extends Date {}
+    class Stamps extends Schema(
+      "stamps",
+      { ms: t.timestamp(), us: t.timestamp({ precision: "us" }), day: t.date({ as: "date" }) },
+      { primaryKey: false },
+    ) {}
+    const value = {
+      ms: new MyDate("2026-05-04T09:30:00.123Z"),
+      us: new MyDate("2026-05-04T09:30:00.123Z"),
+      day: new MyDate("2026-05-04T00:00:00Z"),
+    };
+    expect(cast(Stamps, value, ["ms", "us", "day"]).valid).toBe(true);
+    expect(rejected(toZod(Stamps), value)).toEqual([]);
   });
 });
 

@@ -108,9 +108,10 @@ const INVALID = "is invalid";
 
 /**
  * Whether `value` is already a value of `type`: the type casts it to an equal value of the
- * same kind (the same `typeof`, and for objects the same prototype). The kind check
- * matters because a type's `equal` is only defined on its own values: a decimal's would
- * call the number `12.5` equal to the string `"12.50"`.
+ * same kind (the same `typeof`, and for objects an instance of what the type produces: the
+ * cast value's prototype is on the value's prototype chain, so a `Date` subclass passes).
+ * The kind check matters because a type's `equal` is only defined on its own values: a
+ * decimal's would call the number `12.5` equal to the string `"12.50"`.
  */
 function accepts(type: AnyFieldType, value: unknown): boolean {
   if (value === null || value === undefined) return false;
@@ -119,9 +120,14 @@ function accepts(type: AnyFieldType, value: unknown): boolean {
   const data: unknown = result.data;
   if (data === value) return true;
   if (typeof data !== typeof value) return false;
-  if (typeof value === "object" && Object.getPrototypeOf(data) !== Object.getPrototypeOf(value)) return false;
+  if (typeof value === "object" && data !== null) {
+    const expected: unknown = Object.getPrototypeOf(data);
+    if (expected !== null && !protoOf.call(expected, value)) return false;
+  }
   return type.equal(data, value);
 }
+
+const protoOf = Object.prototype.isPrototypeOf;
 
 function hintOf(type: AnyFieldType): z.ZodType | undefined {
   const hint: unknown = (type as Partial<ZodHint>).zod;

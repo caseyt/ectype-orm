@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { User, UserSettings } from "@egon-orm/test-support";
 import type { ValidationIssue } from "egon-orm";
 import { cast } from "egon-orm";
@@ -37,9 +38,10 @@ runScenarios(
   { asyncOnly: true },
 );
 
-// The adapter the guide shows (docs/site/examples/validation.ts, region yup-sync), kept
-// identical to it.
+// The adapter the guide shows (docs/site/examples/validation.ts, region yup-sync). The
+// region below must stay identical to it: a test compares the two sources.
 
+// #region yup-sync
 /** Yup's path text (`settings.theme`, `tags[0]`, `["a.b"]` for a key with a dot) as a list of keys. */
 function yupPath(path: string | undefined): PropertyKey[] {
   const keys: PropertyKey[] = [];
@@ -52,7 +54,7 @@ function yupPath(path: string | undefined): PropertyKey[] {
 }
 
 /** Runs a Yup schema synchronously, as a validator function. */
-function yupSync(schema: yup.AnyObjectSchema) {
+export function yupSync(schema: yup.AnyObjectSchema) {
   return (values: object): ValidationIssue[] => {
     try {
       schema.validateSync(values, { abortEarly: false });
@@ -64,8 +66,23 @@ function yupSync(schema: yup.AnyObjectSchema) {
     }
   };
 }
+// #endregion yup-sync
+
+/** The text of the `yup-sync` region of a source file. */
+function yupSyncRegion(file: URL): string {
+  const source = readFileSync(file, "utf8");
+  const found = /\/\/ #region yup-sync\n([\s\S]*?)\/\/ #endregion yup-sync/.exec(source);
+  if (found?.[1] === undefined) throw new Error(`${file.pathname} has no yup-sync region`);
+  return found[1];
+}
 
 describe("Yup: the synchronous function adapter", () => {
+  test("is the same code as the guide's example", () => {
+    const guide = yupSyncRegion(new URL("../../../../docs/site/examples/validation.ts", import.meta.url));
+    const here = yupSyncRegion(new URL(import.meta.url));
+    expect(here).toBe(guide);
+  });
+
   test("reports field issues, nested paths and cross-field rules with validate", () => {
     const signedUp = cast(User, { email: "not an address", age: "9" }, ["email", "age"]).validate(
       yupSync(signup),
