@@ -23,8 +23,10 @@ test("the public entry point exports exactly these values", () => {
     "SchemaDefinitionError",
     "StaleEntryError",
     "VERSION",
+    "defineType",
     "failure",
     "isEgonError",
+    "parameterized",
     "success",
   ]);
 });
