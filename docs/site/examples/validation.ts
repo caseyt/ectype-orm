@@ -144,6 +144,17 @@ export async function yupAsync(cs: Changeset<typeof User>) {
 }
 
 // #region yup-sync
+/** Yup's path text (`settings.theme`, `tags[0]`, `["a.b"]` for a key with a dot) as a list of keys. */
+function yupPath(path: string | undefined): PropertyKey[] {
+  const keys: PropertyKey[] = [];
+  for (const [, quoted, index, plain] of (path ?? "").matchAll(
+    /\["((?:[^"\\]|\\.)*)"\]|\[(\d+)\]|([^.[\]]+)/g,
+  )) {
+    keys.push(quoted ?? (index !== undefined ? Number(index) : (plain as string)));
+  }
+  return keys;
+}
+
 /** Runs a Yup schema synchronously, as a validator function. */
 export function yupSync(schema: yup.AnyObjectSchema) {
   return (values: object): ValidationIssue[] => {
@@ -153,7 +164,7 @@ export function yupSync(schema: yup.AnyObjectSchema) {
     } catch (error) {
       if (!(error instanceof yup.ValidationError)) throw error;
       const errors = error.inner.length > 0 ? error.inner : [error];
-      return errors.map((e) => ({ path: e.path?.match(/[^.[\]"]+/g) ?? [], message: e.message }));
+      return errors.map((e) => ({ path: yupPath(e.path), message: e.message }));
     }
   };
 }

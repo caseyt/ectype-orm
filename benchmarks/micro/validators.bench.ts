@@ -60,6 +60,11 @@ const values = {
 const invalid = cast(row, { email: "not an address", age: "9" }, ["email", "age"]);
 const invalidValues = { ...values, email: "not an address", age: 9 };
 const renamed = cast(row, { email: "ada.lovelace@example.com" }, ["email"]);
+const fresh = cast(Account, { email: "grace@example.com", name: "Grace", joinedAt: joinedAt.toISOString() }, [
+  "email",
+  "name",
+  "joinedAt",
+]);
 
 const noIssues = () => undefined;
 const emptyIssues = () => [];
@@ -77,6 +82,9 @@ group("validators: function (target < 300 ns overhead)", () => {
   bench("cs.validate(fn) returning []", () => doNotOptimize(cs.validate(emptyIssues)));
   bench("cs.validate(fn) with one issue", () =>
     doNotOptimize(cs.validate(() => [{ path: "name", message: "is taken" }])),
+  );
+  bench("cs.validate(fn) returning nothing (new record: defaults built)", () =>
+    doNotOptimize(fresh.validate(noIssues)),
   );
 });
 

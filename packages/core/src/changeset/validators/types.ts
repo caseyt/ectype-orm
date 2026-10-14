@@ -39,8 +39,11 @@ export interface ValidateOptions<S = AnySchema> {
   readonly scope?: "all" | "changed";
   /**
    * When `true` and the schema finds no issue, write the schema's output back as changes
-   * (so that transforms such as `.trim()` take effect). Only a Standard Schema has an
-   * output; with a function it throws. Defaults to `false`.
+   * (so that transforms such as `.trim()` take effect). Each value is cast with its
+   * field's type first; one the type rejects becomes a `cast` error and is not written.
+   * Only a Standard Schema has an output; with a function it throws. It cannot be combined
+   * with `only` or `scope: "changed"` (it throws): a schema that reports an issue has no
+   * output, even when that issue is then left out. Defaults to `false`.
    */
   readonly apply?: boolean;
   /** Give the validator only these fields, and keep only issues on them (and on the record as a whole). */

@@ -5,7 +5,7 @@
  * @module
  */
 import type { AnyFieldType, AnySchema, EmbedMeta, FieldMeta, FieldValues, InsertShape } from "egon-orm";
-import { meta, QueryError } from "egon-orm";
+import { EmbeddedSchema, meta, QueryError, t } from "egon-orm";
 import { z } from "zod";
 
 /**
@@ -106,11 +106,21 @@ export interface ZodHint<T = unknown> {
 
 const INVALID = "is invalid";
 
-/** Whether `value` is already a value of `type`: the type casts it to an equal value. */
+/**
+ * Whether `value` is already a value of `type`: the type casts it to an equal value of the
+ * same kind (the same `typeof`, and for objects the same prototype). The kind check
+ * matters because a type's `equal` is only defined on its own values: a decimal's would
+ * call the number `12.5` equal to the string `"12.50"`.
+ */
 function accepts(type: AnyFieldType, value: unknown): boolean {
   if (value === null || value === undefined) return false;
   const result = type.cast(value);
-  return result.success && (result.data === value || type.equal(result.data, value));
+  if (!result.success) return false;
+  const data: unknown = result.data;
+  if (data === value) return true;
+  if (typeof data !== typeof value) return false;
+  if (typeof value === "object" && Object.getPrototypeOf(data) !== Object.getPrototypeOf(value)) return false;
+  return type.equal(data, value);
 }
 
 function hintOf(type: AnyFieldType): z.ZodType | undefined {
@@ -125,30 +135,80 @@ function hintOf(type: AnyFieldType): z.ZodType | undefined {
   return schema;
 }
 
-/** The Zod type of a non-null value of `type`. */
+/**
+ * The Zod base type of each built-in type that has one, keyed by the type object itself.
+ * The types are read from a schema declared here with the field builder, so they are the
+ * very objects `t.string()`, `t.timestamp()`, … use: a custom type cannot be mistaken for a
+ * built-in one by its name or column kind. Parameterized types (enums, arrays, decimals
+ * with a precision) are not listed and get `z.custom()`.
+ */
+let bases: ReadonlyMap<AnyFieldType, () => z.ZodType> | undefined;
+/** The built-in UUID type, whose refinement has a message of its own. */
+let uuidType: AnyFieldType | undefined;
+
+function builtInBases(): ReadonlyMap<AnyFieldType, () => z.ZodType> {
+  if (bases !== undefined) return bases;
+  class Probe extends EmbeddedSchema({
+    string: t.string(),
+    integer: t.integer(),
+    bigint: t.bigint(),
+    bigintNumber: t.bigint({ mode: "number" }),
+    float: t.float(),
+    decimal: t.decimal(),
+    boolean: t.boolean(),
+    uuid: t.uuid(),
+    binary: t.binary(),
+    date: t.date(),
+    dateAsDate: t.date({ as: "date" }),
+    time: t.time(),
+    timestampS: t.timestamp({ precision: "s" }),
+    timestampMs: t.timestamp({ precision: "ms" }),
+    timestampUs: t.timestamp({ precision: "us" }),
+    localTimestampS: t.localTimestamp({ precision: "s" }),
+    localTimestampMs: t.localTimestamp({ precision: "ms" }),
+    localTimestampUs: t.localTimestamp({ precision: "us" }),
+  }) {}
+  const byName = new Map(meta(Probe).fields.map((field) => [field.name, field.type]));
+  const of = (name: string): AnyFieldType => byName.get(name) as AnyFieldType;
+  const date = (): z.ZodType => z.date();
+  const text = (): z.ZodType => z.string();
+  uuidType = of("uuid");
+  bases = new Map<AnyFieldType, () => z.ZodType>([
+    [of("string"), text],
+    [of("integer"), () => z.int()],
+    [of("bigint"), () => z.bigint()],
+    [of("bigintNumber"), () => z.int()],
+    [of("float"), () => z.number()],
+    [of("decimal"), text],
+    [of("boolean"), () => z.boolean()],
+    [of("uuid"), text],
+    [of("binary"), () => z.instanceof(Uint8Array)],
+    [of("date"), text],
+    [of("dateAsDate"), date],
+    [of("time"), text],
+    [of("timestampS"), date],
+    [of("timestampMs"), date],
+    [of("timestampUs"), date],
+    [of("localTimestampS"), date],
+    [of("localTimestampMs"), date],
+    [of("localTimestampUs"), date],
+  ]);
+  return bases;
+}
+
+/**
+ * The Zod type of a non-null value of `type`. A built-in type gets its Zod base type (so
+ * a value of the wrong kind gets Zod's own message), refined with the type's own `cast`
+ * so that it accepts exactly what the type accepts (ranges, formats, precision). Any
+ * other type, custom or parameterized, is `z.custom()` with that check.
+ */
 function valueSchema(type: AnyFieldType): z.ZodType {
   const hint = hintOf(type);
   if (hint !== undefined) return hint;
   const check = (value: unknown): boolean => accepts(type, value);
-  const name = type.name;
-  // The Zod base gives Zod's own message for a value of the wrong kind; the refinement
-  // makes the schema accept exactly what the field type accepts (ranges, formats, members).
-  if (name === "string") return z.string();
-  if (name === "boolean") return z.boolean();
-  if (name === "integer" || name === "bigint(number)") return z.int().refine(check, INVALID);
-  if (name === "float") return z.number().refine(check, INVALID);
-  if (name === "bigint") return z.bigint().refine(check, INVALID);
-  if (name === "uuid") return z.string().refine(check, "is not a valid UUID");
-  if (name === "binary") return z.instanceof(Uint8Array).refine(check, INVALID);
-  if (name === "json") return z.custom(check, INVALID);
-  if (name === "enum" || name === "date" || name === "time" || name.startsWith("decimal")) {
-    return z.string().refine(check, INVALID);
-  }
-  if (name.startsWith("array(")) return z.array(z.unknown()).refine(check, INVALID);
-  if (type.db.kind === "timestamp" || type.db.kind === "timestamptz" || name === "date(date)") {
-    return z.date().refine(check, INVALID);
-  }
-  return z.custom(check, INVALID);
+  const base = builtInBases().get(type);
+  if (base === undefined) return z.custom(check, INVALID);
+  return base().refine(check, type === uuidType ? "is not a valid UUID" : INVALID);
 }
 
 function embedSchema(embed: EmbedMeta): z.ZodType {

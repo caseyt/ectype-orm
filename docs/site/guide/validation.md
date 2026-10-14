@@ -67,6 +67,8 @@ returned that is not a list counts as no issues.
 
 `ctx.data` is the record before the changes: the loaded row, or, for a new record, an
 object of the field defaults (`undefined` for a field without one). It is never `null`.
+A default given as a function is called once per validation, so `values` and `ctx.data`
+hold the same default.
 
 ## What the validator receives
 
@@ -84,7 +86,7 @@ accept it and a required key reports it as missing.
 | Option | Default | Effect |
 |---|---|---|
 | `scope` | `"all"` | `"all"` keeps every issue. `"changed"` keeps only issues on fields that have a change (and issues on the record as a whole). |
-| `apply` | `false` | When `true` and the schema finds no issue, its output is written back as changes, so transforms such as `.trim()` take effect. Standard Schemas only. |
+| `apply` | `false` | When `true` and the schema finds no issue, its output is written back as changes, so transforms such as `.trim()` take effect. Standard Schemas only; cannot be combined with `only` or `scope: "changed"`. |
 | `only` | all fields | Gives the validator only these fields, and keeps only issues on them (and on the record as a whole). |
 
 <<< @/examples/validation.ts#options
@@ -103,11 +105,19 @@ not told that the email they registered years ago is no longer accepted.
 
 <<< @/examples/validation.ts#apply
 
-For each key of the schema's output that is a field, a value that differs from the
-field's current value (compared by the field's type, so an equal `Date` is not a change)
-is recorded as a change, as `putChange` would record it. Output keys that are not fields
-are ignored. Nothing is applied when there are issues. A function validator has no
-output, so `apply` with a function throws.
+For each key of the schema's output that is a field, the value is first cast with the
+field's type, as `cast` casts input. A value the type rejects (a transform that turned a
+`string` field's value into a number) becomes a `cast` error on that field and is not
+written. A value that differs from the field's current value (compared by the field's
+type, so an equal `Date` is not a change) is recorded as a change, as `putChange` would
+record it. Output keys that are not fields are ignored.
+
+Nothing is applied when there are issues: a schema that reports an issue has no output.
+For that reason `apply` cannot be combined with `only` or `scope: "changed"`, which drop
+issues after the schema has run; that combination throws, rather than leaving a valid
+changeset whose transform silently did not happen. To transform some fields only,
+validate with a schema of just those fields. A function validator has no output, so
+`apply` with a function throws too.
 
 ## One field: `validateField`
 
@@ -175,11 +185,15 @@ It needs Zod 4.3 or later as a peer dependency.
 `pick` and `omit` are typed and checked. An optional key may be absent but may not hold
 `undefined` (Zod's `exactOptional`).
 
-Each field type maps to the Zod type for its values (`z.string()`, `z.int()`,
-`z.bigint()`, `z.date()`, `z.boolean()`, `z.array(...)`, a nested object for an embed),
-refined so that the schema accepts exactly the values the field type accepts: the
-members of an enum, a decimal's scale, a timestamp's precision, a UUID in lower case.
-`null` is accepted only for a `.nullable()` field.
+Every field accepts exactly the values its type accepts, checked with the type's own
+`cast`: the members of an enum, a decimal's scale, a timestamp's precision, a UUID in
+lower case. The built-in scalar types (`t.string()`, `t.integer()`, `t.bigint()`,
+`t.float()`, `t.boolean()`, `t.uuid()`, `t.binary()`, the dates, times and timestamps)
+start from the matching Zod type (`z.string()`, `z.int()`, `z.date()`, …), so a value of
+the wrong kind gets Zod's own message. Enums, arrays, decimals with a precision, JSON and
+custom types are a `z.custom()` check, reported as `is invalid`. An embed is a nested
+object (a list of them for `embedMany`). `null` is accepted only for a `.nullable()`
+field.
 
 The result is an ordinary Zod object: `.extend()` it to add rules, and pass it to
 `validate`. `castWith(target, params, schema)` is shorthand for `cast` with the schema's

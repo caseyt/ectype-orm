@@ -8,7 +8,7 @@ afterEach(() => {
 /** What a validator is given, for a few changesets, with the modules loaded afresh. */
 async function seenValues(): Promise<unknown[]> {
   const { cast } = await import("../changeset.js");
-  const { Schema, t } = await import("../../schema/index.js");
+  const { meta, Schema, t } = await import("../../schema/index.js");
   class Gadget extends Schema("gadgets", {
     id: t.integer().primaryKey().dbGenerated(),
     label: t.string(),
@@ -22,6 +22,9 @@ async function seenValues(): Promise<unknown[]> {
   };
   cast(Gadget, { label: "lamp", toString: "shown" }, ["label", "toString"]).validate(record);
   cast(Gadget, {}, []).validate(record);
+  const info = meta(Gadget);
+  const row = info.create([9, "desk", "old", 5, null], info.rowMeta("loaded", undefined));
+  cast(row as Gadget, { note: "new" }, ["note"]).validate(record);
   cast({ data: { a: "x" }, types: { a: t.string(), b: t.integer().default(1) } }, { a: "y" }, ["a"]).validate(
     record,
   );
@@ -44,11 +47,17 @@ test("without code generation (a Content Security Policy), the validator sees th
   );
   const interpreted = await seenValues();
 
-  expect(interpreted).toEqual(generated);
+  // Strict: a key holding `undefined` is not the same as a missing key (fields without a
+  // value are left out), and the key order is the field order.
+  expect(interpreted).toStrictEqual(generated);
+  expect(interpreted.map((values) => Object.keys(values as object))).toStrictEqual(
+    generated.map((values) => Object.keys(values as object)),
+  );
   const expected: unknown[] = [
     { label: "lamp", note: null, size: 3, toString: "shown" },
     { note: null, size: 3, toString: null },
+    { id: 9, label: "desk", note: "new", size: 5, toString: null },
     { a: "y", b: 1 },
   ];
-  expect(generated).toEqual(expected);
+  expect(generated).toStrictEqual(expected);
 });

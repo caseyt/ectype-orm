@@ -34,16 +34,25 @@ const FIELD_PROMISE_MESSAGE = "validator returned a Promise; use validateFieldAs
 
 /**
  * Builds the object a validator sees: every field with the changes applied, in field
- * order, leaving out fields with no value. `row` is the loaded row (or `null`, and then
- * `valueBefore` gives a new record's defaults).
+ * order, leaving out fields with no value. `base` holds the values before the changes:
+ * the loaded row, or the object a {@link BeforeBuilder} made.
  */
-type ValuesBuilder = (changes: Values, row: Values | null, changeset: AnyChangeset) => Values;
+type ValuesBuilder = (changes: Values, base: Values) => Values;
+
+/**
+ * Builds the values before the changes of a changeset that is not of a loaded row (a new
+ * record, or one without a schema class): every field, `undefined` where there is none.
+ * A default given as a function is called here, once per validation, and the result is
+ * shared by the values and `ctx.data`.
+ */
+type BeforeBuilder = (changeset: AnyChangeset) => Record<string, unknown>;
 
 /** What is derived once from a changeset's field table (one per schema class). */
 interface Table {
   /** The fields in field order. */
   readonly list: readonly FieldMeta[];
   readonly build: ValuesBuilder;
+  readonly before: BeforeBuilder;
 }
 
 const tables = new WeakMap<ReadonlyMap<string, FieldMeta>, Table>();
@@ -56,7 +65,9 @@ function tableOf(fields: ReadonlyMap<string, FieldMeta>): Table {
   let table = tables.get(fields);
   if (table === undefined) {
     const list = Object.freeze([...fields.values()]);
-    table = { list, build: CAN_GENERATE ? compileBuilder(list) : genericBuilder(list) };
+    table = CAN_GENERATE
+      ? { list, build: compileBuilder(list), before: compileBefore(list) }
+      : { list, build: genericBuilder(list), before: genericBefore(list) };
     tables.set(fields, table);
   }
   lastFields = fields;
@@ -76,44 +87,64 @@ const CAN_GENERATE: boolean = (() => {
   }
 })();
 
-/** The value of a field: its change (an own property), else the row's, else the new record's default. */
-function fieldValue(changes: Values, row: Values | null, changeset: AnyChangeset, name: string): unknown {
-  if (hasOwn(changes, name)) return changes[name];
-  return row !== null ? row[name] : valueBefore(changeset, name);
+/** The value of a field: its change (an own property), else its value before the changes. */
+function fieldValue(changes: Values, base: Values, name: string): unknown {
+  return hasOwn(changes, name) ? changes[name] : base[name];
 }
 
 function genericBuilder(list: readonly FieldMeta[]): ValuesBuilder {
-  return (changes, row, changeset) => {
+  return (changes, base) => {
     const out: Record<string, unknown> = {};
     for (let i = 0; i < list.length; i++) {
       const name = (list[i] as FieldMeta).name;
-      const value = fieldValue(changes, row, changeset, name);
+      const value = fieldValue(changes, base, name);
       if (value !== undefined) out[name] = value;
     }
     return out;
   };
 }
 
+function genericBefore(list: readonly FieldMeta[]): BeforeBuilder {
+  return (changeset) => {
+    const out: Record<string, unknown> = {};
+    for (let i = 0; i < list.length; i++) {
+      const name = (list[i] as FieldMeta).name;
+      out[name] = valueBefore(changeset, name);
+    }
+    return out;
+  };
+}
+
 /**
- * The builder as generated code: one store per field with the name as a literal, which is
- * several times faster than storing under computed names. A change is never `undefined`,
- * so `hasOwn` is asked only for a field that reads as changed.
+ * The builders as generated code: one store per field with the name as a literal, which
+ * is several times faster than storing under computed names. A change is never
+ * `undefined`, so `hasOwn` is asked only for a field that reads as changed. Names go in
+ * as string literals, so nothing a schema declares can become code.
  */
 function compileBuilder(list: readonly FieldMeta[]): ValuesBuilder {
-  // Names go in as string literals, so nothing a schema declares can become code.
   const lines = list.map((field) => {
     const key = JSON.stringify(field.name);
     return [
       `v = changes[${key}];`,
-      `if (v === undefined || !hasOwn(changes, ${key})) v = row !== null ? row[${key}] : before(changeset, ${key});`,
+      `if (v === undefined || !hasOwn(changes, ${key})) v = base[${key}];`,
       `if (v !== undefined) out[${key}] = v;`,
     ].join("\n");
   });
   return new Function(
     "hasOwn",
+    `"use strict";\nreturn function values(changes, base) {\nconst out = {};\nlet v;\n${lines.join("\n")}\nreturn out;\n};`,
+  )(hasOwn) as ValuesBuilder;
+}
+
+function compileBefore(list: readonly FieldMeta[]): BeforeBuilder {
+  const lines = list.map((field) => {
+    const key = JSON.stringify(field.name);
+    return `out[${key}] = before(changeset, ${key});`;
+  });
+  return new Function(
     "before",
-    `"use strict";\nreturn function values(changes, row, changeset) {\nconst out = {};\nlet v;\n${lines.join("\n")}\nreturn out;\n};`,
-  )(hasOwn, valueBefore) as ValuesBuilder;
+    `"use strict";\nreturn function valuesBefore(changeset) {\nconst out = {};\n${lines.join("\n")}\nreturn out;\n};`,
+  )(valueBefore) as BeforeBuilder;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,27 +256,34 @@ function checkField(fields: ReadonlyMap<string, FieldMeta>, name: unknown, fn: s
  * no value (a new record's field without a default) is left out rather than set to
  * `undefined`, so that a schema's optional keys accept it.
  */
-function valuesOf(
-  changeset: AnyChangeset,
-  fields: ReadonlyMap<string, FieldMeta>,
-  only: readonly string[] | undefined,
-): Values {
-  const changes = changeset.changes as Values;
-  const data = changeset.data as Values | null;
-  // A loaded row holds every field; otherwise the step-05 rules (defaults) apply.
-  const row = data !== null && changeset.model !== null ? data : null;
-  const table = tableOf(fields);
-  if (only === undefined) return table.build(changes, row, changeset);
+function valuesOf(changes: Values, table: Table, base: Values, only: readonly string[] | undefined): Values {
+  if (only === undefined) return table.build(changes, base);
   const out: Record<string, unknown> = {};
   for (const field of table.list) {
     if (!only.includes(field.name)) continue;
-    const value = fieldValue(changes, row, changeset, field.name);
+    const value = fieldValue(changes, base, field.name);
     if (value !== undefined) out[field.name] = value;
   }
   return out;
 }
 
-/** The second argument of a validator function. One per call; `data` is built when first read. */
+/**
+ * The values before the changes: the loaded row, or every field's value before the changes
+ * (a new record's defaults; for a changeset without a schema class, its data and the
+ * defaults of what the data lacks), computed once per validation.
+ */
+function baseOf(changeset: AnyChangeset, table: Table): Values {
+  const data = changeset.data as Values | null;
+  return data !== null && changeset.model !== null ? data : table.before(changeset);
+}
+
+/** `ctx.data`: the data, or for a new record the (frozen) values before the changes. */
+function contextData(changeset: AnyChangeset, base: Values): Values {
+  const data = changeset.data as Values | null;
+  return data !== null ? data : Object.freeze(base);
+}
+
+/** The second argument of a validator function. One per call. */
 class Context implements ValidatorContext<Record<string, unknown>> {
   readonly changes: Values;
   readonly action: Action | null;
@@ -253,29 +291,25 @@ class Context implements ValidatorContext<Record<string, unknown>> {
   readonly #changeset: AnyChangeset;
   #data: Values | undefined;
 
-  constructor(changeset: AnyChangeset) {
+  /** `data` may be left out, and is then built when first read (`validateField`). */
+  constructor(changeset: AnyChangeset, data: Values | undefined) {
     const changes = changeset.changes as Values;
     this.changes = changes;
     this.action = changeset.action;
     // A closure, so that `({ isChanged }) => …` works.
     this.isChanged = (field) => hasOwn(changes, field);
     this.#changeset = changeset;
-    this.#data = undefined;
+    this.#data = data;
   }
 
   /** The record before the changes: the row, or for a new record its field defaults. */
   get data(): Values {
-    if (this.#data === undefined) this.#data = dataOf(this.#changeset);
+    if (this.#data === undefined) {
+      const changeset = this.#changeset;
+      this.#data = contextData(changeset, baseOf(changeset, tableOf(fieldsOf(changeset))));
+    }
     return this.#data;
   }
-}
-
-function dataOf(changeset: AnyChangeset): Values {
-  const data = changeset.data as Values | null;
-  if (data !== null) return data;
-  const out: Record<string, unknown> = {};
-  for (const field of tableOf(fieldsOf(changeset)).list) out[field.name] = valueBefore(changeset, field.name);
-  return Object.freeze(out);
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +472,12 @@ function same(field: FieldMeta, a: unknown, b: unknown): boolean {
   return field.type.equal(a, b);
 }
 
-/** Records each field of `output` that differs from the field's current value as a change. */
+/**
+ * Records each field of `output` as a change when it differs from the field's current
+ * value. Each value is first cast with the field's type, as `cast` would cast input: a
+ * value the type rejects (a transform that turned a string into a number) becomes a
+ * `cast` error on the field and is not written.
+ */
 function applyOutput<C extends AnyChangeset>(
   changeset: C,
   fields: ReadonlyMap<string, FieldMeta>,
@@ -446,17 +485,30 @@ function applyOutput<C extends AnyChangeset>(
 ): C {
   if (typeof output !== "object" || output === null) return changeset;
   let next = changeset;
+  let rejected: Map<string, ChangesetError[]> | undefined;
   const out = output as Values;
   for (const key of Object.keys(out)) {
     const field = fields.get(key);
     const value = out[key];
     if (field === undefined || value === undefined) continue;
+    let converted: unknown = value;
+    if (value !== null) {
+      const result = field.type.cast(value);
+      if (!result.success) {
+        const meta =
+          result.meta === undefined ? { type: field.type.name } : { type: field.type.name, ...result.meta };
+        rejected ??= new Map();
+        collect(rejected, key, { message: result.message ?? "is invalid", validation: "cast", meta });
+        continue;
+      }
+      converted = result.data;
+    }
     const changes = next.changes as Values;
     const current = hasOwn(changes, key) ? changes[key] : valueBefore(next, key);
-    if (same(field, current, value)) continue;
-    next = next.putChange(key, value as never) as C;
+    if (same(field, current, converted)) continue;
+    next = next.putChange(key, converted as never) as C;
   }
-  return next;
+  return rejected === undefined ? next : withAdded(next, rejected);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,14 +535,24 @@ function start(
       `${fn}(): apply needs a Standard Schema, whose output is written back. A validator function returns issues only; change values with putChange.`,
     );
   }
+  if (checked.apply && (checked.only !== undefined || checked.changedOnly)) {
+    // A schema that reports any issue has no output. With these options the issues that
+    // stopped it may be dropped, which would leave a valid changeset whose transform
+    // silently did not happen.
+    throw new QueryError(
+      `${fn}(): apply cannot be combined with ${checked.only !== undefined ? "only" : 'scope: "changed"'}. A schema that reports an issue has no output to apply, even when that issue is then left out. Validate with a schema of just the fields to transform instead.`,
+    );
+  }
   return { dispatched, options: checked, fields };
 }
 
 function call(changeset: AnyChangeset, run: Run): unknown {
-  const values = valuesOf(changeset, run.fields, run.options.only);
+  const table = tableOf(run.fields);
+  const base = baseOf(changeset, table);
+  const values = valuesOf(changeset.changes as Values, table, base, run.options.only);
   const { standard, fn } = run.dispatched;
   if (standard !== undefined) return standard.validate(values);
-  return (fn as ValidatorFn<Values>)(values, new Context(changeset));
+  return (fn as ValidatorFn<Values>)(values, new Context(changeset, contextData(changeset, base)));
 }
 
 function finish<C extends AnyChangeset>(
@@ -568,7 +630,7 @@ function changeOf(changeset: AnyChangeset, field: string): unknown {
 
 function callField(changeset: AnyChangeset, dispatched: Dispatched, value: unknown): unknown {
   if (dispatched.standard !== undefined) return dispatched.standard.validate(value);
-  return (dispatched.fn as FieldValidatorFn<unknown, Values>)(value, new Context(changeset));
+  return (dispatched.fn as FieldValidatorFn<unknown, Values>)(value, new Context(changeset, undefined));
 }
 
 function finishField<C extends AnyChangeset>(

@@ -37,7 +37,21 @@ runScenarios(
   { asyncOnly: true },
 );
 
-/** Runs a Yup schema synchronously, as a validator function (no output is written back). */
+// The adapter the guide shows (docs/site/examples/validation.ts, region yup-sync), kept
+// identical to it.
+
+/** Yup's path text (`settings.theme`, `tags[0]`, `["a.b"]` for a key with a dot) as a list of keys. */
+function yupPath(path: string | undefined): PropertyKey[] {
+  const keys: PropertyKey[] = [];
+  for (const [, quoted, index, plain] of (path ?? "").matchAll(
+    /\["((?:[^"\\]|\\.)*)"\]|\[(\d+)\]|([^.[\]]+)/g,
+  )) {
+    keys.push(quoted ?? (index !== undefined ? Number(index) : (plain as string)));
+  }
+  return keys;
+}
+
+/** Runs a Yup schema synchronously, as a validator function. */
 function yupSync(schema: yup.AnyObjectSchema) {
   return (values: object): ValidationIssue[] => {
     try {
@@ -46,7 +60,7 @@ function yupSync(schema: yup.AnyObjectSchema) {
     } catch (error) {
       if (!(error instanceof yup.ValidationError)) throw error;
       const errors = error.inner.length > 0 ? error.inner : [error];
-      return errors.map((e) => ({ path: e.path?.match(/[^.[\]"]+/g) ?? [], message: e.message }));
+      return errors.map((e) => ({ path: yupPath(e.path), message: e.message }));
     }
   };
 }
@@ -74,6 +88,14 @@ describe("Yup: the synchronous function adapter", () => {
       throw new RangeError("bug in a test");
     });
     expect(() => cast(User, {}, []).validate(yupSync(throwing))).toThrow(RangeError);
+  });
+
+  test("turns Yup's path text into keys: a quoted key keeps its dot, an index is a number", () => {
+    const schema = yup.object({
+      "a.b": yup.string().required(),
+      list: yup.array(yup.object({ x: yup.string().required() })),
+    });
+    expect(yupSync(schema)({ list: [{}] }).map((issue) => issue.path)).toEqual([["a.b"], ["list", 0, "x"]]);
   });
 
   test("the verbatim schema works through the adapter", () => {

@@ -257,6 +257,20 @@ describe("validate: what the validator receives", () => {
     expect(first).toBe(second);
   });
 
+  test("a default given as a function is evaluated once per validation, shared by the values and ctx.data", () => {
+    let calls = 0;
+    class Ticket extends Schema("tickets", {
+      id: t.integer().primaryKey().dbGenerated(),
+      number: t.integer().default(() => ++calls),
+    }) {}
+    const seen: [unknown, unknown][] = [];
+    cast(Ticket, {}, []).validate((values, ctx) => {
+      seen.push([values.number, ctx.data.number]);
+    });
+    expect(seen).toEqual([[1, 1]]);
+    expect(calls).toBe(1);
+  });
+
   test("ctx.data of a schemaless changeset is its data object", () => {
     const data = { q: "old" };
     let seen: unknown;
@@ -556,6 +570,59 @@ describe("validate: apply", () => {
     });
     const cs = cast(standup(), {}, []).validate(copyDates, { apply: true });
     expect(cs.changes).toEqual({});
+  });
+
+  test("an output equal by type to a field's change leaves the changes untouched", () => {
+    const later = cast(standup(), { endsAt: "2026-05-04T12:00:00Z" }, ["endsAt"]);
+    const copyEnd = standard((value) => {
+      const v = value as { endsAt: Date };
+      return { value: { endsAt: new Date(v.endsAt.getTime()) } };
+    });
+    const cs = later.validate(copyEnd, { apply: true });
+    expect(cs.changes).toBe(later.changes);
+  });
+
+  test("casts each output value with the field's type before writing it", () => {
+    const asText = standard(() => ({ value: { age: "40" } }));
+    expect(cast(User, {}, []).validate(asText, { apply: true }).changes).toEqual({ age: 40 });
+  });
+
+  test("an output value the field's type rejects is a cast error and is not written", () => {
+    // A transform such as z.string().transform((s) => s.length) on a text field.
+    const lengthOf = standard((value) => {
+      const v = value as { email: string; name: string };
+      return { value: { email: v.email.length, name: v.name.trim() } };
+    });
+    const cs = cast(User, { email: "ada@engine.example", name: " Ada " }, ["email", "name"]).validate(
+      lengthOf,
+      {
+        apply: true,
+      },
+    );
+    expect(cs.valid).toBe(false);
+    expect(cs.errors).toEqual({
+      email: [{ message: "is invalid", validation: "cast", meta: { type: "string" } }],
+    });
+    expect(cs.changes).toEqual({ email: "ada@engine.example", name: "Ada" });
+
+    // The type's own metadata is kept, as cast keeps it.
+    const badTags = standard(() => ({ value: { tagList: ["news", 7] } }));
+    expect(cast(Post, {}, []).validate(badTags, { apply: true }).errors.tagList).toEqual([
+      { message: "is invalid", validation: "cast", meta: { type: "array(string)", index: 1, path: [1] } },
+    ]);
+  });
+
+  test('cannot be combined with only or scope: "changed"', () => {
+    const passthrough = standard((value) => ({ value }));
+    const cs = cast(User, { email: " a@b.c " }, ["email"]);
+    expect(() => cs.validate(passthrough, { apply: true, only: ["email"] })).toThrow(QueryError);
+    expect(() => cs.validate(passthrough, { apply: true, only: ["email"] })).toThrow(
+      /apply cannot be combined with only/,
+    );
+    expect(() => cs.validate(passthrough, { apply: true, scope: "changed" })).toThrow(
+      /apply cannot be combined with scope: "changed"/,
+    );
+    expect(cs.validate(passthrough, { apply: true, scope: "all" }).valid).toBe(true);
   });
 
   test("sets output keys that the input did not hold, and ignores undefined", () => {

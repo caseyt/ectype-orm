@@ -148,6 +148,50 @@ describe("toZod: field types", () => {
     expect(PairZ.safeParse({ n: "4" }).success).toBe(false);
   });
 
+  test("a built-in type keeps Zod's own message for a value of the wrong kind", () => {
+    const issue = LedgerZ.safeParse({ ...good, label: 7 }).error?.issues[0];
+    expect(issue?.message).toMatch(/expected string/);
+    expect(LedgerZ.safeParse({ ...good, kind: "sideways" }).error?.issues[0]?.message).toBe("is invalid");
+  });
+
+  test("a custom type is never mistaken for a built-in one by its column kind or its name", () => {
+    const isoCast = (input: unknown) =>
+      typeof input === "string" && /^\d{4}-\d{2}-\d{2}T/.test(input)
+        ? { success: true as const, data: input }
+        : { success: false as const };
+    // Strings in a timestamptz column: not a Date.
+    const IsoText = defineType<string>({ name: "isoText", db: { kind: "timestamptz" }, cast: isoCast });
+    // Named like built-in types, with rules of their own.
+    const lowercaseOnly = (input: unknown) =>
+      typeof input === "string" && input === input.toLowerCase()
+        ? { success: true as const, data: input }
+        : { success: false as const };
+    const Slug = defineType<string>({ name: "string", db: { kind: "text" }, cast: lowercaseOnly });
+    const Yes = defineType<boolean>({
+      name: "boolean",
+      db: { kind: "boolean" },
+      cast: (input) => (input === true ? { success: true, data: true } : { success: false }),
+    });
+    const Csv = defineType<string>({
+      name: "array(string)",
+      db: { kind: "text" },
+      cast: (input) => (typeof input === "string" ? { success: true, data: input } : { success: false }),
+    });
+    class Event extends Schema(
+      "events",
+      { at: t.type(IsoText), slug: t.type(Slug), yes: t.type(Yes), csv: t.type(Csv) },
+      { primaryKey: false },
+    ) {}
+    const EventZ = toZod(Event);
+    const fine = { at: "2026-01-01T00:00:00Z", slug: "a-slug", yes: true, csv: "a,b" };
+    expect(rejected(EventZ, fine)).toEqual([]);
+    expect(rejected(EventZ, { ...fine, slug: "NOT A SLUG" })).toEqual(["slug"]);
+    expect(rejected(EventZ, { ...fine, yes: false })).toEqual(["yes"]);
+    expect(rejected(EventZ, { ...fine, at: new Date() })).toEqual(["at"]);
+    // The schema agrees with cast on the same input.
+    expect(cast(Event, { slug: "NOT A SLUG" }, ["slug"]).valid).toBe(false);
+  });
+
   test("a custom type's zod hint is used instead, as a schema or a function", () => {
     const Slug = defineType<string>({
       name: "slug",
