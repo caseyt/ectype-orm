@@ -187,7 +187,8 @@ type AnyBuilder = Builder<never, never>;
 
 /** The value an `.autogenerate()` without a function produces, by type. */
 function defaultGenerator(type: AnyFieldType): () => unknown {
-  if (type.name === "uuid") return uuidv7;
+  // Wrapped, so that an argument given to the generator is never taken for a time.
+  if (type.name === "uuid") return () => uuidv7();
   const now = currentTime(type);
   if (now !== undefined) return now;
   throw new SchemaDefinitionError(

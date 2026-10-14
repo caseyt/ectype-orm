@@ -334,6 +334,30 @@ describe("resolution is lazy", () => {
     expect(assoc(Book, "colleagues").target()).toBe(Book);
   });
 
+  test("the result does not depend on which schema is asked first", () => {
+    const define = () => {
+      class A extends Schema("a", { id: t.integer().primaryKey() }) {
+        static bs = manyToMany(() => B, { joinThrough: () => J });
+      }
+      class B extends Schema("b", { id: t.integer().primaryKey() }) {}
+      class J extends Schema("j", {
+        aId: t.integer().primaryKey({ dbGenerated: false }),
+        bId: t.integer().primaryKey({ dbGenerated: false }),
+      }) {
+        static a = belongsTo(() => A);
+        static b = belongsTo(() => B);
+        static siblings = hasMany(() => B, { through: ["a", "bs"] });
+      }
+      return { A, B, J };
+    };
+    const first = define();
+    expect(assoc(first.A, "bs").joinKeys?.[0].column).toBe("a_id");
+    expect(assoc(first.J, "siblings").target()).toBe(first.B);
+    const second = define();
+    expect(assoc(second.J, "siblings").target()).toBe(second.B);
+    expect(assoc(second.A, "bs").joinKeys?.[1].column).toBe("b_id");
+  });
+
   test("a join schema whose own associations go back through the owner resolves", () => {
     class Team extends Schema("teams", { id: t.integer().primaryKey() }) {
       static members = hasMany(() => Seat, { foreignKey: "teamId" });
@@ -515,6 +539,26 @@ describe("definition errors name the schema, the association and the fix", () =>
         "x",
       ),
     ).not.toThrow();
+  });
+
+  test("an integer key matches a bigint key read as a number, and not a bigint read as a bigint", () => {
+    class Wide extends Schema("wide", { id: t.bigint({ mode: "number" }).primaryKey() }) {}
+    class Big extends Schema("big", { id: t.bigint().primaryKey() }) {}
+    expect(() =>
+      assoc(
+        owner(
+          belongsTo(() => Wide),
+          { xId: t.integer() },
+        ),
+        "x",
+      ),
+    ).not.toThrow();
+    expect(
+      message(
+        belongsTo(() => Big),
+        { xId: t.integer() },
+      ),
+    ).toMatch(/Owner\.xId is of type integer, but Big\.id, which it points at, is of type bigint/);
   });
 
   test("custom types match by their SQL type", () => {
@@ -783,8 +827,10 @@ describe("definition errors name the schema, the association and the fix", () =>
       static lost = hasMany(() => Tag, { through: ["bare", "nothing"] });
     }
     expect((problem(Bare) as Error).message).toMatch(/It has: none\./);
-    // Following a path resolves the schemas on it, so a broken association there is reported as itself.
-    expect((problem(Plain) as Error).message).toMatch(/^Bare\.a: through follows "b"/);
+    // A path is followed through declarations, so Bare's own mistake does not stop it.
+    expect((problem(Plain) as Error).message).toMatch(
+      /^Plain\.lost: .*Bare has no such association\. It has: a\./,
+    );
   });
 
   test("a name that is a field, or reserved", () => {
@@ -817,6 +863,16 @@ describe("definition errors name the schema, the association and the fix", () =>
       `"Address.owner: Address is an embedded schema: it is stored inside its parent's row and has no table to associate. Move the association to the parent schema."`,
     );
     expect(meta(EmbeddedSchema({ city: t.string() })).assocs().size).toBe(0);
+  });
+
+  test("a name that the class also defines as a getter or method", () => {
+    class Shadow extends Schema("shadows", { id: t.integer().primaryKey(), authorId: t.integer() }) {
+      static author = belongsTo(() => User);
+    }
+    Object.defineProperty(Shadow.prototype, "author", { get: () => "a getter" });
+    expect((problem(Shadow) as Error).message).toMatchInlineSnapshot(
+      `"Shadow.author: Shadow defines "author" as a getter, method or property of the class, and "author" is also an association. A preloaded association is a property of the row, so the class member would hide it or make it impossible to set. Rename one of them."`,
+    );
   });
 
   test("every error is a SchemaDefinitionError", () => {

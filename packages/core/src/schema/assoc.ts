@@ -22,7 +22,7 @@ import type {
 } from "../contracts/schema.js";
 import { SchemaDefinitionError } from "../errors.js";
 import { isPlainObject } from "../internal/plain-object.js";
-import { describe, isSchema } from "./guards.js";
+import { definedOnPrototype, describe, isSchema } from "./guards.js";
 
 /**
  * A field name, or several for a composite key.
@@ -423,7 +423,7 @@ function optionsOf(context: Omit<Context, "options">, declaration: Declaration):
 }
 
 function targetOf(context: Context, thunk: unknown, role = "target"): [AnySchema, SchemaMeta] {
-  const example = role === "target" ? `${context.kind}(() => Post)` : "joinThrough: () => PostTag";
+  const example = role === "join schema" ? "joinThrough: () => PostTag" : `${context.kind}(() => Post)`;
   if (typeof thunk !== "function" || isSchema(thunk)) {
     fail(
       context,
@@ -880,25 +880,29 @@ function resolveThrough(context: Context, declaration: Declaration): ResolvedAss
   });
 }
 
-/** Follows a has-through path and checks that it ends at the declared target. */
+/**
+ * Follows a has-through path and checks that it ends at the declared target. It reads the
+ * declarations of the schemas on the path, not their resolved associations: those may be
+ * in the middle of being resolved, and their own resolution reports their own mistakes.
+ */
 function checkPath(context: Context, assoc: ResolvedAssoc, path: readonly string[]): void {
   let current = context.owner;
   let currentMeta = context.ownerMeta;
   for (const step of path) {
+    const declared = declarations(current);
     // An association cannot be reached through itself.
     const itself = current === context.owner && step === context.name;
-    const next = itself ? undefined : currentMeta.assocs().get(step);
+    const next = itself ? undefined : declared.find(([name]) => name === step)?.[1];
     if (next === undefined) {
-      const known = [...currentMeta.assocs().keys()].filter(
-        (name) => current !== context.owner || name !== context.name,
-      );
+      const known = declared
+        .map(([name]) => name)
+        .filter((name) => current !== context.owner || name !== context.name);
       fail(
         context,
         `through follows "${step}" on ${currentMeta.name}, but ${currentMeta.name} has no such association. It has: ${known.length === 0 ? "none" : known.join(", ")}.`,
       );
     }
-    current = next.target();
-    currentMeta = context.metaOf(current);
+    [current, currentMeta] = targetOf(context, next.target, `target of ${currentMeta.name}.${step}`);
   }
   const target = assoc.target();
   if (current !== target) {
@@ -956,6 +960,12 @@ export function resolveAssocs(
       fail(
         context,
         `"${name}" cannot be the name of an association: "constructor", "__proto__", "toJSON", "fields" and names that start with "$" are reserved. Rename the static member.`,
+      );
+    }
+    if (definedOnPrototype(owner.prototype, name)) {
+      fail(
+        context,
+        `${ownerMeta.name} defines "${name}" as a getter, method or property of the class, and "${name}" is also an association. A preloaded association is a property of the row, so the class member would hide it or make it impossible to set. Rename one of them.`,
       );
     }
     pending.push([context, declaration]);

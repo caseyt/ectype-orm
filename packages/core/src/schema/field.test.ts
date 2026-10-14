@@ -197,7 +197,11 @@ describe("modifiers", () => {
   });
 
   test("autogenerate without a function makes a UUID v7 for a uuid field", () => {
-    const generate = state(t.uuid().autogenerate()).autogenerate?.fn;
+    const generate = state(t.uuid().autogenerate()).autogenerate?.fn as
+      | ((arg?: unknown) => unknown)
+      | undefined;
+    // An argument passed by whoever calls it is not taken for the time.
+    expect(String(generate?.(0)).slice(0, 13)).not.toBe("00000000-0000");
     const first = generate?.();
     expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(generate?.()).not.toBe(first);

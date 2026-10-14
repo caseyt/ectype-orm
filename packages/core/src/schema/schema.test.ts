@@ -181,6 +181,31 @@ describe("metadata", () => {
     ).toBeDefined();
   });
 
+  test("in a composite key an integer part is not assumed to be generated: it must say", () => {
+    expect(() =>
+      Schema("posts_tags", { postId: t.integer().primaryKey(), tagId: t.integer().primaryKey() }),
+    ).toThrowErrorMatchingInlineSnapshot(
+      `[SchemaDefinitionError: Schema("posts_tags"): field "postId" is part of a composite primary key. An integer or bigint key is database-generated when it is the only key field, but in a composite key each part is usually a value you supply: pass .primaryKey({ dbGenerated: false }), or .primaryKey().dbGenerated() if the database does generate it.]`,
+    );
+    expect(() =>
+      Schema("m", { orgId: t.uuid().primaryKey(), userId: t.bigint({ mode: "number" }).primaryKey() }),
+    ).toThrow(/field "userId" is part of a composite primary key/);
+    class Versioned extends Schema("versions", {
+      id: t.integer().primaryKey().dbGenerated(),
+      version: t.integer().primaryKey({ dbGenerated: false }),
+    }) {}
+    expect(meta(Versioned).primaryKey.map((f) => f.dbGenerated)).toEqual([true, false]);
+  });
+
+  test("a float key must say that it is supplied", () => {
+    expect(() => Schema("f", { id: t.float().primaryKey() })).toThrowErrorMatchingInlineSnapshot(
+      `[SchemaDefinitionError: Schema("f"): field "id" is a float primary key. The database does not generate float keys: pass .primaryKey({ dbGenerated: false }) and supply the value.]`,
+    );
+    expect(field(Schema("f", { id: t.float().primaryKey({ dbGenerated: false }) }), "id").dbGenerated).toBe(
+      false,
+    );
+  });
+
   test("several key fields form a composite key, in declaration order", () => {
     class Membership extends Schema("memberships", {
       orgId: t.uuid().primaryKey(),
@@ -485,6 +510,32 @@ describe("there is no public constructor", () => {
     expect(ran).toBe(0);
     expect(Object.keys(row)).toEqual(["id"]);
     expect(row).toBeInstanceOf(Counted);
+  });
+});
+
+describe("a class member with a field's name", () => {
+  // TypeScript already refuses such a member in a class body; plain JavaScript, or a
+  // member added to the prototype, still gets here.
+  test("is refused when the class is first used, so no row can lose the field", () => {
+    for (const codegen of [true, false]) {
+      class G extends Schema("g", { id: t.integer().primaryKey(), name: t.string() }, { codegen }) {}
+      Object.defineProperty(G.prototype, "name", { get: () => "from getter" });
+      expect(() => meta(G)).toThrow(SchemaDefinitionError);
+    }
+    class M extends Schema("m", { id: t.integer().primaryKey(), email: t.string() }) {}
+    Object.defineProperty(M.prototype, "email", { value: () => "method", writable: true });
+    expect(() => meta(M)).toThrowErrorMatchingInlineSnapshot(
+      `[SchemaDefinitionError: M defines "email" as a getter, method or property of the class, and "email" is also a field. A row holds each field as its own property, so the class member would hide it or make it impossible to set. Rename the member.]`,
+    );
+  });
+
+  test("is refused when inherited from a class in between", () => {
+    class Base extends Schema("b", { id: t.integer().primaryKey(), label: t.string() }) {}
+    class Mid extends Base {}
+    Object.defineProperty(Mid.prototype, "label", { get: () => "x" });
+    class Leaf extends Mid {}
+    expect(meta(Base).name).toBe("Base");
+    expect(() => meta(Leaf)).toThrow(/Leaf defines "label"/);
   });
 });
 

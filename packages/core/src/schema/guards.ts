@@ -62,6 +62,22 @@ export function stateOf(row: object): RowState {
   return row[ROW].state;
 }
 
+/**
+ * Whether `name` is a member of `prototype` or of a prototype it inherits from, short of
+ * `Object.prototype`: a getter, a method or a value that a row's own property of that
+ * name would collide with.
+ */
+export function definedOnPrototype(prototype: unknown, name: string): boolean {
+  for (
+    let current = prototype;
+    typeof current === "object" && current !== null && current !== Object.prototype;
+    current = Object.getPrototypeOf(current)
+  ) {
+    if (Object.hasOwn(current, name)) return true;
+  }
+  return false;
+}
+
 /** A short description of a value for an error message. It never includes the value itself. */
 export function describe(value: unknown): string {
   if (value === null || value === undefined) return String(value);

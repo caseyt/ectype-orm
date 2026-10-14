@@ -25,7 +25,7 @@ import type { ResolvedAssoc } from "./assoc.js";
 import { reservedName, resolveAssocs } from "./assoc.js";
 import type { FieldState } from "./field.js";
 import { fieldState } from "./field.js";
-import { describe, isRow } from "./guards.js";
+import { definedOnPrototype, describe, isRow } from "./guards.js";
 
 /**
  * How field names become column names: `"snake_case"` (the default) turns `createdAt`
@@ -142,6 +142,11 @@ function fieldMeta(
   }
   const wholeNumberKey = state.type.db.kind === "integer" || state.type.db.kind === "bigint";
   const dbGenerated = state.dbGenerated || (state.primaryKey && (state.keyGenerated ?? wholeNumberKey));
+  if (state.primaryKey && state.keyGenerated === undefined && state.type.db.kind === "float") {
+    throw new SchemaDefinitionError(
+      `${at} is a float primary key. The database does not generate float keys: pass .primaryKey({ dbGenerated: false }) and supply the value.`,
+    );
+  }
   if (state.primaryKey && state.nullable) {
     throw new SchemaDefinitionError(
       `${at} is a primary key and nullable. A key always has a value: remove .nullable().`,
@@ -204,6 +209,7 @@ function tablesOf(
     );
   }
   const column = columnNamer(label, naming);
+  const states = new Map<string, FieldState>();
   const fields: FieldMeta[] = [];
   const embeds: EmbedMeta[] = [];
   const columns = new Map<string, string>();
@@ -215,6 +221,7 @@ function tablesOf(
       );
     }
     const field = fieldMeta(label, name, fields.length, state, column);
+    states.set(name, state);
     if (!field.virtual) {
       const other = columns.get(field.column);
       if (other !== undefined) {
@@ -238,6 +245,18 @@ function tablesOf(
     }
   }
   const primaryKey = fields.filter((field) => field.primaryKey);
+  if (primaryKey.length > 1) {
+    // One generated sequence per table: in a composite key, an integer part is assumed to
+    // be supplied unless it says otherwise.
+    for (const key of primaryKey) {
+      const state = states.get(key.name) as FieldState;
+      if (key.dbGenerated && !state.dbGenerated && state.keyGenerated === undefined) {
+        throw new SchemaDefinitionError(
+          `${label}: field "${key.name}" is part of a composite primary key. An integer or bigint key is database-generated when it is the only key field, but in a composite key each part is usually a value you supply: pass .primaryKey({ dbGenerated: false }), or .primaryKey().dbGenerated() if the database does generate it.`,
+        );
+      }
+    }
+  }
   if (keyless && primaryKey.length > 0) {
     throw new SchemaDefinitionError(
       `${label}: { primaryKey: false } says the table has no key, but the field "${primaryKey[0]?.name}" is declared with .primaryKey(). Remove one of the two.`,
@@ -310,9 +329,11 @@ function compileFactory(
       lines.push(`this[${JSON.stringify(name)}] = loaded[${i}];`);
     });
     lines.push("this[ROW] = row;");
-    construct = new Function("ROW", `return function Row(values, loaded, row) {\n${lines.join("\n")}\n};`)(
-      ROW,
-    );
+    // Strict, as the loop is: an assignment that cannot be made throws instead of being lost.
+    construct = new Function(
+      "ROW",
+      `"use strict";\nreturn function Row(values, loaded, row) {\n${lines.join("\n")}\n};`,
+    )(ROW);
   } else {
     construct = function Row(
       this: Record<string | symbol, unknown>,
@@ -368,6 +389,13 @@ interface Shared extends Tables {
 
 function makeMeta(shared: Shared, model: AnySchema, name: string): Meta {
   const prototype = model.prototype as object;
+  for (const field of shared.fieldNames) {
+    if (definedOnPrototype(prototype, field)) {
+      throw new SchemaDefinitionError(
+        `${name} defines "${field}" as a getter, method or property of the class, and "${field}" is also a field. A row holds each field as its own property, so the class member would hide it or make it impossible to set. Rename the member.`,
+      );
+    }
+  }
   const Plain = compileFactory(shared, prototype, [], shared.codegen);
   const factories = new Map<string, LoadedFactory>();
   let resolved: ReadonlyMap<string, ResolvedAssoc> | undefined;
