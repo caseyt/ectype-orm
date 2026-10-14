@@ -1066,8 +1066,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
 
   /**
    * Checks that the params hold `<field>Confirmation` equal to the field's change
-   * (`passwordConfirmation` for `password`). The confirmation is compared as sent, with
-   * the changed value. The error, `does not match confirmation`,
+   * (`passwordConfirmation` for `password`). The confirmation is cast with the field's
+   * type and compared with the change by that type, so the same input typed twice always
+   * matches; a confirmation the type rejects does not. The error, `does not match confirmation`,
    * goes on the confirmation key. A missing confirmation is an error only with
    * `required: true` (`can't be blank`). Like the other validations it runs only when the
    * field has a change (not a change to `null`), and only on a changeset made by `cast`.
@@ -1080,7 +1081,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * @throws QueryError when `field` is not a field.
    */
   validateConfirmation(field: FieldName<S>, options?: ConfirmationOptions): this {
-    fieldOf(this.#spec, field, "validateConfirmation");
+    const meta = fieldOf(this.#spec, field, "validateConfirmation");
     checkMessage(options?.message, "validateConfirmation");
     const key = `${field}Confirmation`;
     const params = this.params;
@@ -1088,8 +1089,7 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
     let error: ChangesetError | undefined;
     if (params !== null && value !== undefined && value !== null) {
       if (hasOwn(params, key)) {
-        // The confirmation, as sent, against the changed value of the field.
-        if (!deepEqual(params[key], value)) {
+        if (!confirms(meta, params[key], value)) {
           error = errorOf(
             messageOf(options?.message, "does not match confirmation", EMPTY),
             "confirmation",
@@ -1625,6 +1625,13 @@ function columnOf(schema: AnySchema, field: string): string {
 function includes(field: FieldMeta, values: readonly unknown[], value: unknown): boolean {
   for (const candidate of values) if (same(field, candidate, value)) return true;
   return false;
+}
+
+/** Whether a confirmation param, cast with the field's type, equals the field's change. */
+function confirms(field: FieldMeta, confirmation: unknown, change: unknown): boolean {
+  if (confirmation === undefined || confirmation === null) return false;
+  const result = field.type.cast(confirmation);
+  return result.success && same(field, result.data, change);
 }
 
 function checkLimit(limit: unknown): void {

@@ -121,8 +121,9 @@ and `validateAcceptance`, which checks the params whatever changed.
   `must be less than or equal to {number}`, `must be greater than or equal to {number}`,
   `must be equal to {number}`, `must be not equal to {number}`. It works on `number` and
   `bigint` fields. Like `validateLength`, it throws when given no limit.
-- `validateConfirmation("password")` compares `passwordConfirmation` in the params, as
-  sent, with the change of `password`, and puts the error on `passwordConfirmation`. A missing confirmation is an error only
+- `validateConfirmation("password")` casts `passwordConfirmation` from the params with
+  the field's type and compares it with the change of `password` (so the same input typed
+  twice always matches), and puts the error on `passwordConfirmation`. A missing confirmation is an error only
   with `{ required: true }`. Like the other validations it runs only when the field has a
   change, so a form that leaves the password alone is not asked to confirm it. It reads
   the params, so it does nothing on a changeset made with `change`.

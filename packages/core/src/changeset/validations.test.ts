@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import type { AnySchema, Row } from "../contracts/schema.js";
 import { QueryError } from "../errors.js";
 import { meta, Schema, t } from "../schema/index.js";
+import { defineType } from "../types/define.js";
 import { cast, change } from "./changeset.js";
 
 function loaded<S extends AnySchema>(schema: S, values: Readonly<Record<string, unknown>>): Row<S> {
@@ -422,14 +423,51 @@ describe("validateConfirmation", () => {
     });
   });
 
-  test("compares the confirmation as sent with the field's change", () => {
+  test("casts the confirmation with the field's type, so the same input typed twice matches", () => {
+    expect(cast(User, { age: "36", ageConfirmation: "36" }, ["age"]).validateConfirmation("age").valid).toBe(
+      true,
+    );
     expect(cast(User, { age: "36", ageConfirmation: 36 }, ["age"]).validateConfirmation("age").valid).toBe(
       true,
     );
-    expect(cast(User, { age: "36", ageConfirmation: "36" }, ["age"]).validateConfirmation("age").valid).toBe(
-      false,
-    );
-    // A change made with putChange is confirmed too; the field need not be in the params.
+    const at = "2026-10-14T09:00:00.000Z";
+    expect(
+      cast(User, { createdAt: at, createdAtConfirmation: at }, ["createdAt"]).validateConfirmation(
+        "createdAt",
+      ).valid,
+    ).toBe(true);
+    const Lower = defineType<string>({
+      name: "lower",
+      db: { kind: "text" },
+      cast: (input) =>
+        typeof input === "string" ? { success: true, data: input.toLowerCase() } : { success: false },
+    });
+    const types = { login: t.type(Lower) };
+    const login = (confirmation: unknown) =>
+      cast({ data: {}, types }, { login: "Ann@X.io", loginConfirmation: confirmation }, [
+        "login",
+      ]).validateConfirmation("login");
+    expect(login("Ann@X.io").valid).toBe(true);
+    expect(login("ann@x.io").valid).toBe(true);
+    expect(login("Ann@Y.io").valid).toBe(false);
+  });
+
+  test("a different value, a value the type rejects, or null is a mismatch", () => {
+    const errors = {
+      ageConfirmation: [{ message: "does not match confirmation", validation: "confirmation", meta: {} }],
+    };
+    expect(
+      cast(User, { age: "36", ageConfirmation: "37" }, ["age"]).validateConfirmation("age").errors,
+    ).toEqual(errors);
+    expect(
+      cast(User, { age: "36", ageConfirmation: "x" }, ["age"]).validateConfirmation("age").errors,
+    ).toEqual(errors);
+    expect(
+      cast(User, { age: "36", ageConfirmation: null }, ["age"]).validateConfirmation("age").errors,
+    ).toEqual(errors);
+  });
+
+  test("confirms a change made with putChange; the field need not be in the params", () => {
     const put = cast(User, { passwordConfirmation: "pw1" }, []).putChange("password", "pw1");
     expect(put.validateConfirmation("password").valid).toBe(true);
     expect(put.putChange("password", "pw2").validateConfirmation("password").valid).toBe(false);
