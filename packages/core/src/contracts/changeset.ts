@@ -153,8 +153,9 @@ export interface ValidatorContext<T> {
  * writing such a function is accepted: no `return` at all, a `: void` annotation, an
  * `async` function typed `Promise<void>`, and a body that returns issues on some paths
  * only (under `noImplicitReturns`, annotate such a function with {@link ValidatorResult}).
- * A function that returns something else, such as a string or a malformed issue, is
- * still rejected.
+ * A function that returns something else, such as a single issue without its array, a
+ * string or a malformed issue, makes the validation throw a `TypeError` (see
+ * {@link ValidatorResult}).
  *
  * Step 06 specifies how the issues become changeset errors.
  *
@@ -176,8 +177,13 @@ export type ValidatorFn<T> = (
 ) => ValidatorResult | Promise<ValidatorResult>;
 
 /**
- * What a {@link ValidatorFn} returns: the issues, or nothing when there are none. Code
- * that receives one treats anything that is not an array as "no issues".
+ * What a {@link ValidatorFn} returns: an array of issues (empty when there are none), or
+ * nothing. Code that receives one accepts an array, `undefined`, and also `null`, which
+ * untyped code may return for "nothing". Anything else, such as a single issue without
+ * its array (`{ path, message }` instead of `[{ path, message }]`), a string or a number,
+ * is a mistake in the validator and makes the validation throw a `TypeError`; it never
+ * counts as "no issues". The same holds for what an asynchronous validator's promise
+ * resolves to.
  *
  * @example
  * ```ts

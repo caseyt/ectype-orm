@@ -62,8 +62,13 @@ type ValidationIssue = { path: PropertyKey | readonly PropertyKey[]; message: st
 ```
 
 `path` is a field name, or a list whose first element is the field name. `meta` is
-merged into the error's `meta`, so it can fill `{placeholders}` in the message. Anything
-returned that is not a list counts as no issues.
+merged into the error's `meta`, so it can fill `{placeholders}` in the message.
+
+Return an array, even for one issue: `[{ path: "email", message: "is taken" }]`. An empty
+array, `undefined` (no `return`) and `null` mean no issues. Anything else is a bug in
+the function, and `validate` throws a `TypeError` that says what it got: a single issue
+without its array, a string, a number, any other object. With `validateAsync`, the same
+holds for what the promise resolves to, and the promise rejects with the `TypeError`.
 
 `ctx.data` is the record before the changes: the loaded row, or, for a new record, an
 object of the field defaults (`undefined` for a field without one). It is never `null`.
@@ -125,7 +130,9 @@ validate with a schema of just those fields. A function validator has no output,
 
 `validateField` runs only when the field has a change, and not on a change to `null`
 (like the built-in validations). The validator receives the changed value alone. Every
-issue goes on that field, its path in `meta.path`.
+issue goes on that field, its path in `meta.path`. A function given to `validateField`
+returns an array of issues or nothing, like one given to `validate`, and throws the same
+`TypeError` otherwise.
 
 ## Async validation
 
@@ -217,6 +224,8 @@ Type it with `ValidatorFn<T>` for the fields it needs:
 ::: tip Good to know
 - **Validation keeps every issue by default.** A rule that reports on a field the user
   did not change is still reported (`scope: "all"`); opt in to `scope: "changed"` per call.
+- **A validator function returns an array.** `return { path, message }` or
+  `return "is taken"` throws a `TypeError`; it is never read as "no issues".
 - **`validate` is synchronous.** A validator that returns a promise, such as any Yup
   schema, needs `validateAsync`.
 - **Validators never change values** unless you pass `apply: true`, and then only when
