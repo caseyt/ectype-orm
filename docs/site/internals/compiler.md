@@ -44,7 +44,9 @@ where "u"."age" >= $1 order by "u"."created_at" desc limit $2
   parenthesised whenever it is an operand, since its text is unknown.
 - **A value with nothing around it to give it a type is cast to its own**: a value in the
   select list (`cast($1 as integer)`), a cell of a values list, a typed value inside a
-  fragment. A value with no type at all is cast to `text` in the select list.
+  fragment. A value with no type at all is cast to `text` in the select list, so it comes
+  back as a string even where its TypeScript type says otherwise (`val(5)` is typed `5`):
+  give a selected value a type, `val(5, t.integer())`.
 - **An `exists(…)` subquery selects `1`** when it has no select of its own.
 
 ### Database schemas

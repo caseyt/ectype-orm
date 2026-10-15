@@ -1,14 +1,17 @@
 // The emitter decides every parenthesis by operator precedence. This test lets Postgres
 // evaluate random expression trees and compares the answers with JavaScript's evaluation
-// of the same trees: a missing parenthesis changes the grouping, and so the value.
+// of the same trees: a missing parenthesis changes the grouping, and so the value. The
+// operators covered: + - * / % and unary minus, comparisons, BETWEEN, AND, OR, NOT, and ||.
 import { createTestDatabase, type TestDatabaseHandle } from "@egon-orm/test-support";
 import fc from "fast-check";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { ExprNode } from "../contracts/query.js";
-import { betweenNode, binaryNode, literalNode, naryNode, unaryNode } from "../query/ast.js";
+import { t } from "../index.js";
+import { betweenNode, binaryNode, castNode, literalNode, naryNode, unaryNode } from "../query/ast.js";
+import { bindParams } from "./bind.js";
 import { createCompiler } from "./compiler.js";
 import { postgresDialect } from "./dialect.js";
-import { bareQuery, rebuild, selectObject } from "./sql-fixtures.js";
+import { bareQuery, rebuild, selectObject, typeOf, value } from "./sql-fixtures.js";
 
 interface Tree<T> {
   readonly node: ExprNode;
@@ -37,6 +40,28 @@ function integer(depth: number): fc.Arbitrary<Tree<number>> {
         value: op === "add" ? a.value + b.value : op === "sub" ? a.value - b.value : a.value * b.value,
       })),
     inner.map((a) => ({ node: unaryNode("neg", a.node), value: -a.value })),
+    // Integer division truncates towards zero and `%` takes the dividend's sign, in both.
+    fc
+      .tuple(fc.constantFrom("div", "mod") as fc.Arbitrary<"div" | "mod">, inner, inner)
+      .filter(([, , b]) => b.value !== 0)
+      .map(([op, a, b]) => ({
+        node: binaryNode(op, a.node, b.node),
+        value: op === "div" ? Math.trunc(a.value / b.value) : a.value % b.value,
+      })),
+  );
+}
+
+const TEXT = typeOf(t.string());
+
+function text(depth: number): fc.Arbitrary<Tree<string>> {
+  const leaf = fc.string({ maxLength: 3 }).map((v) => ({ node: castNode(value(v), TEXT), value: v }));
+  if (depth === 0) return leaf;
+  const inner = text(depth - 1);
+  return fc.oneof(
+    leaf,
+    fc
+      .tuple(inner, inner)
+      .map(([a, b]) => ({ node: binaryNode("concat", a.node, b.node), value: a.value + b.value })),
   );
 }
 
@@ -52,8 +77,13 @@ function boolean(depth: number): fc.Arbitrary<Tree<boolean>> {
     node: betweenNode(x.node, low.node, high.node),
     value: x.value >= low.value && x.value <= high.value,
   }));
+  const texts = text(2);
+  const textComparison = fc
+    .tuple(texts, texts)
+    .map(([a, b]) => ({ node: binaryNode("eq", a.node, b.node), value: a.value === b.value }));
   const leaf = fc.oneof(
     comparison,
+    textComparison,
     between,
     fc.boolean().map((b) => ({ node: literalNode(b), value: b })),
   );
@@ -94,12 +124,14 @@ test("Postgres evaluates every emitted expression as it was built", async () => 
   const compiler = createCompiler(postgresDialect);
   const one = bareQuery({ kind: "values", columns: ["x"], rows: [[literalNode(1)]], alias: "v" });
   await fc.assert(
-    fc.asyncProperty(boolean(3), integer(3), async (condition, number) => {
-      const ast = rebuild(one, { select: selectObject({ b: condition.node, n: number.node }) });
+    fc.asyncProperty(boolean(3), integer(3), text(3), async (condition, number, string) => {
+      const ast = rebuild(one, {
+        select: selectObject({ b: condition.node, n: number.node, s: string.node }),
+      });
       const plan = compiler.compile(ast, "all", undefined);
-      const rows = await handle.db.query(plan.sql, []);
+      const rows = await handle.db.query(plan.sql, bindParams(plan.slots, ast.params));
       // `+ 0` turns JavaScript's -0 into 0; the database has no negative zero for integers.
-      expect(rows).toEqual([{ c0: condition.value, c1: number.value + 0 }]);
+      expect(rows).toEqual([{ c0: condition.value, c1: number.value + 0, c2: string.value }]);
     }),
     { numRuns: 300 },
   );

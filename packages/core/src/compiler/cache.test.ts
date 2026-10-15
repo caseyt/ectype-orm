@@ -129,13 +129,17 @@ describe("L2: by shape", () => {
     expect(compiler.stats().misses).toBe(missesBefore + 1);
   });
 
-  test("clearCache drops the bounded levels and keeps the counters", () => {
+  test("clearCache drops every plan, the same AST's included, and keeps the counters", () => {
     const compiler = createCompiler(postgresDialect);
-    compiler.compile(byAge(1).ast, "all", undefined);
+    const ast = byAge(1).ast;
+    const first = compiler.compile(ast, "all", undefined);
     compiler.clearCache();
     expect(compiler.stats()).toEqual({ hits: 0, misses: 1, collisions: 0, size: 0 });
+    const again = compiler.compile(ast, "all", undefined);
+    expect(again).not.toBe(first);
+    expect(compiler.stats()).toEqual({ hits: 0, misses: 2, collisions: 0, size: 1 });
     compiler.compile(byAge(2).ast, "all", undefined);
-    expect(compiler.stats().misses).toBe(2);
+    expect(compiler.stats().hits).toBe(1);
   });
 
   test("planCacheSize must be a positive integer", () => {
@@ -370,5 +374,114 @@ describe("explain and fragment plans", () => {
     compiler.compile(ast, "all", undefined);
     compiler.compileFragment(frag`select 1`);
     expect(compiler.stats()).toMatchObject({ misses: 2 });
+  });
+});
+
+describe("list lengths where lists are expanded", () => {
+  const posts = meta(Post);
+  const authorId = posts.fieldsByName.get("authorId") as FieldMeta;
+  const title = posts.fieldsByName.get("title") as FieldMeta;
+  const ids = (list: number[]) =>
+    from(User, "u")
+      .where(({ u }) => u.id.in(list))
+      .select(({ u }) => [u.id, u.email]).ast;
+
+  /** A warm compiler must give what a cold one gives, for every length. */
+  function sameAsCold(
+    compile: (
+      compiler: ReturnType<typeof createCompiler>,
+      list: number[],
+    ) => { sql: string; slots: readonly unknown[] },
+  ) {
+    const warm = createCompiler(expanding);
+    for (const list of [[1, 2], [1, 2, 3], [4, 5], [6]]) {
+      const cold = compile(createCompiler(expanding), list);
+      const hot = compile(warm, list);
+      expect(hot.sql).toBe(cold.sql);
+      expect(hot.slots).toEqual(cold.slots);
+    }
+    expect(warm.stats().collisions).toBe(0);
+    return warm;
+  }
+
+  test("an insert from a query keys on the query's list lengths", () => {
+    const warm = sameAsCold((c, list) =>
+      c.compileInsert(
+        posts,
+        [authorId, title],
+        { source: { kind: "query", query: ids(list) }, returning: [], onConflict: undefined },
+        undefined,
+      ),
+    );
+    // [1, 2] and [4, 5] share a plan.
+    expect(warm.stats().hits).toBe(1);
+    const plan = createCompiler(expanding).compileInsert(
+      posts,
+      [authorId, title],
+      { source: { kind: "query", query: ids([1, 2, 3]) }, returning: [], onConflict: undefined },
+      undefined,
+    );
+    expect(plan.sql).toContain('"u"."id" in (?, ?, ?)');
+    expect(bindParams(plan.slots, ids([1, 2, 3]).params)).toEqual([1, 2, 3]);
+  });
+
+  test("an expression cell keys on its list lengths", () => {
+    sameAsCold((c, list) =>
+      c.compileInsert(
+        posts,
+        [authorId, title],
+        {
+          source: {
+            kind: "cells",
+            rows: [
+              [
+                {
+                  kind: "expr",
+                  expr: {
+                    kind: "subquery",
+                    query: rebuild(ids(list), { select: selectOne(col("u", "id")), limit: value(1) }),
+                  },
+                },
+                { kind: "value" },
+              ],
+            ],
+          },
+          returning: [],
+          onConflict: undefined,
+        },
+        undefined,
+      ),
+    );
+  });
+
+  test("a fragment conflict target keys on its list lengths", () => {
+    const tags = meta(Tag);
+    const name = tags.fieldsByName.get("name") as FieldMeta;
+    sameAsCold((c, list) =>
+      c.compileInsert(
+        tags,
+        [name],
+        {
+          source: { kind: "values", rows: 1 },
+          returning: [],
+          onConflict: {
+            target: frag`(name) where id in (${{ kind: "subquery", query: rebuild(ids(list), { select: selectOne(col("u", "id")) }) }})`,
+            update: "all",
+          },
+        },
+        undefined,
+      ),
+    );
+  });
+
+  test("a fragment statement keys on the lengths of the lists inside it", () => {
+    sameAsCold((c, list) =>
+      c.compileFragment(frag`select exists (${{ kind: "subquery", query: ids(list) }}) as found`),
+    );
+  });
+
+  test("explain and read plans key on list lengths", () => {
+    sameAsCold((c, list) => c.compile(ids(list), "all", undefined));
+    sameAsCold((c, list) => c.compileExplain(ids(list), "all", undefined, {}));
   });
 });

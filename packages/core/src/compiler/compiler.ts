@@ -14,7 +14,7 @@ import type {
 import type { FragmentNode, QueryAst, QueryNode, QueryOperation } from "../contracts/query.js";
 import type { FieldMeta, SchemaMeta } from "../contracts/schema.js";
 import { QueryError } from "../errors.js";
-import { shapeOf } from "../query/ast.js";
+import { collectParams, shapeOf } from "../query/ast.js";
 import { PlanCache, type PlanCacheStats } from "./cache.js";
 import type { SqlDialect } from "./dialect.js";
 import {
@@ -78,6 +78,8 @@ export class Compiler {
   readonly dialect: SqlDialect;
   readonly #codecs: CodecSource;
   readonly #cache: PlanCache;
+  /** The dialect expands lists (`IN (?, ?, …)`): list lengths are part of every key. */
+  readonly #expands: boolean;
   readonly #explained = new WeakMap<CompiledQuery, Map<string, CompiledQuery>>();
 
   /**
@@ -88,6 +90,7 @@ export class Compiler {
   constructor(dialect: SqlDialect, options: CompilerOptions = {}) {
     this.dialect = dialect;
     this.#codecs = options.codecs ?? OWN_CONVERSIONS;
+    this.#expands = !dialect.capabilities.arrayParams;
     this.#cache = new PlanCache({
       capacity: options.planCacheSize ?? 1000,
       keyLists: !dialect.capabilities.arrayParams,
@@ -187,11 +190,14 @@ export class Compiler {
       throw new QueryError("compileFragment() takes a fragment: fragment`select …`.");
     }
     const shape = shapeOf(node);
-    const cached = this.#cache.get(node, "fragment", undefined, shape, LIST_LENGTHS_UNUSED);
+    // A query nested in the fragment may hold lists; where they are expanded, their
+    // lengths are part of the SQL and so of the key.
+    const lengths = this.#expands ? listLengthsOf([node]) : LIST_LENGTHS_UNUSED;
+    const cached = this.#cache.get(node, "fragment", undefined, shape, lengths);
     if (cached !== undefined) return cached;
     const ctx = newContext(this.dialect, this.#codecs);
     const plan = finish(ctx, emitFragmentStatement(ctx, node), undefined, undefined);
-    this.#cache.set(node, "fragment", undefined, shape, LIST_LENGTHS_UNUSED, plan);
+    this.#cache.set(node, "fragment", undefined, shape, lengths, plan);
     return plan;
   }
 
@@ -229,6 +235,8 @@ export class Compiler {
       nodes.push(source.query);
     } else throw new QueryError("An insert's source is values, cells or a query.");
     key += `|${conflictKey(options.onConflict, nodes)}`;
+    // Where lists are expanded, the lengths of the lists in the AST parts are part of the SQL.
+    if (this.#expands && nodes.length > 0) key += `|l${listLengthsOf(nodes).join(",")}`;
     const cached = this.#cache.getWrite(key, nodes);
     if (cached !== undefined) return cached;
     const ctx = newContext(this.dialect, this.#codecs);
@@ -346,6 +354,16 @@ function exceptOf(update: unknown): readonly FieldMeta[] | undefined {
 }
 
 const LIST_LENGTHS_UNUSED: readonly number[] = Object.freeze([]);
+
+/** The lengths of every list in `nodes`, in canonical order. */
+function listLengthsOf(nodes: readonly QueryNode[]): number[] {
+  const lengths: number[] = [];
+  for (const node of nodes) {
+    if (node.kind === "query") for (const length of node.listLengths) lengths.push(length);
+    else collectParams(node, [], lengths);
+  }
+  return lengths;
+}
 const NO_NODES: readonly QueryNode[] = Object.freeze([]);
 
 function schemaKey(schema: string | undefined): string {

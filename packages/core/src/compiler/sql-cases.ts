@@ -640,6 +640,64 @@ export const WHERE_CASES: readonly SqlCase[] = [
       params: [18],
     },
   ),
+  queryCase(
+    "right-nested arithmetic and concatenation keep their parentheses; left-nested need none",
+    rebuild(posts.ast, {
+      select: selectObject({
+        subRight: binaryNode("sub", col("p", "views"), binaryNode("sub", col("p", "views"), value(1))),
+        subLeft: binaryNode("sub", binaryNode("sub", col("p", "views"), col("p", "views")), value(2)),
+        divRight: binaryNode("div", col("p", "views"), binaryNode("mul", literalNode(2), literalNode(3))),
+        modRight: binaryNode("mod", col("p", "views"), binaryNode("mod", literalNode(7), literalNode(4))),
+        mulRight: binaryNode("mul", col("p", "views"), binaryNode("add", col("p", "views"), literalNode(1))),
+        addLeft: binaryNode("add", binaryNode("mul", col("p", "views"), col("p", "views")), literalNode(1)),
+        concatRight: binaryNode(
+          "concat",
+          col("p", "title"),
+          binaryNode("concat", col("p", "title"), value("!")),
+        ),
+        concatLeft: binaryNode(
+          "concat",
+          binaryNode("concat", col("p", "title"), value("?")),
+          col("p", "title"),
+        ),
+      }),
+    }),
+    {
+      sql: 'select "p"."views" - ("p"."views" - $1) as "c0", "p"."views" - "p"."views" - $2 as "c1", "p"."views" / (2 * 3) as "c2", "p"."views" % (7 % 4) as "c3", "p"."views" * ("p"."views" + 1) as "c4", "p"."views" * "p"."views" + 1 as "c5", "p"."title" || ("p"."title" || $3) as "c6", "p"."title" || $4 || "p"."title" as "c7" from "posts" as "p"',
+      params: [1, 2, "!", "?"],
+    },
+  ),
+  queryCase(
+    "comparisons and booleans mixed keep their parentheses",
+    rebuild(posts.ast, {
+      wheres: [
+        {
+          kind: "bool",
+          op: "and",
+          expr: naryNode("or", [
+            binaryNode(
+              "eq",
+              binaryNode("eq", col("p", "id"), value(1)),
+              binaryNode("lt", binaryNode("add", col("p", "views"), literalNode(1)), value(2)),
+            ),
+            naryNode("and", [
+              col("p", "published"),
+              naryNode("or", [
+                unaryNode("isNull", col("p", "body")),
+                unaryNode("not", col("p", "published")),
+              ]),
+            ]),
+            unaryNode("not", naryNode("and", [col("p", "published"), col("p", "published")])),
+          ]),
+        },
+      ],
+      select: selectOne(col("p", "id")),
+    }),
+    {
+      sql: 'select "p"."id" as "c0" from "posts" as "p" where ("p"."id" = $1) = ("p"."views" + 1 < $2) or ("p"."published" and ("p"."body" is null or not "p"."published")) or not ("p"."published" and "p"."published")',
+      params: [1, 2],
+    },
+  ),
 ];
 
 // ---------------------------------------------------------------------------

@@ -378,6 +378,26 @@ describe("capabilities", () => {
 });
 
 describe("dialect clause variants", () => {
+  test("a lock fragment that is not written binds nothing either", () => {
+    const sqlite = limited({ arrayParams: false }, { ignoresLocks: true, placeholder: "positional" });
+    const ast = rebuild(
+      from(User, "u")
+        .where(({ u }) => u.age.gt(1))
+        .select(({ u }) => u.id).ast,
+      {
+        lock: { kind: "lock", clause: frag`for update wait ${value(5)}` },
+      },
+    );
+    const plan = createCompiler(sqlite).compile(ast, "all", undefined);
+    expect(plan.sql).toBe('select "u"."id" as "c0" from "users" as "u" where "u"."age" > ?');
+    expect(plan.slots.length).toBe(plan.sql.split("?").length - 1);
+    expect(bindParams(plan.slots, ast.params)).toEqual([1]);
+    // An unknown lock string is still refused.
+    expect(() => sql(sqlite, rebuild(ast, { lock: { kind: "lock", clause: "FOR NOTHING" } }))).toThrow(
+      'The lock clause "FOR NOTHING" is not one sqlite accepts as a string; use a fragment.',
+    );
+  });
+
   test("a dialect that ignores locks writes none", () => {
     const sqlite = limited({}, { ignoresLocks: true });
     expect(

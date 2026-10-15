@@ -8,6 +8,11 @@
  * query, so its `schema` argument is the table's own database schema, the strongest
  * position: `schema ?? meta.schema`.
  *
+ * A query nested in the write (the query of `INSERT … SELECT`, a subquery in an expression
+ * cell or in a fragment conflict target) is read as a query compiled with `schema` as its
+ * argument: a table of it that has no database schema of its own (from its source, its
+ * schema class or its query's `.schema()`) is read from `schema`.
+ *
  * @module
  */
 import type {
@@ -184,7 +189,7 @@ export function emitInsert(
       sql += insertValues(ctx, meta, columns, source.rows);
       break;
     case "cells":
-      sql += insertCells(ctx, columns, source.rows);
+      sql += insertCells(ctx, columns, source.rows, schema);
       break;
     case "query":
       if (columns.length === 0) throw new QueryError("An insert from a query needs a column list.");
@@ -193,7 +198,7 @@ export function emitInsert(
     default:
       throw new QueryError("An insert's source is values, cells or a query.");
   }
-  if (options.onConflict !== undefined) sql += onConflict(ctx, meta, columns, options.onConflict);
+  if (options.onConflict !== undefined) sql += onConflict(ctx, meta, columns, options.onConflict, schema);
   const back = returning(ctx, meta, options.returning);
   return { sql: sql + back.sql, output: back.output, schema: target.schema };
 }
@@ -236,6 +241,7 @@ function insertCells(
   ctx: EmitContext,
   columns: readonly FieldMeta[],
   rows: readonly (readonly InsertCell[])[],
+  schema: string | undefined,
 ): string {
   if (columns.length === 0) throw new QueryError("An insert of cells needs a column list.");
   if (!Array.isArray(rows) || rows.length === 0)
@@ -259,7 +265,7 @@ function insertCells(
           text += "default";
           break;
         case "expr":
-          text += emitLooseExpr(ctx, cell.expr, undefined);
+          text += emitLooseExpr(ctx, cell.expr, schema);
           break;
         case "placeholder":
           text += namedValue(ctx, cell.name, field.type, field.redact);
@@ -278,6 +284,7 @@ function onConflict(
   meta: SchemaMeta,
   columns: readonly FieldMeta[],
   conflict: OnConflict,
+  schema: string | undefined,
 ): string {
   if (!ctx.dialect.capabilities.onConflict) throw unsupported(ctx.dialect, "onConflict");
   if (conflict === "nothing") return " on conflict do nothing";
@@ -293,7 +300,7 @@ function onConflict(
     }
   } else {
     if (!ctx.dialect.capabilities.conflictTarget) throw unsupported(ctx.dialect, "An onConflict target");
-    text += conflictTarget(ctx, meta, conflict.target);
+    text += conflictTarget(ctx, meta, conflict.target, schema);
   }
   const fields = updatedFields(meta, columns, conflict.update);
   if (fields.length === 0) {
@@ -309,7 +316,12 @@ function onConflict(
   return text;
 }
 
-function conflictTarget(ctx: EmitContext, meta: SchemaMeta, target: ConflictTarget): string {
+function conflictTarget(
+  ctx: EmitContext,
+  meta: SchemaMeta,
+  target: ConflictTarget,
+  schema: string | undefined,
+): string {
   if (Array.isArray(target)) {
     const fields = target as readonly FieldMeta[];
     if (fields.length === 0) throw new QueryError("onConflict's target lists no field.");
@@ -317,7 +329,7 @@ function conflictTarget(ctx: EmitContext, meta: SchemaMeta, target: ConflictTarg
     return ` (${columnList(ctx, fields)})`;
   }
   const node = target as Exclude<ConflictTarget, readonly FieldMeta[]>;
-  if ("kind" in node && node.kind === "fragment") return ` ${emitLooseExpr(ctx, node, undefined)}`;
+  if ("kind" in node && node.kind === "fragment") return ` ${emitLooseExpr(ctx, node, schema)}`;
   if ("constraint" in node && typeof node.constraint === "string" && node.constraint !== "") {
     return ` on constraint ${quoteIdentifier(ctx.dialect, node.constraint)}`;
   }

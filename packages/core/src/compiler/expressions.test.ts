@@ -106,7 +106,7 @@ describe("expressions outside the select list", () => {
     expect(sql(ast).endsWith(' order by "n" desc, "c1" asc')).toBe(true);
   });
 
-  test("the order of a set operation matches an expression with the same values only", () => {
+  test("the order of a set operation matches a selected expression by structure, whatever its values", () => {
     const base = rebuild(from(User, "u").ast, {
       select: selectObject({ x: binaryNode("add", col("u", "age"), value(1)) }),
       combinations: [
@@ -126,7 +126,41 @@ describe("expressions outside the select list", () => {
     expect(plan.sql.endsWith(' order by "c0" asc')).toBe(true);
     // The order expression is not written, and its value is skipped.
     expect(bindParams(plan.slots, sorted(1).params)).toEqual([1, 1]);
-    expect(() => sql(sorted(2))).toThrow(/can only use expressions the query selects/);
+    // Another value: the same shape, so the same plan, warm or cold.
+    expect(sql(sorted(2))).toBe(plan.sql);
+  });
+
+  test("an order that matches two selected expressions of one shape is refused, warm or cold", () => {
+    // select { a: age + 1, b: age + 2 } union all itself, order by age + n
+    const branch = rebuild(from(User, "u").ast, {
+      select: selectObject({
+        a: binaryNode("add", col("u", "age"), value(1)),
+        b: binaryNode("add", col("u", "age"), value(2)),
+      }),
+    });
+    const sorted = (by: number) =>
+      rebuild(branch, {
+        combinations: [{ kind: "combination", op: "union", all: true, query: branch }],
+        orderBys: [orderNode(binaryNode("add", col("u", "age"), value(by)), "desc", undefined)],
+      });
+    const message = /names an expression the query selects more than once/;
+    const warm = createCompiler(postgresDialect);
+    for (const by of [1, 2, 3]) {
+      expect(() => warm.compile(sorted(by), "all", undefined)).toThrow(message);
+      expect(() => sql(sorted(by))).toThrow(message);
+    }
+    // Named with selectedAs, it is unambiguous.
+    const named = rebuild(branch, {
+      select: selectObject({
+        a: binaryNode("add", col("u", "age"), value(1)),
+        b: selectedAsNode("b", binaryNode("add", col("u", "age"), value(2))),
+      }),
+    });
+    const ok = rebuild(named, {
+      combinations: [{ kind: "combination", op: "union", all: true, query: branch }],
+      orderBys: [orderNode(selectedAsNode("b", undefined), "desc", undefined)],
+    });
+    expect(sql(ok).endsWith(' order by "b" desc')).toBe(true);
   });
 
   test("an identifier that is not a string is refused", () => {

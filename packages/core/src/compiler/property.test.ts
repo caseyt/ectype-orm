@@ -356,6 +356,21 @@ interface Values {
 
 /** Queries with values in many clauses, written in non-canonical order on purpose. */
 const TEMPLATES: readonly ((v: Values) => QueryAst)[] = [
+  // A set operation ordered by a selected expression that holds a value: the order item
+  // is found by structure, so another value must give the same SQL.
+  (v) => {
+    const branch = (n: number) =>
+      from(User, "u")
+        .where(({ u }) => u.email.neq(v.b))
+        .select(({ u }) => ({ x: u.age.add(n), y: u.email })).ast;
+    return rebuild(branch(v.a), {
+      combinations: [{ kind: "combination", op: "union", all: true, query: branch(v.d) }],
+      orderBys: [
+        orderNode(binaryNode("add", col("u", "age"), value(v.f, typeOf(t.integer()))), "desc", undefined),
+      ],
+      limit: value(v.d, typeOf(t.integer())),
+    });
+  },
   (v) =>
     from(User, "u")
       .limit(v.d)

@@ -1001,23 +1001,23 @@ function combinedOrder(
 
 function outputAliasOf(node: ExprNode, items: readonly SelectItem[]): string | undefined {
   if (node.kind === "selectedAs" && node.expr === undefined) return node.name;
+  // Matched by structure only: the plan is shared by every query of this shape, whatever
+  // its values, so the alias it picks must not depend on them.
+  let found: string | undefined;
   for (const item of items) {
-    if (item.kind === "column") {
-      if (node.kind === "column" && node.binding === item.binding && node.column === item.column)
-        return item.alias;
-    } else if (item.expr === node || (sameShape(item.expr, node) && sameValues(item.expr, node))) {
-      return item.alias;
+    const same =
+      item.kind === "column"
+        ? node.kind === "column" && node.binding === item.binding && node.column === item.column
+        : item.expr === node || sameShape(item.expr, node);
+    if (!same) continue;
+    if (found !== undefined) {
+      throw new QueryError(
+        "orderBy() on a query combined with union(), intersect() or except() names an expression the query selects more than once (the same expression with other values counts as the same). Name the one to sort by with selectedAs(…) and order by that name.",
+      );
     }
+    found = item.alias;
   }
-  return undefined;
-}
-
-function sameValues(a: ExprNode, b: ExprNode): boolean {
-  const left: unknown[] = [];
-  const right: unknown[] = [];
-  collectParams(a, left);
-  collectParams(b, right);
-  return left.length === right.length && left.every((value, i) => Object.is(value, right[i]));
+  return found;
 }
 
 function lockClause(ctx: Ctx, frame: Frame, clause: string | FragmentNode): string {
@@ -1031,8 +1031,8 @@ function lockClause(ctx: Ctx, frame: Frame, clause: string | FragmentNode): stri
     return ctx.dialect.ignoresLocks ? "" : ` ${sql}`;
   }
   if (clause?.kind !== "fragment") throw new QueryError("A lock is a lock clause or a fragment.");
-  const text = fragment(ctx, frame, clause);
-  return ctx.dialect.ignoresLocks ? "" : ` ${text}`;
+  // Not written at all where locks are ignored: writing it would add slots without placeholders.
+  return ctx.dialect.ignoresLocks ? "" : ` ${fragment(ctx, frame, clause)}`;
 }
 
 /** Folds `where`/`having` entries into one condition: `where(a).where(b).orWhere(c)` is `(a and b) or c`. */
@@ -1250,21 +1250,24 @@ export function emitFragmentStatement(ctx: EmitContext, node: FragmentNode): str
 }
 
 /**
- * Writes an expression that belongs to no query (an insert cell, a conflict target), at
- * the context's current canonical position.
+ * Writes an expression that belongs to no query (an insert cell, a conflict target) of a
+ * row-level write, at the context's current canonical position. `schema` is the write's
+ * `schema` argument: a query nested in the expression that sets no database schema of
+ * its own inherits it, as the queries nested in a query inherit the `compile` argument.
  *
  * @example
  * ```ts
- * emitLooseExpr(ctx, fragmentNode(["lower(", ")"], [name]));
+ * emitLooseExpr(ctx, fragmentNode(["lower(", ")"], [name]), "tenant_1");
  * ```
  */
-export function emitLooseExpr(ctx: EmitContext, node: ExprNode, scope: Scope | undefined): string {
-  return expr(ctx, { scope: scope ?? newScope(undefined), schema: undefined }, node);
+export function emitLooseExpr(ctx: EmitContext, node: ExprNode, schema: string | undefined): string {
+  return expr(ctx, { scope: newScope(undefined), schema }, node);
 }
 
 /**
  * Writes a query that belongs to no statement of its own (`INSERT … SELECT`), with its
- * values starting at the context's current canonical position.
+ * values starting at the context's current canonical position. `schema` is the write's
+ * `schema` argument, inherited as {@link emitLooseExpr} does.
  *
  * @example
  * ```ts

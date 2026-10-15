@@ -1,6 +1,7 @@
 import { Post, Tag, User, UserSettings } from "@egon-orm/test-support";
 import { describe, expect, test } from "vitest";
 import type { InsertPlanOptions, OutputPlan } from "../contracts/adapter.js";
+import type { QueryAst } from "../contracts/query.js";
 import type { FieldMeta, SchemaMeta } from "../contracts/schema.js";
 import { from, t } from "../index.js";
 import { binaryNode, literalNode } from "../query/ast.js";
@@ -49,6 +50,88 @@ const one = (returning: readonly FieldMeta[] = []): InsertPlanOptions => ({
   source: { kind: "values", rows: 1 },
   returning,
   onConflict: undefined,
+});
+
+describe("queries nested in a row-level write take the write's database schema", () => {
+  const posts = meta(Post);
+  const authorId = posts.fieldsByName.get("authorId") as FieldMeta;
+  const title = posts.fieldsByName.get("title") as FieldMeta;
+  const firstUser = (q: { readonly ast: QueryAst }) =>
+    ({
+      kind: "subquery",
+      query: rebuild(q.ast, { select: selectOne(col("u", "id")), limit: value(1) }),
+    }) as const;
+
+  test("INSERT … SELECT: the query inherits it, unless it sets its own", () => {
+    const insert = (query: QueryAst) =>
+      createCompiler(postgresDialect).compileInsert(
+        posts,
+        [authorId, title],
+        { source: { kind: "query", query }, returning: [], onConflict: undefined },
+        "tenant_1",
+      ).sql;
+    const select = from(User, "u").select(({ u }) => [u.id, u.email]);
+    expect(insert(select.ast)).toBe(
+      'insert into "tenant_1"."posts" ("author_id", "title") select "u"."id" as "c0", "u"."email" as "c1" from "tenant_1"."users" as "u"',
+    );
+    expect(insert(select.schema("archive").ast)).toContain('from "archive"."users" as "u"');
+    expect(insert(from(AuditLog, "a").select(({ a }) => [a.id, a.action]).ast)).toContain(
+      'from "audit"."audit_logs" as "a"',
+    );
+  });
+
+  test("a subquery in a cell inherits it, unless it sets its own", () => {
+    const insert = (q: { readonly ast: QueryAst }) =>
+      createCompiler(postgresDialect).compileInsert(
+        posts,
+        [authorId, title],
+        {
+          source: { kind: "cells", rows: [[{ kind: "expr", expr: firstUser(q) }, { kind: "value" }]] },
+          returning: [],
+          onConflict: undefined,
+        },
+        "tenant_1",
+      ).sql;
+    expect(insert(from(User, "u"))).toBe(
+      'insert into "tenant_1"."posts" ("author_id", "title") values ((select "u"."id" as "c0" from "tenant_1"."users" as "u" limit $1), $2)',
+    );
+    expect(insert(from(User, "u").schema("archive"))).toContain('from "archive"."users" as "u"');
+  });
+
+  test("a subquery in a fragment conflict target inherits it", () => {
+    const tags = meta(Tag);
+    const name = tags.fieldsByName.get("name") as FieldMeta;
+    const plan = createCompiler(postgresDialect).compileInsert(
+      tags,
+      [name],
+      {
+        source: { kind: "values", rows: 1 },
+        returning: [],
+        onConflict: { target: frag`(name) where id <> (${firstUser(from(User, "u"))})`, update: "all" },
+      },
+      "tenant_1",
+    );
+    expect(plan.sql).toContain(
+      'where id <> ((select "u"."id" as "c0" from "tenant_1"."users" as "u" limit $2))',
+    );
+  });
+
+  test("without a schema argument nothing is inherited", () => {
+    const plan = createCompiler(postgresDialect).compileInsert(
+      posts,
+      [authorId, title],
+      {
+        source: {
+          kind: "cells",
+          rows: [[{ kind: "expr", expr: firstUser(from(User, "u")) }, { kind: "value" }]],
+        },
+        returning: [],
+        onConflict: undefined,
+      },
+      undefined,
+    );
+    expect(plan.sql).toContain('from "users" as "u"');
+  });
 });
 
 describe("what a row-level write returns", () => {

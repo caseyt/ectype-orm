@@ -119,7 +119,7 @@ const NO_LENGTHS: readonly number[] = Object.freeze([]);
  * ```
  */
 export class PlanCache {
-  readonly #identity = new WeakMap<object, IdentityEntry[]>();
+  #identity = new WeakMap<object, IdentityEntry[]>();
   readonly #shapes: LruCache<number, ShapeEntry>;
   readonly #writes: LruCache<string, WriteEntry>;
   readonly #keyLists: boolean;
@@ -222,8 +222,9 @@ export class PlanCache {
     };
   }
 
-  /** Drops every plan (the counters are kept). L1 entries go with their AST objects. */
+  /** Drops every plan, at both levels and for writes. The counters are kept. */
   clear(): void {
+    this.#identity = new WeakMap();
     this.#shapes.clear();
     this.#writes.clear();
   }
