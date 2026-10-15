@@ -5,6 +5,10 @@
 `docs/site/reference/benchmarks.md`. May open PRs against any package for optimisations
 (each one small, with before/after numbers, reviewed like any other PR).
 
+> **Owner decision, 2026-10-14:** feature steps no longer write micro-benchmarks. This step
+> writes `micro/<area>.bench.ts` for every area once everything works (the benchmarks that
+> steps 04–07 already committed stay), then measures every README §7 budget. See README §7.
+
 ## Goal
 
 Make performance measurable, visible, and protected from regression; then use the
@@ -15,8 +19,8 @@ measurements to meet or beat the budgets in plan README §7.
 1. **Runner.** `benchmarks/` with `mitata` (or `tinybench`), one process per benchmark file,
    pinned Node flags, warm-up, and enough samples to report median, p75, p99 and the
    relative margin of error. Reject a run whose margin exceeds a threshold (noisy machine).
-2. **Layout.** `micro/<area>.bench.ts` (owned by each feature step, harness provides the
-   helpers), `e2e/*.bench.ts` (against real Postgres with seeded data), `compare/*.bench.ts`
+2. **Layout.** `micro/<area>.bench.ts` (written by this step; see the note above),
+   `e2e/*.bench.ts` (against real Postgres with seeded data), `compare/*.bench.ts`
    (other libraries), `memory/*.bench.ts`.
 3. **Seeding.** Deterministic dataset generator for the blog schema: small (1k users),
    medium (100k posts), large (1M comments) — created once per run in a dedicated database.
