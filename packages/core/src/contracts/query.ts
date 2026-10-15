@@ -257,6 +257,12 @@ export type BinaryOp =
 /**
  * An operator with two operands: `"u"."age" >= $1`.
  *
+ * Two operators read their operands specially. `in` and `notIn` take on the right a
+ * {@link ListNode} (`= ANY($1)`, or `IN ($1, $2, …)` where the dialect expands lists), a
+ * {@link SubqueryNode} (`IN (SELECT …)`) or an expression of array type (`= ANY(…)`).
+ * `has` tests whether the array on the left holds the element on the right:
+ * `$1 = ANY("p"."tags")`.
+ *
  * @example
  * ```ts
  * declare const age: ColumnNode;
@@ -269,6 +275,25 @@ export interface BinaryNode {
   readonly op: BinaryOp;
   readonly left: ExprNode;
   readonly right: ExprNode;
+}
+
+/**
+ * A range test: `"u"."age" BETWEEN $1 AND $2`. It has a node of its own because it has
+ * three operands; writing it as `x >= a AND x <= b` would repeat `x` (and its params).
+ *
+ * @example
+ * ```ts
+ * declare const age: ColumnNode;
+ * declare const low: ParamNode;
+ * declare const high: ParamNode;
+ * const node: BetweenNode = { kind: "between", expr: age, low, high };
+ * ```
+ */
+export interface BetweenNode {
+  readonly kind: "between";
+  readonly expr: ExprNode;
+  readonly low: ExprNode;
+  readonly high: ExprNode;
 }
 
 /**
@@ -397,19 +422,20 @@ export interface CastNode {
 }
 
 /**
- * `CASE WHEN … THEN … [ELSE …] END`.
+ * `CASE WHEN … THEN … [ELSE …] END`. Each branch is `WHEN when THEN result`. (The field is
+ * not called `then`: an object with a `then` member is taken for a promise by `await`.)
  *
  * @example
  * ```ts
  * declare const isMinor: ExprNode;
  * declare const minor: ParamNode;
  * declare const adult: ParamNode;
- * const node: CaseNode = { kind: "case", whens: [{ when: isMinor, then: minor }], else: adult };
+ * const node: CaseNode = { kind: "case", whens: [{ when: isMinor, result: minor }], else: adult };
  * ```
  */
 export interface CaseNode {
   readonly kind: "case";
-  readonly whens: readonly { readonly when: ExprNode; readonly then: ExprNode }[];
+  readonly whens: readonly { readonly when: ExprNode; readonly result: ExprNode }[];
   readonly else: ExprNode | undefined;
 }
 
@@ -519,6 +545,7 @@ export type ExprNode =
   | LiteralNode
   | UnaryNode
   | BinaryNode
+  | BetweenNode
   | NaryNode
   | FnNode
   | AggregateNode
