@@ -52,7 +52,6 @@ import { IDENTITY } from "../contracts/type.js";
 import { QueryError } from "../errors.js";
 import { collectParams, IDENTIFIER } from "../query/ast.js";
 import { resolveCodec } from "../types/codec.js";
-import { markTextOnly, type TextOnlySlot } from "./bind.js";
 import {
   lookup,
   quoteIdentifier,
@@ -74,7 +73,7 @@ import {
 } from "./plan.js";
 import { type EmitApi, PRECEDENCE, registeredEmitter } from "./registry.js";
 import { sameShape } from "./same-shape.js";
-import { untypedValue } from "./untyped.js";
+import { textOnly, untypedValue } from "./untyped.js";
 
 // ---------------------------------------------------------------------------
 // Precedence
@@ -207,8 +206,6 @@ interface Ctx {
   readonly slots: ParamSlot[];
   /** The canonical position, in the statement's parameter array, of the next value. */
   index: number;
-  /** Slots of untyped values in a place that only text may fill (see `selectedValue`). */
-  readonly textOnly: TextOnlySlot[];
 }
 
 /** The query being written: its names and its database schema. */
@@ -227,7 +224,7 @@ interface Frame {
  * ```
  */
 export function newContext(dialect: SqlDialect, codecs: CodecSource): EmitContext {
-  return { dialect, codecs, slots: [], index: 0, textOnly: [] };
+  return { dialect, codecs, slots: [], index: 0 };
 }
 
 /**
@@ -292,11 +289,20 @@ export function namedValue(
   return placeholder(ctx, { kind: "named", name, toDb: toDbOf(ctx, type), redact });
 }
 
-/** `$1` for one bound array, or `?, ?, ?` for an expanded one (without the parentheses). */
-function listValue(ctx: Ctx, node: ListNode): string {
+/**
+ * `$1` for one bound array, or `?, ?, ?` for an expanded one (without the parentheses).
+ * With `textWhere`, an untyped list that only text may fill (see {@link textOnly}).
+ */
+function listValue(ctx: Ctx, node: ListNode, textWhere?: string): string {
   const index = ctx.index;
   ctx.index = index + 1;
-  const toDb = toDbOf(ctx, node.type);
+  let toDb = toDbOf(ctx, node.type);
+  if (textWhere !== undefined) {
+    for (const element of node.value) {
+      if (element !== null && typeof element !== "string") throw untypedValue(textWhere, element);
+    }
+    toDb = textOnly(textWhere);
+  }
   if (ctx.dialect.capabilities.arrayParams) {
     return placeholder(ctx, { kind: "list", index, toDb, redact: node.redact });
   }
@@ -396,6 +402,12 @@ function expr(ctx: Ctx, frame: Frame, node: ExprNode): string {
     case "binary":
       return binary(ctx, frame, node);
     case "between": {
+      if (noSqlType(node.expr) && noSqlType(node.low) && noSqlType(node.high)) {
+        // Only bound values: the SQL has no type for them unless it is written (see binary).
+        const where = "a comparison of values without a type (between())";
+        const typed = !hasNoType(node.expr) || !hasNoType(node.low) || !hasNoType(node.high);
+        return `${selectedValue(ctx, frame, node.expr, where, typed)} between ${selectedValue(ctx, frame, node.low, where, typed)} and ${selectedValue(ctx, frame, node.high, where, typed)}`;
+      }
       const bound = COMPARISON_OPERAND;
       return `${operand(ctx, frame, node.expr, bound)} between ${operand(ctx, frame, node.low, bound)} and ${operand(ctx, frame, node.high, bound)}`;
     }
@@ -424,7 +436,7 @@ function expr(ctx: Ctx, frame: Frame, node: ExprNode): string {
     case "cast":
       return `cast(${operand(ctx, frame, node.expr, PRECEDENCE.fragment)} as ${typeName(ctx, node.type)})`;
     case "case":
-      return caseExpr(ctx, frame, node, undefined);
+      return caseExpr(ctx, frame, node, undefined, false);
     case "jsonPath":
       return jsonPath(ctx, frame, node.expr, node.path, node.asText);
     case "subquery":
@@ -505,6 +517,14 @@ function binary(ctx: Ctx, frame: Frame, node: BinaryNode): string {
     throw unsupported(ctx.dialect, `The ${op}() operator`);
   }
   const sql = ctx.dialect.operators[op as TableOperator];
+  if (COMPARISONS.has(op) && noSqlType(left) && noSqlType(right)) {
+    // Only bound values on both sides: the database knows no type for either unless it is
+    // written, and compares two placeholders as text. A typed value is cast to its type
+    // (which then types the other side); with no type on either side, only text is allowed.
+    const where = `a comparison of two values without a type (${op}())`;
+    const typed = !hasNoType(left) || !hasNoType(right);
+    return `${selectedValue(ctx, frame, left, where, typed)} ${sql} ${selectedValue(ctx, frame, right, where, typed)}`;
+  }
   const p = spec.precedence;
   const leftMin = p <= PRECEDENCE.like ? COMPARISON_OPERAND : p;
   const rightMin = p <= PRECEDENCE.like ? COMPARISON_OPERAND : p + 1;
@@ -512,6 +532,23 @@ function binary(ctx: Ctx, frame: Frame, node: BinaryNode): string {
 }
 
 function inExpr(ctx: Ctx, frame: Frame, positive: boolean, left: ExprNode, right: ExprNode): string {
+  if (right.kind === "list" && noSqlType(left)) {
+    // Only bound values: as in binary(), a typed value is cast, and with no type on either
+    // side only text may be compared.
+    const where = `a comparison of values without a type (${positive ? "in" : "notIn"}())`;
+    const typed = !hasNoType(left) || right.type !== undefined;
+    const textWhere = typed ? undefined : where;
+    if (right.value.length === 0 && !ctx.dialect.capabilities.arrayParams) {
+      ctx.index += valuesIn(left) + 1;
+      return positive ? "false" : "true";
+    }
+    const subject = selectedValue(ctx, frame, left, where, typed);
+    if (ctx.dialect.capabilities.arrayParams) {
+      const list = listValue(ctx, right, textWhere);
+      return positive ? `${subject} = any(${list})` : `${subject} <> all(${list})`;
+    }
+    return `${subject} ${positive ? "in" : "not in"} (${listValue(ctx, right, textWhere)})`;
+  }
   if (right.kind === "list") {
     if (ctx.dialect.capabilities.arrayParams) {
       const subject = operand(ctx, frame, left, COMPARISON_OPERAND);
@@ -672,16 +709,17 @@ function caseExpr(
   frame: Frame,
   node: ExprNode & { kind: "case" },
   selected: string | undefined,
+  typedBySibling: boolean,
 ): string {
   if (node.whens.length === 0) throw new QueryError("A CASE has no WHEN branch.");
   const where = selected === undefined ? undefined : `a result of a CASE in ${selected}`;
+  const result = (value: ExprNode) =>
+    where === undefined ? expr(ctx, frame, value) : selectedValue(ctx, frame, value, where, typedBySibling);
   let text = "case";
   for (const branch of node.whens) {
-    text += ` when ${expr(ctx, frame, branch.when)} then ${where === undefined ? expr(ctx, frame, branch.result) : selectedValue(ctx, frame, branch.result, where)}`;
+    text += ` when ${expr(ctx, frame, branch.when)} then ${result(branch.result)}`;
   }
-  if (node.else !== undefined) {
-    text += ` else ${where === undefined ? expr(ctx, frame, node.else) : selectedValue(ctx, frame, node.else, where)}`;
-  }
+  if (node.else !== undefined) text += ` else ${result(node.else)}`;
   return `${text} end`;
 }
 
@@ -693,37 +731,113 @@ function caseExpr(
  * value is refused, here when the plan is made and again whenever the plan is bound with
  * other values (owner decision of 2026-10-15).
  */
-function selectedValue(ctx: Ctx, frame: Frame, node: ExprNode, where: string): string {
+function selectedValue(
+  ctx: Ctx,
+  frame: Frame,
+  node: ExprNode,
+  where: string,
+  typedBySibling = false,
+): string {
   if (node.kind === "param" || node.kind === "namedParam") {
     if (node.type !== undefined) return `cast(${expr(ctx, frame, node)} as ${typeName(ctx, node.type)})`;
-    if (node.kind === "param" && node.value !== null && typeof node.value !== "string") {
-      throw untypedValue(where, node.value);
-    }
-    const text = expr(ctx, frame, node);
-    ctx.textOnly.push({ slot: ctx.slots.length - 1, where });
-    return `cast(${text} as ${ctx.dialect.types.text})`;
+    // Beside a value that is cast to its type (a CASE branch, a coalesce argument, the
+    // other side of a comparison), the database gives this one the same type.
+    if (typedBySibling) return expr(ctx, frame, node);
+    return `cast(${textOnlyValue(ctx, node, where)} as ${ctx.dialect.types.text})`;
   }
-  if (node.kind === "case") return caseExpr(ctx, frame, node, where);
-  // A coalesce of nothing but untyped values has no type either; with any other argument,
-  // that argument types the rest.
-  if (
-    node.kind === "fn" &&
-    node.name === "coalesce" &&
-    node.args.length > 0 &&
-    node.args.every(isUntypedValue)
-  ) {
+  if (node.kind === "case") return caseExpr(ctx, frame, node, where, typedBySibling);
+  // A coalesce of bound values only (at any depth) has no type in the SQL unless one is
+  // written: its typed arguments are cast, and without any, only text is allowed.
+  if (node.kind === "fn" && node.name === "coalesce" && node.args.length > 0 && node.args.every(noSqlType)) {
     const name = lookup(ctx.dialect.functions, node.name) as string;
+    const typed = typedBySibling || !node.args.every(hasNoType);
     let args = "";
     for (let i = 0; i < node.args.length; i++) {
-      args += `${i > 0 ? ", " : ""}${selectedValue(ctx, frame, node.args[i] as ExprNode, `coalesce() in ${where}`)}`;
+      args += `${i > 0 ? ", " : ""}${selectedValue(ctx, frame, node.args[i] as ExprNode, `coalesce() in ${where}`, typed)}`;
     }
     return `${name}(${args})`;
   }
   return expr(ctx, frame, node);
 }
 
-function isUntypedValue(node: ExprNode): boolean {
-  return (node.kind === "param" || node.kind === "namedParam") && node.type === undefined;
+/**
+ * The placeholder of an untyped value in a place where only text may go: a value that is
+ * not a string or `null` is refused now, and on every later execution by the slot's
+ * `toDb` (the plan is shared by queries with other values).
+ */
+function textOnlyValue(ctx: Ctx, node: ExprNode & { kind: "param" | "namedParam" }, where: string): string {
+  if (node.kind === "namedParam") {
+    if (typeof node.name !== "string" || node.name === "")
+      throw new QueryError("A named parameter has no name.");
+    return placeholder(ctx, { kind: "named", name: node.name, toDb: textOnly(where), redact: node.redact });
+  }
+  if (node.value !== null && typeof node.value !== "string") throw untypedValue(where, node.value);
+  const index = ctx.index;
+  ctx.index = index + 1;
+  return placeholder(ctx, { kind: "inline", index, toDb: textOnly(where), redact: node.redact });
+}
+
+/** The operators that compare their operands: with neither typed, the database compares text. */
+const COMPARISONS: ReadonlySet<string> = new Set([
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "isDistinctFrom",
+  "like",
+  "notLike",
+  "ilike",
+]);
+
+/**
+ * Whether `node` is made of bound values only, so that the SQL itself says nothing of its
+ * type: a parameter or list (typed in the AST or not), `NULL`, or a `CASE` or `coalesce`
+ * of those, at any depth. Its type exists only if the emitter writes it (a cast).
+ */
+function noSqlType(node: ExprNode): boolean {
+  switch (node.kind) {
+    case "param":
+    case "namedParam":
+    case "list":
+      return true;
+    case "literal":
+      return node.value === null;
+    case "case":
+      return (
+        node.whens.every((branch) => noSqlType(branch.result)) &&
+        (node.else === undefined || noSqlType(node.else))
+      );
+    case "fn":
+      return node.name === "coalesce" && node.args.length > 0 && node.args.every(noSqlType);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether nothing in `node` gives its value a type: an untyped parameter or list, `NULL`,
+ * or a `CASE` or `coalesce` made only of those, at any depth.
+ */
+function hasNoType(node: ExprNode): boolean {
+  switch (node.kind) {
+    case "param":
+    case "namedParam":
+    case "list":
+      return node.type === undefined;
+    case "literal":
+      return node.value === null;
+    case "case":
+      return (
+        node.whens.every((branch) => hasNoType(branch.result)) &&
+        (node.else === undefined || hasNoType(node.else))
+      );
+    case "fn":
+      return node.name === "coalesce" && node.args.length > 0 && node.args.every(hasNoType);
+    default:
+      return false;
+  }
 }
 
 function jsonPath(
@@ -1268,7 +1382,6 @@ export function finish(
       `The statement has ${ctx.slots.length} parameters, more than the ${ctx.dialect.capabilities.maxParams} ${ctx.dialect.name} accepts. Split it into smaller statements.`,
     );
   }
-  if (ctx.textOnly.length > 0) markTextOnly(ctx.slots, ctx.textOnly);
   return { sql, slots: ctx.slots, output, schema, decoder: undefined };
 }
 

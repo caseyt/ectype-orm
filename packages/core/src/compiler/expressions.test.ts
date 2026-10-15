@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import type { InsertPlanOptions, ParamSlot } from "../contracts/adapter.js";
 import type { ExprNode, QueryAst } from "../contracts/query.js";
 import type { FieldMeta } from "../contracts/schema.js";
-import { from } from "../index.js";
+import { from, t } from "../index.js";
 import {
   aggregateNode,
   binaryNode,
@@ -23,7 +23,7 @@ import { postgresDialect } from "./dialect.js";
 import { newContext } from "./emit.js";
 import { registerNodeEmitter } from "./registry.js";
 import { sameShape } from "./same-shape.js";
-import { col, rebuild, selectObject, selectOne, tableSource, value } from "./sql-fixtures.js";
+import { col, rebuild, selectObject, selectOne, tableSource, typeOf, value } from "./sql-fixtures.js";
 import { emitInsert } from "./write.js";
 
 function sql(ast: QueryAst): string {
@@ -38,9 +38,11 @@ function where(expr: ExprNode): QueryAst {
 }
 
 describe("expressions outside the select list", () => {
-  test("a CASE in a condition binds its results without casts", () => {
-    const node = caseNode([{ when: literalNode(true), result: value(1) }], undefined);
-    expect(sql(where(binaryNode("eq", node, value(2))))).toContain("where case when true then $1 end = $2");
+  test("a typed CASE compared with a bare value is cast, since nothing else types the two", () => {
+    const node = caseNode([{ when: literalNode(true), result: value(1, typeOf(t.integer())) }], undefined);
+    expect(sql(where(binaryNode("eq", node, value(2))))).toContain(
+      "where case when true then cast($1 as integer) end = $2",
+    );
   });
 
   test("a CASE in the select list with no ELSE", () => {

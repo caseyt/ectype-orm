@@ -8,6 +8,7 @@ import type {
   Col,
   Expr,
   NoParams,
+  NoType,
   OrderExpr,
   ParamsOf,
   SomeParams,
@@ -353,7 +354,8 @@ describe("functions", () => {
   test("caseWhen is nullable until else", () => {
     const minor = caseWhen(u.age.lt(18), "minor");
     expectTypeOf<Value<typeof minor>>().toEqualTypeOf<string | null>();
-    expectTypeOf(minor.else("adult")).toEqualTypeOf<Expr<string, NoParams>>();
+    // Text with no type: fine in a select, but it gives later branches no type.
+    expectTypeOf(minor.else("adult")).toEqualTypeOf<Expr<string, NoParams> & NoType>();
     // Untyped numbers: the result cannot be selected (owner decision, 2026-10-15).
     expectTypeOf(caseWhen(u.age.lt(13), 1).when(u.age.lt(18), 2).else(3)).toEqualTypeOf<
       Expr<number, NoParams> & Untyped
@@ -371,7 +373,7 @@ describe("functions", () => {
   });
 
   test("val keeps the value's type, or takes the field type's", () => {
-    expectTypeOf(val("member")).toEqualTypeOf<Expr<"member", NoParams>>();
+    expectTypeOf(val("member")).toEqualTypeOf<Expr<"member", NoParams> & NoType>();
     expectTypeOf(val(new Date(), t.timestamp())).toEqualTypeOf<Expr<Date, NoParams>>();
     u.role.eq(val("member"));
     // @ts-expect-error the value does not fit the field type

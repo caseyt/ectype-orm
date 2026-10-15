@@ -102,8 +102,75 @@ type Simplify<X> = { [K in keyof X]: X[K] };
  * type Five = Expr<5> & Untyped; // what val(5) is
  * ```
  */
-export interface Untyped {
+export interface Untyped extends NoType {
   readonly "~untyped": true;
+}
+
+/**
+ * Type only: marks an expression whose value is bound with no type, text included
+ * (`val("x")`, `caseWhen(c, "x")`). It is fine in a select, where the database reads it
+ * as text, but a later untyped value beside it has nothing to take a type from:
+ * `caseWhen(c, "x").else(5)` is {@link Untyped}. Every `Untyped` expression is `NoType`.
+ * The property never exists at run time.
+ *
+ * @example
+ * ```ts
+ * type Label = Expr<"x"> & NoType; // what val("x") is
+ * ```
+ */
+export interface NoType {
+  readonly "~noType": true;
+}
+
+/**
+ * Whether nothing gives `V` a type: a plain value (bound with the type of its other side,
+ * when there is none), or an expression marked {@link NoType}.
+ *
+ * @example
+ * ```ts
+ * type A = HasNoType<5>; // true
+ * type B = HasNoType<Col<number>>; // false
+ * ```
+ */
+export type HasNoType<V> = [V] extends [{ readonly "~expr": unknown }]
+  ? [V] extends [NoType]
+    ? true
+    : false
+  : true;
+
+/**
+ * {@link NoType} when nothing gives `V` a type, else `unknown`.
+ *
+ * @example
+ * ```ts
+ * type A = NoTypeIf<"x">; // NoType
+ * ```
+ */
+export type NoTypeIf<V> = HasNoType<V> extends true ? NoType : unknown;
+
+/**
+ * What the operand `O` of a comparison on `S` must also satisfy: when neither has a type,
+ * the database compares them as text, so only text may be compared (owner decision of
+ * 2026-10-15, option A). An error type then, `unknown` otherwise.
+ *
+ * @example
+ * ```ts
+ * declare const ten: Expr<10> & Untyped;
+ * // ten.gt(9) does not compile: Comparable<typeof ten, 9> is an error type
+ * ```
+ */
+export type Comparable<S, O> = [S] extends [NoType]
+  ? HasNoType<O> extends true
+    ? [S] extends [Untyped]
+      ? UntypedComparison
+      : [UntypedIf<O>] extends [Untyped]
+        ? UntypedComparison
+        : unknown
+    : unknown
+  : unknown;
+
+interface UntypedComparison {
+  readonly "~error": "neither side of this comparison has a type, so the database would compare them as text: give one a type, val(value, t.integer())";
 }
 
 /**
@@ -489,7 +556,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  eq<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  eq<S extends AnyExpr, O extends Operand<T>>(
+    this: S,
+    other: O & Checked<P, O> & Comparable<S, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("eq", this, other) as never;
   }
 
@@ -503,7 +573,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  neq<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  neq<S extends AnyExpr, O extends Operand<T>>(
+    this: S,
+    other: O & Checked<P, O> & Comparable<S, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("neq", this, other) as never;
   }
 
@@ -517,7 +590,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  gt<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  gt<S extends AnyExpr, O extends Operand<T>>(
+    this: S,
+    other: O & Checked<P, O> & Comparable<S, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("gt", this, other) as never;
   }
 
@@ -531,7 +607,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  gte<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  gte<S extends AnyExpr, O extends Operand<T>>(
+    this: S,
+    other: O & Checked<P, O> & Comparable<S, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("gte", this, other) as never;
   }
 
@@ -545,7 +624,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  lt<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  lt<S extends AnyExpr, O extends Operand<T>>(
+    this: S,
+    other: O & Checked<P, O> & Comparable<S, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("lt", this, other) as never;
   }
 
@@ -559,7 +641,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `null` or `undefined`.
    */
-  lte<O extends Operand<T>>(other: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  lte<S extends AnyExpr, O extends Operand<T>>(
+    this: S,
+    other: O & Checked<P, O> & Comparable<S, O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return compare("lte", this, other) as never;
   }
 
@@ -573,9 +658,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when either end is `null` or `undefined`.
    */
-  between<L extends Operand<T>, H extends Operand<T>>(
-    low: L & Checked<P, L>,
-    high: H & Checked<MergeParams<P, ParamsOf<L>>, H>,
+  between<S extends AnyExpr, L extends Operand<T>, H extends Operand<T>>(
+    this: S,
+    low: L & Checked<P, L> & Comparable<S, L>,
+    high: H & Checked<MergeParams<P, ParamsOf<L>>, H> & Comparable<S, H>,
   ): Expr<boolean, MergeParams<P, MergeParams<ParamsOf<L>, ParamsOf<H>>>> {
     const lowExpr = toOperand(low, this.type, this.redact, "between", true);
     const highExpr = toOperand(high, this.type, this.redact, "between", true);
@@ -602,7 +688,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when the list holds `null` or `undefined`, or the argument is not a list, an expression or a query.
    */
-  in<O extends InOperand<T>>(values: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  in<S extends AnyExpr, O extends InOperand<T>>(
+    this: S,
+    values: O & Checked<P, O> & Comparable<S, O extends readonly (infer E)[] ? E : O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return membership("in", this, values) as never;
   }
 
@@ -616,7 +705,10 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when the list holds `null` or `undefined`, or the argument is not a list, an expression or a query.
    */
-  notIn<O extends InOperand<T>>(values: O & Checked<P, O>): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
+  notIn<S extends AnyExpr, O extends InOperand<T>>(
+    this: S,
+    values: O & Checked<P, O> & Comparable<S, O extends readonly (infer E)[] ? E : O>,
+  ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return membership("notIn", this, values) as never;
   }
 
@@ -654,8 +746,9 @@ export class Expr<out T, in P = NoParams> {
    *
    * @throws QueryError when given `undefined`.
    */
-  isDistinctFrom<O extends Operand<T> | null>(
-    other: O & Compatible<P, O>,
+  isDistinctFrom<S extends AnyExpr, O extends Operand<T> | null>(
+    this: S,
+    other: O & Compatible<P, O> & Comparable<S, O>,
   ): Expr<boolean, MergeParams<P, ParamsOf<O>>> {
     return operate(
       "isDistinctFrom",

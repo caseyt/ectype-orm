@@ -34,3 +34,31 @@ export function untypedValue(where: string, value: unknown): QueryError {
     `A value without a type is in ${where}, where nothing gives it one, so the database would return it as text. It is ${typeHint(value)}.`,
   );
 }
+
+/** One checking conversion per place, shared by every plan that needs it. */
+const checkers = new Map<string, (value: unknown) => unknown>();
+
+/**
+ * The `toDb` of a slot that only text may fill: it passes a string through and refuses
+ * anything else. `bindParams` never calls a `toDb` with `null`, so `null` passes too. A
+ * plan is shared by queries that differ only in their values, so the check has to run on
+ * every execution; as the slot's `toDb` it costs nothing for slots that do not need it.
+ *
+ * @example
+ * ```ts
+ * const toDb = textOnly("the select list");
+ * toDb("x"); // "x"
+ * toDb(5); // throws QueryError
+ * ```
+ */
+export function textOnly(where: string): (value: unknown) => unknown {
+  let check = checkers.get(where);
+  if (check === undefined) {
+    check = (value: unknown) => {
+      if (typeof value !== "string") throw untypedValue(where, value);
+      return value;
+    };
+    checkers.set(where, check);
+  }
+  return check;
+}

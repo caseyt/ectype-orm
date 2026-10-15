@@ -4,7 +4,8 @@
 // back, so writes do not affect the next one.
 import { createTestDatabase, type TestDatabaseHandle, User } from "@egon-orm/test-support";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { from, t, val } from "../index.js";
+import type { QueryAst } from "../contracts/query.js";
+import { caseWhen, coalesce, from, lit, t, val } from "../index.js";
 import { bindParams } from "./bind.js";
 import { createCompiler } from "./compiler.js";
 import { postgresDialect } from "./dialect.js";
@@ -70,6 +71,36 @@ test("a selected value with a type comes back as that type; text without one com
   const plan = compiler.compile(q.ast, "all", undefined);
   const rows = await handle.db.query(plan.sql, bindParams(plan.slots, q.ast.params));
   expect(rows).toEqual([{ c0: 5, c1: true, c2: "x", c3: null }]);
+});
+
+test("a selected coalesce of a typed CASE and a value comes back as the CASE's type", async () => {
+  const q = from(User, "u")
+    .select(() => ({ n: coalesce(caseWhen(lit(true), val(1, t.integer())), 2) }))
+    .limit(1);
+  const plan = compiler.compile(q.ast, "all", undefined);
+  const rows = await handle.db.query(plan.sql, bindParams(plan.slots, q.ast.params));
+  expect(rows).toEqual([{ c0: 1 }]);
+});
+
+test("comparisons: a typed side compares numbers, two untyped strings compare as text", async () => {
+  const run = async (q: { readonly ast: QueryAst }) => {
+    const plan = compiler.compile(q.ast, "all", undefined);
+    return handle.db.query(plan.sql, bindParams(plan.slots, q.ast.params));
+  };
+  // 10 > 9 as numbers; as text it would be false and filter every row out.
+  const b: string = "b";
+  const numbers = await run(
+    from(User, "u")
+      .where(() => val(10, t.integer()).gt(9))
+      .select(({ u }) => u.id),
+  );
+  expect(numbers.length).toBe(3);
+  const text = await run(
+    from(User, "u")
+      .where(() => val(b).gt("a"))
+      .select(({ u }) => u.id),
+  );
+  expect(text.length).toBe(3);
 });
 
 test("the plan cache shared by every statement above saw no collision", () => {
