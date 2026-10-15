@@ -591,3 +591,30 @@ describe("review, round 1", () => {
     expectTypeOf<QueryResult<typeof bare>>().toEqualTypeOf<User>();
   });
 });
+
+describe("review, round 2", () => {
+  test("preload does not compile in a scope, whose root is unknown", () => {
+    const withPosts = <Q extends QueryWith<{ u: typeof User }>>(q: Q) =>
+      // @ts-expect-error the root of a scope's query is not known
+      q.preload("posts");
+    void withPosts;
+  });
+
+  test('exclude("select") after a right or full join keeps the rows nullable', () => {
+    const right = from(Post, "p")
+      .rightJoin(User, "u", ({ u, p }) => p.authorId.eq(u.id))
+      .select(({ u }) => u.id)
+      .exclude("select");
+    expectTypeOf<QueryResult<typeof right>>().toEqualTypeOf<Post | null>();
+    const full = from(User, "u")
+      .fullJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id))
+      .select(({ pr }) => pr.bio)
+      .exclude("select");
+    expectTypeOf<QueryResult<typeof full>>().toEqualTypeOf<User | null>();
+    const left = from(User, "u")
+      .leftJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id))
+      .select(({ pr }) => pr.bio)
+      .exclude("select");
+    expectTypeOf<QueryResult<typeof left>>().toEqualTypeOf<User>();
+  });
+});

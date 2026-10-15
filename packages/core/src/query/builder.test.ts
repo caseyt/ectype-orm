@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import type { QueryAst } from "../contracts/query.js";
 import { QueryError } from "../errors.js";
 import { hasMany, manyToMany, meta, Schema, t } from "../schema/index.js";
+import { defineType } from "../types/index.js";
 import { collectParams, listNode, type NamedParamNode, shapeOf } from "./ast.js";
 import { bindingInfo, bindingOf, registerBinding } from "./bindings.js";
 import { AS_SOURCE, from, hasNamedBinding, type Query, render, type SourceParts } from "./builder.js";
@@ -1758,5 +1759,72 @@ describe("review, round 1", () => {
     };
     const q = (from(source as never, "g") as unknown as AnyQuery).where({ n: [1, 2] } as never);
     expect(show(q.ast.wheres[0]?.expr)).toBe('(in fragment["n"] $[1,2])');
+  });
+});
+
+describe("review, round 2", () => {
+  test("a preload callback's query cannot have a right or full join", () => {
+    expect(() =>
+      from(User, "u").preload("posts", (x) =>
+        x.rightJoin(User, "w", ({ posts, w }) => posts.authorId.eq(w.id)),
+      ),
+    ).toThrow(/preload\("posts", callback\): the callback's query has a right or full join/);
+    expect(() =>
+      from(User, "u").preload("posts", (x) =>
+        x.fullJoin(User, "w", ({ posts, w }) => posts.authorId.eq(w.id)),
+      ),
+    ).toThrow(/right or full join/);
+    expect(
+      from(User, "u").preload("posts", (x) =>
+        x.leftJoin(User, "w", ({ posts, w }) => posts.authorId.eq(w.id)),
+      ).ast.preloads,
+    ).toHaveLength(1);
+  });
+
+  test("a clash of named parameters names the clause", () => {
+    const q = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
+    const clash = () => param("n" as never, t.string());
+    expect(() => q.where(({ u }) => u.email.eq(clash()))).toThrow(/^where\(\): The named parameter "n"/);
+    expect(() => q.orWhere(({ u }) => u.email.eq(clash()))).toThrow(/^orWhere\(\): The named parameter "n"/);
+    expect(() => q.join(Post, "p", ({ p }) => p.title.eq(clash()))).toThrow(
+      /^join\(\): The named parameter "n"/,
+    );
+    expect(() => q.joinAssoc("u", "posts", "p", ({ p }) => p.title.eq(clash()))).toThrow(
+      /^joinAssoc\(\): The named parameter "n"/,
+    );
+    expect(() => q.select(({ u }) => ({ x: u.email.eq(clash()) }) as never)).toThrow(
+      /^select\(\): The named/,
+    );
+    expect(() =>
+      q.select(({ u }) => ({ id: u.id })).selectMerge(({ u }) => ({ x: u.email.eq(clash()) }) as never),
+    ).toThrow(/^selectMerge\(\): The named/);
+    expect(() => q.distinct(({ u }) => [u.email.concat(clash())] as never)).toThrow(
+      /^distinct\(\): The named/,
+    );
+    expect(() => q.groupBy(({ u }) => [u.email.concat(clash())] as never)).toThrow(/^groupBy\(\): The named/);
+    expect(() => q.orderBy(({ u }) => u.email.concat(clash()) as never)).toThrow(/^orderBy\(\): The named/);
+    expect(() => q.limit(clash() as never)).toThrow(/^limit\(\): The named/);
+    expect(() => q.lock(fragment`FOR UPDATE ${clash()}` as never)).toThrow(/^lock\(\): The named/);
+    expect(() => q.preload("posts", (x) => x.where(({ posts }) => posts.title.eq(clash())) as never)).toThrow(
+      /^preload\("posts"\): The named parameter "n"/,
+    );
+    const preloaded = from(User, "u").preload("posts", (x) =>
+      x.where(({ posts }) => posts.title.eq(clash())),
+    );
+    expect(() => preloaded.where(({ u }) => u.age.gte(param("n" as never, t.integer())))).toThrow(
+      /^where\(\): The named parameter "n"/,
+    );
+  });
+
+  test("a column of a custom type stored as json compares a whole value", () => {
+    const Raw = defineType<unknown, unknown>({
+      name: "raw",
+      db: { kind: "json" },
+      cast: (input) => ({ success: true, data: input }),
+    });
+    class Event extends Schema("events", { id: t.integer().primaryKey(), data: t.type(Raw) }) {}
+    expect(show(from(Event, "e").where({ data: [1, 2] } as never).ast.wheres[0]?.expr)).toBe(
+      "(eq e.data $[1,2]:raw)",
+    );
   });
 });

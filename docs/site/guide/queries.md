@@ -163,12 +163,13 @@ The scope is a compile error on a query that has no binding `p` for `Post`. It r
 the same query type it was given, so the result type and the named parameters are kept.
 `QueryWith` with no argument is any query.
 
-Two limits inside a scope, since it does not know how the query it receives was built:
+Three limits inside a scope, since it does not know how the query it receives was built:
 
 - its bindings may come from a left join, so a `select` in the scope sees their columns as
   nullable (`p.title` is `string | null`);
 - its root is unknown, so the object form of `where` does not compile there; use the
-  callback form.
+  callback form;
+- for the same reason, `preload` does not compile there.
 
 `hasNamedBinding(q, "p", Post)` is the runtime check, and narrows the query's type, for code
 that receives a query it did not build:

@@ -228,11 +228,13 @@ type RootBinding<B, A extends string> = A extends keyof B ? B[A] : never;
  */
 type RootSchema<B, A extends string> = string extends A ? AnySchema : SchemaOfBinding<RootBinding<B, A>>;
 
-/** The row of the root binding; `unknown` when the root is not known. */
+/** The row of the root binding (`| null` once a right or full join makes it optional); `unknown` when the root is not known. */
 type RootRow<B, A extends string> = string extends A
   ? unknown
-  : RootBinding<B, A> extends { readonly "~binding": { readonly row: infer Rw } }
-    ? Rw
+  : RootBinding<B, A> extends { readonly "~binding": { readonly row: infer Rw; readonly nullable: infer N } }
+    ? [N] extends [false]
+      ? Rw
+      : Rw | null
     : never;
 
 /** Every binding of `B` made nullable (a right or full join). */
@@ -1094,6 +1096,25 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
 
   // --- internals --------------------------------------------------------------
 
+  /**
+   * `named` with the named parameters `extra` of a clause added. One name with two types is
+   * refused, against the query's names and against those of its preloads' queries (which
+   * run with the same values), with the clause named in the message.
+   */
+  #withNamed(
+    clause: string,
+    named: readonly NamedParamNode[],
+    extra: readonly NamedParamNode[],
+  ): readonly NamedParamNode[] {
+    if (extra.length === 0) return named;
+    try {
+      if (this.#preloadNamed.length > 0) joinNamed(this.#preloadNamed, extra);
+      return joinNamed(named, extra);
+    } catch (error) {
+      return rethrow(error, `${clause}(): `);
+    }
+  }
+
   /** A query with one property of the AST changed, its params spliced and its shape recombined. */
   #next(
     prop: number,
@@ -1106,9 +1127,6 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     scope: Scope = this.#scope,
     preloadNamed: readonly NamedParamNode[] = this.#preloadNamed,
   ): Query<B, R, P, A> {
-    // The preloads' queries run with this query's params object: a name a clause adds must
-    // have the type it has there.
-    if (named !== this.#named && preloadNamed.length > 0) joinNamed(preloadNamed, named);
     const ast = this.ast;
     const counts = this.#counts;
     const listCounts = this.#lists;
@@ -1164,7 +1182,12 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     );
   }
 
-  #addBool(prop: typeof WHERES | typeof HAVINGS, op: "and" | "or", expr: AnyExpr): Query<B, R, P, A> {
+  #addBool(
+    prop: typeof WHERES | typeof HAVINGS,
+    op: "and" | "or",
+    expr: AnyExpr,
+    clause: string,
+  ): Query<B, R, P, A> {
     const node = boolNode(op, expr.node);
     const list = prop === WHERES ? this.ast.wheres : this.ast.havings;
     const nodes = list.slice();
@@ -1176,7 +1199,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       expr.params,
       expr.lists,
       hashInt(this.#shapes[prop] as number, boolShape(op, expr.shape)),
-      joinNamed(this.#named, expr.named),
+      this.#withNamed(clause, this.#named, expr.named),
     );
   }
 
@@ -1218,12 +1241,12 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     input: unknown,
   ): Query<B, R, P, A> {
     if (typeof input === "function") {
-      return this.#addBool(prop, op, condition(run(clause, input, this.#scope.arg), clause));
+      return this.#addBool(prop, op, condition(run(clause, input, this.#scope.arg), clause), clause);
     }
     if (prop === HAVINGS) {
       throw new QueryError(`${clause}() takes a callback: ${clause}(({ p }) => count(p.id).gt(3)).`);
     }
-    return this.#addBool(prop, op, this.#whereObject(input, clause));
+    return this.#addBool(prop, op, this.#whereObject(input, clause), clause);
   }
 
   #join(
@@ -1252,7 +1275,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       internal: false,
     };
     const scope = addEntries(this.#scope, [entry]);
-    let named = joinNamed(this.#named, parts.named);
+    let named = this.#withNamed(clause, this.#named, parts.named);
     let params = parts.params;
     let lists = parts.lists;
     let onNode: ExprNode | undefined;
@@ -1263,7 +1286,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       onShape = expr.shape;
       params = join(params, expr.params);
       lists = join(lists, expr.lists);
-      named = joinNamed(named, expr.named);
+      named = this.#withNamed(clause, named, expr.named);
     }
     const node = joinNode(type, parts.node, onNode);
     const joins = this.ast.joins.slice();
@@ -1325,7 +1348,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       joins.push(node);
       params = join(params, condExpr.params);
       lists = join(lists, condExpr.lists);
-      named = joinNamed(named, condExpr.named);
+      named = this.#withNamed(clause, named, condExpr.named);
       shape = hashInt(shape, joinShape(type, step.source, condExpr.shape));
     }
     return this.#next(JOINS, joins, false, params, lists, shape, named, scope) as never;
@@ -1632,7 +1655,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     }
     const built = buildSelect(run("select", fn, this.#scope.arg), "select");
     this.#checkPreloadSelect(built.node, "select");
-    return this.#setSelect(built, joinNamed(this.#named, built.named)) as never;
+    return this.#setSelect(built, this.#withNamed("select", this.#named, built.named)) as never;
   }
 
   /**
@@ -1665,7 +1688,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
         `selectMerge() needs its callback to return an object of keys to add; it returned ${describeShape(extra.node.shape)}.`,
       );
     }
-    const named = joinNamed(this.#named, extra.named);
+    const named = this.#withNamed("selectMerge", this.#named, extra.named);
     const merged = mergeSelects(current, extra.node);
     const next = this.#setSelect(merged, named);
     const replaced = (extra.node.shape.keys as readonly string[]).some((key) =>
@@ -1735,7 +1758,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       shapes.push(item.shape);
       params = join(params, item.params);
       lists = join(lists, item.lists);
-      named = joinNamed(named, item.named);
+      named = this.#withNamed("distinct", named, item.named);
     }
     return this.#next(
       DISTINCT,
@@ -1773,7 +1796,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       nodes.push(item.node);
       params = join(params, item.params);
       lists = join(lists, item.lists);
-      named = joinNamed(named, item.named);
+      named = this.#withNamed("groupBy", named, item.named);
       shape = hashInt(shape, item.shape);
     }
     return this.#next(GROUP_BYS, nodes, false, params, lists, shape, named) as never;
@@ -1803,7 +1826,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       nodes.push(item.node);
       params = join(params, item.params);
       lists = join(lists, item.lists);
-      named = joinNamed(named, item.named);
+      named = this.#withNamed("orderBy", named, item.named);
       shape = hashInt(shape, item.shape);
     }
     return this.#next(ORDER_BYS, nodes, false, params, lists, shape, named) as never;
@@ -1887,7 +1910,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       expr.params,
       expr.lists,
       presentShape(expr.shape),
-      joinNamed(this.#named, expr.named),
+      this.#withNamed(clause, this.#named, expr.named),
     );
     return next;
   }
@@ -1964,7 +1987,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
         mode.params,
         mode.lists,
         presentShape(lockShape(undefined, mode.shape)),
-        joinNamed(this.#named, mode.named),
+        this.#withNamed("lock", this.#named, mode.named),
       );
     } else {
       const clause = lockClause(mode, options);
@@ -2138,8 +2161,12 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       const built = callbackPreload(rootMeta, spec, fn);
       nodes = [built.node];
       // The preload's query runs with the same params object as this one: one name, one type.
-      preloadNamed = joinNamed(joinNamed(preloadNamed, built.query.#named), built.query.#preloadNamed);
-      joinNamed(this.#named, preloadNamed);
+      try {
+        preloadNamed = joinNamed(joinNamed(preloadNamed, built.query.#named), built.query.#preloadNamed);
+        joinNamed(this.#named, preloadNamed);
+      } catch (error) {
+        rethrow(error, `preload("${spec as string}"): `);
+      }
     } else {
       nodes = parseSpec(this.#scope, rootMeta, spec, root.alias, "");
     }
@@ -2686,6 +2713,11 @@ function callbackPreload(
   if (ast.from.alias !== name || result.schemaOf(name) !== target) {
     throw new QueryError(
       `preload("${name}", callback): the callback must return the query it receives (rooted at ${meta(target).name} as "${name}"), with clauses added.`,
+    );
+  }
+  if (hasOptionalRoot(ast)) {
+    throw new QueryError(
+      `preload("${name}", callback): the callback's query has a right or full join, which makes the rows of "${name}" optional, and a preloaded association needs rows that exist. Use an inner or left join.`,
     );
   }
   if (
