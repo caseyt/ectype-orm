@@ -60,7 +60,13 @@ export function sslRequestMessage(): Buffer {
 /** The options `pg` itself gives `tls.connect` for a connection with these settings. */
 function tlsOptions(target: CancelTarget, socket: Socket): ConnectionOptions {
   const options: ConnectionOptions = { socket, host: target.serverName };
-  if (target.ssl !== true && target.ssl !== false) Object.assign(options, target.ssl);
+  if (target.ssl !== true && target.ssl !== false) {
+    Object.assign(options, target.ssl);
+    // pg makes `key` (a client certificate's private key) non-enumerable so that it does
+    // not show up in logs, and Object.assign skips it; pg copies it explicitly, so must we.
+    // It is the only TLS option pg treats that way.
+    if ("key" in target.ssl) options.key = target.ssl.key;
+  }
   if (target.sslNegotiation === "direct") options.ALPNProtocols = ["postgresql"];
   // SNI must not be an IP address (RFC 6066, section 3).
   if (isIP(target.serverName) === 0) options.servername = target.serverName;

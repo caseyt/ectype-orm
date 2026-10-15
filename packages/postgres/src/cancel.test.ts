@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createTlsServer, TLSSocket } from "node:tls";
 import { afterEach, describe, expect, test } from "vitest";
-import { TEST_CERT, TEST_KEY } from "../test/tls-fixture.js";
+import { TEST_CERT, TEST_CLIENT_CERT, TEST_CLIENT_KEY, TEST_KEY } from "../test/tls-fixture.js";
 import { type CancelTarget, cancelRequestMessage, sendCancelRequest, sslRequestMessage } from "./cancel.js";
 
 const servers: Server[] = [];
@@ -46,7 +46,12 @@ function plainServer(received: Buffer[], path?: string): Promise<number> {
  * A server that answers an SSLRequest with `answer` ("S" then TLS, or "N"), and records
  * every byte it gets afterwards, encrypted or not, in `received`.
  */
-function sslRequestServer(answer: "S" | "N", received: Buffer[], requests: Buffer[]): Promise<number> {
+function sslRequestServer(
+  answer: "S" | "N",
+  received: Buffer[],
+  requests: Buffer[],
+  clientCertificates: readonly unknown[] | undefined = undefined,
+): Promise<number> {
   return listen(
     createServer((socket) => {
       socket.once("data", (request: Buffer) => {
@@ -57,8 +62,26 @@ function sslRequestServer(answer: "S" | "N", received: Buffer[], requests: Buffe
           return;
         }
         socket.write("S");
-        const secure = new TLSSocket(socket, { isServer: true, key: TEST_KEY, cert: TEST_CERT });
+        const secure = new TLSSocket(
+          socket,
+          clientCertificates === undefined
+            ? { isServer: true, key: TEST_KEY, cert: TEST_CERT }
+            : {
+                isServer: true,
+                key: TEST_KEY,
+                cert: TEST_CERT,
+                // Like `ssl_ca_file` with `clientcert=verify-full`: a client certificate is required.
+                requestCert: true,
+                rejectUnauthorized: true,
+                ca: TEST_CLIENT_CERT,
+              },
+        );
         secure.on("error", () => undefined);
+        if (clientCertificates !== undefined) {
+          secure.on("secure", () => {
+            (clientCertificates as unknown[]).push(secure.getPeerCertificate().subject?.CN);
+          });
+        }
         readCancel(secure, received);
       });
     }),
@@ -138,6 +161,28 @@ describe("with TLS", () => {
     await sendCancelRequest(target(port, { ssl: { ca: TEST_CERT } }), 2_000);
     expect(requests).toEqual([sslRequestMessage()]);
     expect(Buffer.concat(received)).toEqual(cancelRequestMessage(4242, 99));
+  });
+
+  test("presents a client certificate whose key pg made non-enumerable", async () => {
+    const received: Buffer[] = [];
+    const clients: unknown[] = [];
+    const port = await sslRequestServer("S", received, [], clients);
+    // What pg leaves on `client.ssl`: the key is hidden from Object.keys and Object.assign.
+    const ssl = { ca: TEST_CERT, cert: TEST_CLIENT_CERT };
+    Object.defineProperty(ssl, "key", { value: TEST_CLIENT_KEY, enumerable: false });
+    expect(Object.keys(ssl)).toEqual(["ca", "cert"]);
+    await sendCancelRequest(target(port, { ssl }), 2_000);
+    expect(clients).toEqual(["egon-test-client"]);
+    expect(Buffer.concat(received)).toEqual(cancelRequestMessage(4242, 99));
+  });
+
+  test("a server that requires a client certificate refuses a cancel request without its key", async () => {
+    const received: Buffer[] = [];
+    const port = await sslRequestServer("S", received, [], []);
+    await expect(
+      sendCancelRequest(target(port, { ssl: { ca: TEST_CERT, cert: TEST_CLIENT_CERT } }), 2_000),
+    ).rejects.toThrow();
+    expect(received).toEqual([]);
   });
 
   test("checks the certificate against the configured host name, not the address it connects to", async () => {
