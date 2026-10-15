@@ -838,3 +838,38 @@ describe("review, round 4", () => {
     expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ a: number; size: number }>();
   });
 });
+
+describe("review, round 5", () => {
+  test("past four levels an array literal is inferred as an array, and as const keeps the tuple", () => {
+    const four = from(User, "u").select(({ u }) => ({ a: { b: { c: [u.id, u.email] } } }));
+    expectTypeOf<QueryResult<typeof four>>().toEqualTypeOf<{ a: { b: { c: [number, string] } } }>();
+    const five = from(User, "u").select(({ u }) => ({ a: { b: { c: { d: [u.id, u.email] } } } }));
+    expectTypeOf<QueryResult<typeof five>>().toEqualTypeOf<{ a: { b: { c: { d: (number | string)[] } } } }>();
+    const constant = from(User, "u").select(({ u }) => ({
+      a: { b: { c: { d: [u.id, u.email] as const } } },
+    }));
+    expectTypeOf<QueryResult<typeof constant>>().toEqualTypeOf<{
+      a: { b: { c: { d: [number, string] } } };
+    }>();
+  });
+
+  test("past four levels a clash between two expressions is lost, unless as const keeps the tuple", () => {
+    const lost = from(User, "u").select(({ u }) => ({
+      a: {
+        b: { c: { d: [u.age.add(param("n", t.integer().nullable())), u.age.add(param("n", t.integer()))] } },
+      },
+    }));
+    // A known gap: the array's element type is reduced to one expression type.
+    expectTypeOf<QueryParams<typeof lost>>().toEqualTypeOf<{ n: number }>();
+    const kept = from(User, "u").select(({ u }) => ({
+      a: {
+        b: {
+          c: {
+            d: [u.age.add(param("n", t.integer().nullable())), u.age.add(param("n", t.integer()))] as const,
+          },
+        },
+      },
+    }));
+    expectTypeOf<QueryParams<typeof kept>["n"]>().toBeNever();
+  });
+});

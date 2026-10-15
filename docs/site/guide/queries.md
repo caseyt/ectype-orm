@@ -113,7 +113,8 @@ join table of a many-to-many, and every step of a `through` chain.
 <<< @/examples/queries.ts#select
 
 An array is typed element by element, with or without `as const`: `[u.id, u.email]` gives
-`[number, string]`.
+`[number, string]`. That holds up to four levels deep (objects and arrays counted together);
+deeper, add `as const`.
 
 With no `select`, a query returns rows of its first binding, with the class's getters and
 methods. A query has one `select`; calling it twice throws. `selectMerge` adds keys to an
