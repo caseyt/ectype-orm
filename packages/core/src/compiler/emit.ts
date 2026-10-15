@@ -1173,7 +1173,9 @@ function outputAliasOf(node: ExprNode, items: readonly SelectItem[]): string | u
 
 function lockClause(ctx: Ctx, frame: Frame, clause: string | FragmentNode): string {
   if (typeof clause === "string") {
-    const sql = lookup(ctx.dialect.locks, clause);
+    const sql = ctx.dialect.capabilities.lockModes.includes(clause)
+      ? lookup(ctx.dialect.locks, clause)
+      : undefined;
     if (sql === undefined) {
       throw new QueryError(
         `The lock clause "${clause}" is not one ${ctx.dialect.name} accepts as a string; use a fragment.`,
