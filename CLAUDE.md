@@ -75,12 +75,16 @@ Performance is a feature with tests. On anything that runs per query or per row:
 - No per-call closures or arrays where a precomputed table on schema metadata will do.
 - Identity `fromDb`/`toDb` functions are skipped by reference check, not called.
 - Anything derivable from a schema or a query shape is computed once and cached on it.
-- Do not optimise without a benchmark that shows the win; commit the benchmark under
-  `benchmarks/micro/<area>.bench.ts`.
+- Do not optimise speculatively; write clear code that follows these rules.
 
-Budgets: build a 3-clause query < 1.5 µs; compile with plan-cache hit < 0.3 µs, cold
-< 40 µs; hydrate a 10-column row < 150 ns; `cast` + 5 validations on 10 fields < 3 µs;
-`repo.all` of 1,000 rows < 15% over the raw driver; `repo.insert` < 20% over the raw driver.
+**Benchmarks are deferred to step 19** (owner decision, 2026-10-14): feature steps do not
+write or run benchmarks or tune against the budgets; a step's benchmark or budget item is
+marked "deferred to step 19" and left unticked. Plan README §7.
+
+Budgets step 19 will measure: build a 3-clause query < 1.5 µs; compile with plan-cache hit
+< 0.3 µs, cold < 40 µs; hydrate a 10-column row < 150 ns; `cast` + 5 validations on 10
+fields < 3 µs; `repo.all` of 1,000 rows < 15% over the raw driver; `repo.insert` < 20% over
+the raw driver.
 
 ## Toolchain constraints
 
