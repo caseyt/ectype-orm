@@ -1,0 +1,451 @@
+// Type tests for the query builder: bindings, the result type of every select shape,
+// nullability through joins, named parameters, composition helpers, preload result types,
+// and the calls that must not compile.
+import { type Comment, type Membership, Org, Post, Profile, Tag, User } from "@egon-orm/test-support";
+import { describe, expectTypeOf, test } from "vitest";
+import { t } from "../schema/index.js";
+import type { Binding } from "./bindings.js";
+import {
+  from,
+  hasNamedBinding,
+  type QueryLike,
+  type QueryParams,
+  type QueryResult,
+  type QueryWith,
+  type WhereObject,
+} from "./builder.js";
+import type { Col, Expr, NoParams } from "./expr.js";
+import { and, count, exists, fragment, param, sum } from "./functions.js";
+
+/** A query's type information: its bindings, result, parameters and root. Comparing these compares the query types. */
+const info = <Q extends QueryLike>(query: Q): Q["~query"] => query["~query"];
+
+describe("bindings", () => {
+  test("from names the root binding after its alias, with one column per persisted field", () => {
+    from(User, "u").where(({ u }) => {
+      expectTypeOf(u).toEqualTypeOf<Binding<typeof User>>();
+      expectTypeOf(u.email).toEqualTypeOf<Col<string>>();
+      expectTypeOf(u.age).toEqualTypeOf<Col<number | null>>();
+      expectTypeOf(u.role).toEqualTypeOf<Col<"admin" | "member">>();
+      expectTypeOf(u.$schema).toEqualTypeOf<typeof User>();
+      return u.age.gte(18);
+    });
+  });
+
+  test("a virtual field and an association are not columns", () => {
+    from(User, "u").where(({ u }) => {
+      // @ts-expect-error password is virtual: it has no column
+      u.password;
+      // @ts-expect-error posts is an association, not a column
+      u.posts;
+      return u.age.gte(18);
+    });
+  });
+
+  test("an unknown binding or field does not compile", () => {
+    // @ts-expect-error there is no binding z
+    from(User, "u").where(({ z }) => z.age.gte(1));
+    // @ts-expect-error User has no field nope
+    from(User, "u").where(({ u }) => u.nope.eq(1));
+  });
+
+  test("a joined binding is added under its alias", () => {
+    from(User, "u").join(Post, "p", ({ u, p }) => {
+      expectTypeOf(p.title).toEqualTypeOf<Col<string>>();
+      return p.authorId.eq(u.id);
+    });
+  });
+
+  test("an alias already in the query does not compile", () => {
+    // @ts-expect-error u is taken
+    from(User, "u").join(Post, "u", ({ u }) => u.id.eq(1));
+  });
+
+  test("a self-join has two bindings of one schema", () => {
+    const q = from(User, "a")
+      .join(User, "b", ({ a, b }) => a.email.eq(b.email))
+      .select(({ a, b }) => ({ a: a.id, b: b.id }));
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<{ a: number; b: number }>();
+  });
+});
+
+describe("result types", () => {
+  test("a query with no select returns rows of its root, with the class's getters", () => {
+    const q = from(User, "u");
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<User>();
+    expectTypeOf<QueryResult<typeof q>["displayName"]>().toEqualTypeOf<string>();
+  });
+
+  test("each select shape gives its result type", () => {
+    const base = from(User, "u").joinAssoc("u", "posts", "p");
+    const one = base.select(({ u }) => u.email);
+    expectTypeOf<QueryResult<typeof one>>().toEqualTypeOf<string>();
+    const row = base.select(({ u }) => u);
+    expectTypeOf<QueryResult<typeof row>>().toEqualTypeOf<User>();
+    const obj = base.select(({ u, p }) => ({ user: u, title: p.title }));
+    expectTypeOf<QueryResult<typeof obj>>().toEqualTypeOf<{ user: User; title: string }>();
+    const tuple = base.select(({ u, p }) => [u.id, count(p.id)] as const);
+    expectTypeOf<QueryResult<typeof tuple>>().toEqualTypeOf<[number, number]>();
+    const constant = base.select(({ u }) => ({ id: u.id, kind: "user" }));
+    expectTypeOf<QueryResult<typeof constant>>().toEqualTypeOf<{ id: number; kind: string }>();
+    const nested = base.select(({ u, p }) => ({ a: { b: [u.name, { c: p.views }] as const } }));
+    expectTypeOf<QueryResult<typeof nested>>().toEqualTypeOf<{
+      a: { b: [string | null, { c: number | null }] };
+    }>();
+    const computed = base.select(({ u, p }) => ({ u, total: sum(p.views) }));
+    expectTypeOf<QueryResult<typeof computed>>().toEqualTypeOf<{ u: User; total: number | null }>();
+    expectTypeOf<QueryResult<typeof computed>>().not.toBeAny();
+  });
+
+  test("selectMerge adds and replaces keys", () => {
+    const q = from(Post, "p")
+      .select(({ p }) => ({ id: p.id, title: p.title }))
+      .selectMerge(({ p }) => ({ title: p.views, published: p.published }));
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<{
+      id: number;
+      title: number | null;
+      published: boolean | null;
+    }>();
+  });
+
+  test("a left join makes the joined binding nullable", () => {
+    const q = from(User, "u").leftJoin(Profile, "pr", ({ u, pr }) => {
+      expectTypeOf(pr.bio).toEqualTypeOf<Col<string | null>>();
+      expectTypeOf(pr.userId).toEqualTypeOf<Col<number | null>>();
+      expectTypeOf(u.email).toEqualTypeOf<Col<string>>();
+      return pr.userId.eq(u.id);
+    });
+    const whole = q.select(({ u, pr }) => ({ u, pr }));
+    expectTypeOf<QueryResult<typeof whole>>().toEqualTypeOf<{ u: User; pr: Profile | null }>();
+  });
+
+  test("a right join makes the existing bindings nullable", () => {
+    const q = from(Post, "p").rightJoin(User, "u", ({ u, p }) => {
+      expectTypeOf(p.title).toEqualTypeOf<Col<string | null>>();
+      expectTypeOf(u.email).toEqualTypeOf<Col<string>>();
+      return p.authorId.eq(u.id);
+    });
+    const whole = q.select(({ u, p }) => ({ u, p }));
+    expectTypeOf<QueryResult<typeof whole>>().toEqualTypeOf<{ u: User; p: Post | null }>();
+  });
+
+  test("a full join makes every binding nullable", () => {
+    const q = from(User, "u").fullJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id));
+    const whole = q.select(({ u, pr }) => [u, pr.bio] as const);
+    expectTypeOf<QueryResult<typeof whole>>().toEqualTypeOf<[User | null, string | null]>();
+  });
+
+  test("a cross join adds a binding without a condition", () => {
+    const q = from(User, "u")
+      .crossJoin(Tag, "t")
+      .select(({ u, t }) => [u.id, t.name] as const);
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<[number, string | null]>();
+  });
+});
+
+describe("joinAssoc", () => {
+  test("the target binding comes from the association", () => {
+    from(User, "u")
+      .joinAssoc("u", "posts", "p")
+      .joinAssoc("p", "comments", "c")
+      .joinAssoc("p", "tags", "tg")
+      .joinAssoc("u", "orgs", "o")
+      .joinAssoc("u", "comments", "uc")
+      .where(({ p, c, tg, o, uc }) => {
+        expectTypeOf(p.$schema).toEqualTypeOf<typeof Post>();
+        expectTypeOf(c.$schema).toEqualTypeOf<typeof Comment>();
+        expectTypeOf(tg.$schema).toEqualTypeOf<typeof Tag>();
+        expectTypeOf(o.$schema).toEqualTypeOf<typeof Org>();
+        expectTypeOf(uc.$schema).toEqualTypeOf<typeof Comment>();
+        return p.published;
+      });
+  });
+
+  test("leftJoinAssoc makes the target nullable and takes an extra condition", () => {
+    const q = from(Post, "p")
+      .leftJoinAssoc("p", "comments", "c", ({ c }) => c.body.isNotNull())
+      .select(({ c }) => c);
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<Comment | null>();
+  });
+
+  test("an unknown association, or a binding the query lacks, does not compile", () => {
+    // @ts-expect-error User has no association nope
+    from(User, "u").joinAssoc("u", "nope", "p");
+    // @ts-expect-error there is no binding x
+    from(User, "u").joinAssoc("x", "posts", "p");
+  });
+});
+
+describe("clauses", () => {
+  test("a callback must return a condition", () => {
+    // @ts-expect-error a number column is not a condition
+    from(User, "u").where(({ u }) => u.age);
+    // @ts-expect-error a plain boolean is not an expression
+    from(User, "u").where(() => true);
+    // @ts-expect-error the value has the wrong type
+    from(User, "u").where(({ u }) => u.age.gt("x"));
+  });
+
+  test("the object form of where takes the root's fields", () => {
+    from(User, "u").where({ role: "admin", name: null, id: [1, 2, 3] });
+    // @ts-expect-error not a field
+    from(User, "u").where({ nope: 1 });
+    // @ts-expect-error email is not nullable
+    from(User, "u").where({ email: null });
+    // @ts-expect-error undefined is not a value
+    from(User, "u").where({ role: undefined });
+    // @ts-expect-error the value has the wrong type
+    from(User, "u").where({ role: "owner" });
+    expectTypeOf<WhereObject<typeof User>>().toHaveProperty("role");
+  });
+
+  test("clauses that keep the bindings return the same query type", () => {
+    const q = from(User, "u");
+    expectTypeOf(info(q.where(({ u }) => u.age.gte(18)))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.where({ role: "admin" }))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.orWhere(({ u }) => u.role.eq("admin")))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.orderBy(({ u }) => [u.createdAt.desc(), u.id]))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.groupBy(({ u }) => u.id).having(({ u }) => count(u.id).gt(1)))).toEqualTypeOf(
+      info(q),
+    );
+    expectTypeOf(info(q.limit(10).offset(20))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.distinct())).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.distinct(({ u }) => [u.email]))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.lock("update", { skipLocked: true }))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.lock(fragment`FOR UPDATE OF ${fragment.ident("u")}`))).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.schema("tenant_1").reverseOrder())).toEqualTypeOf(info(q));
+    expectTypeOf(info(q.exclude("orderBy"))).toEqualTypeOf(info(q));
+  });
+
+  test("a lock mode is one of four", () => {
+    // @ts-expect-error not a mode
+    from(User, "u").lock("exclusive");
+    // @ts-expect-error a lock is never a string of SQL
+    from(User, "u").lock("FOR UPDATE");
+  });
+
+  test("limit and offset take a number or a named parameter", () => {
+    // @ts-expect-error not a number
+    from(User, "u").limit("10");
+    const q = from(User, "u").limit(param("pageSize", t.integer()));
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ pageSize: number }>();
+  });
+
+  test('exclude("select") returns rows of the root again', () => {
+    const q = from(User, "u")
+      .select(({ u }) => u.id)
+      .exclude("select");
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<User>();
+    // @ts-expect-error not a clause exclude removes
+    from(User, "u").exclude("join");
+  });
+
+  test("pipe returns what the function returns", () => {
+    expectTypeOf(info(from(User, "u").pipe((q) => q.limit(1)))).toEqualTypeOf(info(from(User, "u")));
+    expectTypeOf(from(User, "u").pipe(() => 1)).toEqualTypeOf<number>();
+  });
+
+  test("from does not take a query", () => {
+    // @ts-expect-error a query is continued, not used as a source
+    from(from(User, "u"), "x");
+  });
+});
+
+describe("named parameters", () => {
+  test("P collects the named parameters of every clause", () => {
+    const q = from(User, "u")
+      .joinAssoc("u", "posts", "p", ({ p }) => p.views.gte(param("minViews", t.integer())))
+      .where(({ u }) => u.age.gte(param("minAge", t.integer())))
+      .having(({ p }) => count(p.id).gt(param("minPosts", t.integer())))
+      .orderBy(({ u }) => u.id)
+      .select(({ u }) => ({ id: u.id, role: u.role.eq(param("role", t.enum(["admin", "member"]))) }))
+      .limit(param("pageSize", t.integer()));
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{
+      minViews: number;
+      minAge: number;
+      minPosts: number;
+      role: "admin" | "member";
+      pageSize: number;
+    }>();
+  });
+
+  test("a query without named parameters needs none", () => {
+    expectTypeOf<QueryParams<ReturnType<typeof from<typeof User, "u">>>>().toEqualTypeOf<NoParams>();
+  });
+
+  test("one name with two types does not compile across clauses", () => {
+    const q = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
+    // @ts-expect-error n is an integer in the first clause and a string here
+    q.where(({ u }) => u.email.eq(param("n", t.string())));
+  });
+
+  test("a subquery's named parameters flow into the outer query", () => {
+    const authors = from(Post, "p")
+      .where(({ p }) => p.views.gte(param("minViews", t.integer())))
+      .select(({ p }) => p.authorId);
+    const q = from(User, "u").where(({ u }) => u.id.in(authors));
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ minViews: number }>();
+    const e = from(User, "u").where(({ u }) =>
+      exists(
+        from(Post, "p").where(({ p }) => p.authorId.eq(u.id).and(p.title.eq(param("title", t.string())))),
+      ),
+    );
+    expectTypeOf<QueryParams<typeof e>>().toEqualTypeOf<{ title: string }>();
+  });
+
+  test("a subquery is checked against the column it is compared with", () => {
+    const titles = from(Post, "p").select(({ p }) => p.title);
+    // @ts-expect-error a query of strings is not a set of ids
+    from(User, "u").where(({ u }) => u.id.in(titles));
+  });
+
+  test("reducing conditions with and keeps their named parameters", () => {
+    type Needed = { minAge: number; maxAge: number };
+    const q = from(User, "u").where(({ u }) => {
+      const conditions = [u.age.gte(param("minAge", t.integer())), u.age.lte(param("maxAge", t.integer()))];
+      return conditions.reduce<Expr<boolean, Needed>>((acc, f) => acc.and(f), u.email.isNotNull());
+    });
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<Needed>();
+    const both = from(User, "u").where(({ u }) =>
+      and(u.age.gte(param("minAge", t.integer())), u.email.isNotNull()),
+    );
+    expectTypeOf<QueryParams<typeof both>>().toEqualTypeOf<{ minAge: number }>();
+  });
+
+  test("an accumulator typed with the wrong parameters does not compile", () => {
+    from(User, "u").where(({ u }) => {
+      const conditions = [u.age.gte(param("minAge", t.integer()))];
+      // @ts-expect-error the accumulator declares no parameters, and the conditions need minAge
+      return conditions.reduce<Expr<boolean>>((acc, f) => acc.and(f), u.email.isNotNull());
+    });
+  });
+});
+
+describe("composition", () => {
+  const published = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) => q.where(({ p }) => p.published);
+  const paginate = <Q extends QueryWith>(q: Q, page: number, size = 20) =>
+    q.limit(size).offset((page - 1) * size);
+
+  test("a scope keeps the query's result type and named parameters", () => {
+    const base = from(Post, "p")
+      .where(({ p }) => p.views.gte(param("minViews", t.integer())))
+      .select(({ p }) => ({ id: p.id }));
+    const q = base.pipe(published).pipe((x) => paginate(x, 2));
+    expectTypeOf(info(q)).toEqualTypeOf(info(base));
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<{ id: number }>();
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ minViews: number }>();
+  });
+
+  test("a scope works on a joined binding and on a left-joined one", () => {
+    published(from(User, "u").joinAssoc("u", "posts", "p"));
+    published(from(User, "u").leftJoinAssoc("u", "posts", "p"));
+  });
+
+  test("a scope does not compile on a query without the binding", () => {
+    // @ts-expect-error no binding p
+    published(from(User, "u"));
+    // @ts-expect-error p is not a Post
+    published(from(User, "p"));
+  });
+
+  test("optional criteria keep the type", () => {
+    const filters: { role?: "admin" | "member" } = {};
+    let q = from(User, "u");
+    if (filters.role) q = q.where({ role: filters.role });
+    q = q.where(({ u }) => u.age.gte(18));
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<User>();
+  });
+
+  test("hasNamedBinding narrows", () => {
+    const q = from(User, "u").joinAssoc("u", "posts", "p") as QueryWith;
+    if (hasNamedBinding(q, "p", Post)) {
+      q.where(({ p }) => p.published);
+    }
+  });
+});
+
+describe("preload", () => {
+  test("the short forms type the loaded associations", () => {
+    const one = from(User, "u").preload("posts");
+    expectTypeOf<QueryResult<typeof one>["posts"]>().toEqualTypeOf<Post[]>();
+    const several = from(User, "u").preload(["posts", "profile"]);
+    expectTypeOf<QueryResult<typeof several>["profile"]>().toEqualTypeOf<Profile | null>();
+    const nested = from(User, "u").preload({ posts: { comments: "author" } });
+    type Loaded = QueryResult<typeof nested>;
+    expectTypeOf<Loaded["posts"][number]["comments"][number]["author"]>().toEqualTypeOf<User | null>();
+    const merged = from(User, "u").preload("posts").preload("profile");
+    expectTypeOf<QueryResult<typeof merged>["posts"]>().toEqualTypeOf<Post[]>();
+    expectTypeOf<QueryResult<typeof merged>["profile"]>().toEqualTypeOf<Profile | null>();
+    expectTypeOf<QueryResult<typeof merged>["displayName"]>().toEqualTypeOf<string>();
+  });
+
+  test("an unknown association does not compile, at any depth", () => {
+    // @ts-expect-error User has no association nope
+    from(User, "u").preload("nope");
+    // @ts-expect-error Post has no association nope
+    from(User, "u").preload({ posts: "nope" });
+    // @ts-expect-error a stray key beside a valid one
+    from(User, "u").preload({ posts: true, nope: true });
+  });
+
+  test("the callback form types the loaded rows, or the selected shape", () => {
+    const rows = from(User, "u").preload("posts", (q) =>
+      q
+        .where(({ posts }) => posts.published)
+        .orderBy(({ posts }) => posts.createdAt.desc())
+        .limit(3),
+    );
+    expectTypeOf<QueryResult<typeof rows>["posts"]>().toEqualTypeOf<Post[]>();
+    const shaped = from(User, "u").preload("posts", (q) =>
+      q.select(({ posts }) => ({ authorId: posts.authorId, title: posts.title })),
+    );
+    expectTypeOf<QueryResult<typeof shaped>["posts"]>().toEqualTypeOf<
+      { authorId: number; title: string }[]
+    >();
+    const deeper = from(User, "u").preload("posts", (q) => q.preload("comments"));
+    expectTypeOf<QueryResult<typeof deeper>["posts"][number]["comments"]>().toEqualTypeOf<Comment[]>();
+  });
+
+  test("a callback select without the association's key does not compile", () => {
+    // @ts-expect-error authorId is the key of User.posts
+    from(User, "u").preload("posts", (q) => q.select(({ posts }) => ({ title: posts.title })));
+  });
+
+  test("the join form fills an association from a binding", () => {
+    const q = from(User, "u")
+      .joinAssoc("u", "posts", "p")
+      .where(({ p }) => p.published)
+      .preload({ posts: "p" });
+    expectTypeOf<QueryResult<typeof q>["posts"]>().toEqualTypeOf<Post[]>();
+    const deep = from(User, "u")
+      .joinAssoc("u", "posts", "p")
+      .joinAssoc("p", "comments", "c")
+      .preload({ posts: { $from: "p", comments: "c" } });
+    expectTypeOf<QueryResult<typeof deep>["posts"][number]["comments"]>().toEqualTypeOf<Comment[]>();
+  });
+
+  test("a preload callback's named parameters are the query's", () => {
+    const q = from(User, "u").preload("posts", (p) =>
+      p.where(({ posts }) => posts.views.gte(param("minViews", t.integer()))),
+    );
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ minViews: number }>();
+  });
+
+  test("a join through a join schema keeps its own types", () => {
+    from(Org, "o")
+      .joinAssoc("o", "memberships", "m")
+      .where(({ m }) => {
+        expectTypeOf(m.$schema).toEqualTypeOf<typeof Membership>();
+        return m.role.eq("owner");
+      });
+  });
+});
+
+describe("expressions built from the query", () => {
+  test("a query is a subquery operand of its single selected value", () => {
+    const ids = from(Post, "p").select(({ p }) => p.authorId);
+    expectTypeOf(info(from(User, "u").where(({ u }) => u.id.in(ids)))).toEqualTypeOf(info(from(User, "u")));
+    const e: Expr<boolean, NoParams> = exists(ids);
+    expectTypeOf(e).not.toBeAny();
+  });
+});
