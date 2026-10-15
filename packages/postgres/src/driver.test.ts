@@ -3,14 +3,18 @@ import { QueryError } from "egon-orm";
 import pg from "pg";
 import Cursor from "pg-cursor";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { sendCancelRequest } from "./cancel.js";
 import { type CursorClass, PG_RUNTIME, PgDriver, type PgRuntime } from "./driver.js";
 import type { PoolSource } from "./options.js";
 import { PG_TYPES } from "./values.js";
 
 // --- pg without a database -----------------------------------------------------------
 
-class FakeClient {
+class FakeClient extends EventEmitter {
   processID: unknown = 4242;
+  secretKey: unknown = 777;
+  host: unknown = "db";
+  port: unknown = 5433;
   status: string | null = "I";
   readonly queries: unknown[] = [];
   readonly releases: unknown[] = [];
@@ -74,43 +78,16 @@ class FakePool extends EventEmitter {
   }
 }
 
-class FakeCanceller {
-  readonly calls: string[] = [];
-  failQuery = false;
-  failEnd = false;
-
-  constructor(readonly config: unknown) {}
-
-  async connect(): Promise<void> {
-    this.calls.push("connect");
-  }
-
-  async query(sql: string, values: unknown[]): Promise<void> {
-    this.calls.push(`${sql} ${JSON.stringify(values)}`);
-    if (this.failQuery) throw new Error("permission denied");
-  }
-
-  async end(): Promise<void> {
-    this.calls.push("end");
-    if (this.failEnd) throw new Error("already ended");
-  }
-}
-
 function setup(source?: PoolSource) {
   const pool = new FakePool();
-  const cancellers: FakeCanceller[] = [];
   const runtime: PgRuntime = {
     createPool: vi.fn(() => pool as unknown as pg.Pool),
-    createClient: vi.fn((config) => {
-      const canceller = new FakeCanceller(config);
-      cancellers.push(canceller);
-      return canceller as unknown as pg.Client;
-    }),
+    sendCancel: vi.fn(async () => undefined),
     loadCursor: vi.fn(async () => FakeCursor as unknown as CursorClass),
   };
   const hooks = { connected: vi.fn(), disconnected: vi.fn() };
   const driver = new PgDriver(source ?? { owned: true, config: { max: 3, host: "db" } }, hooks, runtime);
-  return { driver, pool, runtime, hooks, cancellers };
+  return { driver, pool, runtime, hooks };
 }
 
 afterEach(() => {
@@ -278,44 +255,76 @@ describe("connections", () => {
 });
 
 describe("cancelling", () => {
-  test("asks the server, on a separate connection with the same settings, to cancel the backend's statement", async () => {
-    const { driver, cancellers } = setup();
+  test("sends the protocol's cancel request to the client's server, with its backend key", async () => {
+    const { driver, runtime } = setup();
+    driver.init();
+    await (await driver.acquire()).cancel();
+    expect(runtime.sendCancel).toHaveBeenCalledWith(
+      { host: "db", port: 5433, processId: 4242, secretKey: 777 },
+      10_000,
+    );
+  });
+
+  test("is bounded by the pool's connection timeout, also for a pool you bring", async () => {
+    const owned = setup({ owned: true, config: { connectionTimeoutMillis: 1_500 } });
+    owned.driver.init();
+    await (await owned.driver.acquire()).cancel();
+    expect(vi.mocked(owned.runtime.sendCancel).mock.calls[0]?.[1]).toBe(1_500);
+    const pool = new FakePool({ max: 2, connectionTimeoutMillis: 2_500 });
+    const theirs = setup({ owned: false, pool: pool as unknown as pg.Pool });
+    theirs.driver.init();
+    await (await theirs.driver.acquire()).cancel();
+    expect(vi.mocked(theirs.runtime.sendCancel).mock.calls[0]?.[1]).toBe(2_500);
+  });
+
+  test("defaults the host and port the way pg does", async () => {
+    const { driver, pool, runtime } = setup();
+    driver.init();
+    pool.client.host = "";
+    pool.client.port = undefined;
+    await (await driver.acquire()).cancel();
+    expect(vi.mocked(runtime.sendCancel).mock.calls[0]?.[0]).toMatchObject({ host: "localhost", port: 5432 });
+  });
+
+  test("reports a failed request", async () => {
+    const { driver, runtime } = setup();
+    vi.mocked(runtime.sendCancel).mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    driver.init();
+    await expect((await driver.acquire()).cancel()).rejects.toThrow("ECONNREFUSED");
+  });
+
+  test.each([
+    ["process id", { processID: null }],
+    ["secret key", { secretKey: undefined }],
+  ])("refuses a client without a backend %s", async (_label, fields) => {
+    const { driver, pool, runtime } = setup();
+    driver.init();
+    Object.assign(pool.client, fields);
+    await expect((await driver.acquire()).cancel()).rejects.toThrow(/no backend key/);
+    expect(runtime.sendCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("a checked-out client that fails between statements", () => {
+  test("does not end the process, and is closed on release", async () => {
+    const { driver, pool } = setup();
     driver.init();
     const connection = await driver.acquire();
-    await connection.cancel();
-    expect(cancellers).toHaveLength(1);
-    expect(cancellers[0]?.config).toEqual({ max: 3, host: "db" });
-    expect(cancellers[0]?.calls).toEqual(["connect", "select pg_cancel_backend($1) [4242]", "end"]);
+    expect(pool.client.listenerCount("error")).toBe(1);
+    expect(() =>
+      pool.client.emit("error", new Error("terminating connection due to administrator command")),
+    ).not.toThrow();
+    await driver.release(connection, false);
+    expect(pool.client.releases).toEqual([true]);
+    expect(pool.client.listenerCount("error")).toBe(0);
   });
 
-  test("uses the settings of a pool you bring", async () => {
-    const pool = new FakePool({ max: 2, host: "theirs" });
-    const { driver, cancellers } = setup({ owned: false, pool: pool as unknown as pg.Pool });
+  test("a healthy client stops listening when it goes back", async () => {
+    const { driver, pool } = setup();
     driver.init();
-    await (await driver.acquire()).cancel();
-    expect(cancellers[0]?.config).toEqual({ max: 2, host: "theirs" });
-  });
-
-  test("ends the separate connection even when the request fails, and reports the failure", async () => {
-    const { driver, runtime, cancellers } = setup();
-    vi.mocked(runtime.createClient).mockImplementation((config) => {
-      const canceller = new FakeCanceller(config);
-      canceller.failQuery = true;
-      canceller.failEnd = true;
-      cancellers.push(canceller);
-      return canceller as unknown as pg.Client;
-    });
-    driver.init();
-    await expect((await driver.acquire()).cancel()).rejects.toThrow("permission denied");
-    expect(cancellers[0]?.calls.at(-1)).toBe("end");
-  });
-
-  test("does nothing for a client without a backend process id", async () => {
-    const { driver, pool, cancellers } = setup();
-    driver.init();
-    pool.client.processID = null;
-    await (await driver.acquire()).cancel();
-    expect(cancellers).toHaveLength(0);
+    await driver.release(await driver.acquire(), false);
+    expect(pool.client.listenerCount("error")).toBe(0);
+    expect(pool.client.releases).toEqual([false]);
   });
 });
 
@@ -352,11 +361,11 @@ describe("pg-cursor", () => {
 });
 
 describe("the real runtime", () => {
-  test("creates pg pools and clients without connecting", async () => {
+  test("creates pg pools without connecting, and sends cancel requests with cancel.ts", async () => {
     const pool = PG_RUNTIME.createPool({ max: 1 });
     expect(pool).toBeInstanceOf(pg.Pool);
     expect(pool.totalCount).toBe(0);
     await pool.end();
-    expect(PG_RUNTIME.createClient({})).toBeInstanceOf(pg.Client);
+    expect(PG_RUNTIME.sendCancel).toBe(sendCancelRequest);
   });
 });

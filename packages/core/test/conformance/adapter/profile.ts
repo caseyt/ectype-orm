@@ -39,7 +39,7 @@ export interface AdapterConformanceProfile {
   readonly failingSeries: (count: number, failAt: number) => string;
   /** A statement whose one row holds the id of the server process behind the connection, in column `id`. */
   readonly backendId: string;
-  /** Ends server process `id` from outside, on the test database's own connection. */
+  /** Ends server process `id` from outside, on the test database's own connection; resolves once it has ended. */
   readonly terminate: (db: TestDatabase, id: unknown) => Promise<void>;
   /** A statement whose one row holds the current transaction's isolation level, as `IsolationLevel` text, in column `level`. */
   readonly isolationLevel: string;

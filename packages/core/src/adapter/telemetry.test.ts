@@ -15,29 +15,27 @@ afterEach(() => {
 describe("listener flags", () => {
   test("start false and follow subscriptions per event", () => {
     const telemetry = new Telemetry();
-    expect([
-      telemetry.query,
-      telemetry.queryParams,
-      telemetry.connect,
-      telemetry.disconnect,
-      telemetry.poolExhausted,
-    ]).toEqual([false, false, false, false, false]);
+    expect([telemetry.query, telemetry.connect, telemetry.disconnect, telemetry.poolExhausted]).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
     const offQuery = telemetry.on("query", () => undefined, undefined);
     const offParams = telemetry.on("query", () => undefined, { params: true });
     const offConnect = telemetry.on("connect", () => undefined, undefined);
     const offDisconnect = telemetry.on("disconnect", () => undefined, undefined);
     const offExhausted = telemetry.on("poolExhausted", () => undefined, undefined);
-    expect([
-      telemetry.query,
-      telemetry.queryParams,
-      telemetry.connect,
-      telemetry.disconnect,
-      telemetry.poolExhausted,
-    ]).toEqual([true, true, true, true, true]);
+    expect([telemetry.query, telemetry.connect, telemetry.disconnect, telemetry.poolExhausted]).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
     offQuery();
     expect(telemetry.query).toBe(true); // the params listener still listens
     offParams();
-    expect([telemetry.query, telemetry.queryParams]).toEqual([false, false]);
+    expect(telemetry.query).toBe(false);
     offConnect();
     offDisconnect();
     offExhausted();

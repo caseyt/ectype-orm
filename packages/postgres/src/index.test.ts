@@ -50,6 +50,8 @@ describe("postgres", () => {
       },
       release: () => undefined,
       getTransactionStatus: () => "I",
+      on: () => undefined,
+      off: () => undefined,
     };
     const pool = Object.assign(new pg.Pool(), { connect: async () => client });
     const adapter = postgres({ pool: pool as unknown as pg.Pool });

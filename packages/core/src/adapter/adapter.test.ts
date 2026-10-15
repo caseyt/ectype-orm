@@ -638,6 +638,54 @@ describe("cancellation", () => {
     expect(driver.connections[0]?.statements).toEqual([]);
   });
 
+  test("timeoutMs bounds the wait for a connection; the late connection goes back", async () => {
+    const { adapter, driver } = setup();
+    const checkout = deferred<DriverConnection>();
+    driver.nextAcquire = () => checkout.promise;
+    const error = await rejection(adapter.execute("select 1", [], { timeoutMs: 5 }));
+    expect(error).toMatchObject({ code: "timeout", sql: "select 1" });
+    expect((error as Error).message).toContain(
+      "waited longer than its timeoutMs (5 ms) for a free connection",
+    );
+    let closed = false;
+    const closing = adapter.close().then(() => {
+      closed = true;
+    });
+    await tick();
+    expect(closed).toBe(false);
+    checkout.resolve(driver.newConnection());
+    await closing;
+    expect(driver.released).toEqual([{ id: 1, destroy: false }]);
+    expect(driver.connections[0]?.statements).toEqual([]);
+  });
+
+  test("an abort while waiting reports the wait, not the statement", async () => {
+    const { adapter, driver } = setup();
+    const checkout = deferred<DriverConnection>();
+    driver.nextAcquire = () => checkout.promise;
+    const controller = new AbortController();
+    const waiting = rejection(
+      adapter.execute("select 1", [], { signal: controller.signal, timeoutMs: 10_000 }),
+    );
+    await tick();
+    controller.abort();
+    expect(((await waiting) as Error).message).toContain("AbortSignal fired while it waited");
+    checkout.resolve(driver.newConnection());
+  });
+
+  test("timeoutMs is one budget: the statement gets what the wait left of it", async () => {
+    const { adapter, driver } = setup();
+    driver.nextAcquire = () =>
+      new Promise((resolve) => setTimeout(() => resolve(driver.newConnection()), 40));
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    await adapter.execute("select 1", [], { timeoutMs: 1_000 });
+    const delays = timers.mock.calls
+      .map((call) => call[1])
+      .filter((delay) => typeof delay === "number" && delay > 100);
+    expect(delays[0]).toBe(1_000); // the wait
+    expect(delays[1]).toBeLessThan(970); // the statement
+  });
+
   test("a checkout that fails after the caller gave up is ignored", async () => {
     const { adapter, driver } = setup();
     const checkout = deferred<DriverConnection>();
@@ -815,7 +863,7 @@ describe("streams on the pool", () => {
     expect(events[0]).toMatchObject({ durationMs: 0, rowCount: 0 });
   });
 
-  test("an abort between batches stops the stream without another read", async () => {
+  test("an abort between batches stops the stream without another read, and keeps the connection", async () => {
     const { adapter, driver } = setup();
     driver.connectionSetup = (connection) => {
       connection.cursorRows = rows;
@@ -834,6 +882,30 @@ describe("streams on the pool", () => {
     );
     expect(error).toMatchObject({ code: "aborted" });
     expect(driver.connections[0]?.cursors[0]?.reads).toEqual([10]);
+    expect(driver.connections[0]?.cursors[0]?.closed).toBe(1);
+    expect(driver.connections[0]?.cancels).toBe(0);
+    expect(driver.released).toEqual([{ id: 1, destroy: false }]);
+  });
+
+  test("an abort while a read is in flight cancels it and closes the connection", async () => {
+    const { adapter, driver } = setup();
+    const read = deferred<readonly Record<string, unknown>[]>();
+    driver.connectionSetup = (connection) => {
+      connection.cancelResult = async () => read.reject(new Error("canceled"));
+      connection.cursor = async () => ({ read: () => read.promise, close: async () => undefined });
+    };
+    const controller = new AbortController();
+    const iterating = rejection(
+      (async () => {
+        for await (const _row of adapter.stream("select n", [], { signal: controller.signal })) {
+          // never reached
+        }
+      })(),
+    );
+    await tick();
+    controller.abort();
+    expect(await iterating).toMatchObject({ code: "aborted" });
+    expect(driver.connections[0]?.cancels).toBe(1);
     expect(driver.released).toEqual([{ id: 1, destroy: true }]);
   });
 
@@ -1055,6 +1127,26 @@ describe("dedicated connections", () => {
     ).rejects.toThrow("division by zero");
     await connection.release();
     expect(driver.released).toEqual([{ id: 1, destroy: true }]);
+  });
+
+  test("a statement or stream on a connection with a stream open is refused, and nothing hangs", async () => {
+    const { adapter, driver } = setup();
+    driver.connectionSetup = (connection) => {
+      connection.cursorRows = [{ n: 1 }, { n: 2 }];
+    };
+    const connection = await adapter.acquire();
+    const iterator = connection.stream("select n", [], { batchSize: 1 })[Symbol.asyncIterator]();
+    await iterator.next();
+    await expect(connection.execute("select 1", [])).rejects.toThrow(QueryError);
+    await expect(connection.commit()).rejects.toThrow(/A stream is still open on this connection/);
+    await expect(connection.stream("select 2", [])[Symbol.asyncIterator]().next()).rejects.toThrow(
+      QueryError,
+    );
+    await iterator.return?.();
+    await expect(connection.execute("select 1", [])).resolves.toBe(EMPTY);
+    await connection.release();
+    expect(driver.released).toEqual([{ id: 1, destroy: false }]);
+    expect(driver.connections[0]?.statements.map((s) => s.sql)).toEqual(["select n", "select 1"]);
   });
 
   test("a stream left open when the connection is released closes the connection", async () => {

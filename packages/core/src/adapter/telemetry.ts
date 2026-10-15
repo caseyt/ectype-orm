@@ -57,8 +57,6 @@ export function redactParams(params: readonly unknown[], slots: readonly ParamSl
 export class Telemetry {
   /** Whether anyone listens to `query` (with or without parameters). Read before measuring. */
   query = false;
-  /** Whether a `query` listener asked for parameter values. */
-  queryParams = false;
   connect = false;
   disconnect = false;
   poolExhausted = false;
@@ -190,7 +188,6 @@ export class Telemetry {
         break;
       case "queryParams":
         this.queryParamListeners = listeners as readonly Listener<"query">[];
-        this.queryParams = listeners.length > 0;
         break;
       case "connect":
         this.connectListeners = listeners as readonly Listener<"connect">[];

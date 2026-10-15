@@ -168,9 +168,9 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
     });
 
     describe("round trip of every type", () => {
-      test.each(ROUND_TRIP_CASES.map((c) => [c.label, c] as const))("%s", async (_label, roundTrip) => {
+      test.for(ROUND_TRIP_CASES.map((c) => [c.label, c] as const))("%s", async ([, roundTrip], { skip }) => {
         const columnType = profile.columnType(roundTrip.type);
-        if (columnType === undefined) return;
+        if (columnType === undefined) return skip("the database has no column type for it");
         const a = adapter();
         const table = `rt_${roundTrip.label.replace(/[^a-z]+/g, "_")}`;
         await db.exec(
@@ -207,11 +207,11 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
 
     describe("error normalisation", () => {
       const kinds: ConstraintViolationType[] = ["unique", "foreignKey", "check", "exclusion", "notNull"];
-      test.each(kinds)(
+      test.for(kinds)(
         "a %s violation is a ConstraintError naming the constraint, keeping the driver error",
-        async (kind) => {
+        async (kind, { skip }) => {
           const violation = profile.violations[kind];
-          if (violation === undefined) return;
+          if (violation === undefined) return skip("the database has no such constraint");
           const a = adapter();
           const error = await rejection(a.execute(violation.sql, []));
           expect(error).toBeInstanceOf(ConstraintError);
@@ -359,11 +359,12 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
         }
       });
 
-      test.each(["read committed", "repeatable read", "serializable"] as const)(
+      test.for(["read committed", "repeatable read", "serializable"] as const)(
         "begin takes the isolation level %s",
-        async (isolation) => {
+        async (isolation, { skip }) => {
           const a = adapter();
-          if (!a.capabilities.isolationLevels.includes(isolation)) return;
+          if (!a.capabilities.isolationLevels.includes(isolation))
+            return skip("not an isolation level of this database");
           const connection = await a.acquire();
           try {
             await connection.begin({ isolation });
@@ -480,6 +481,22 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
         expect((await a.execute("select 1 as one", [])).rows).toEqual([{ one: 1 }]);
       });
 
+      test("a statement on a connection with a stream open is refused, not queued forever", async () => {
+        const a = adapter();
+        const connection = await a.acquire();
+        try {
+          const iterator = connection
+            .stream(profile.series(100), [], { batchSize: 10 })
+            [Symbol.asyncIterator]();
+          await iterator.next();
+          await expect(connection.execute("select 1", [])).rejects.toThrow(/A stream is still open/);
+          await iterator.return?.();
+          expect((await connection.execute("select 1 as one", [])).rows).toEqual([{ one: 1 }]);
+        } finally {
+          await connection.release();
+        }
+      });
+
       test("streams on a dedicated connection inside a transaction, then the connection goes on", async () => {
         const a = adapter();
         const connection = await a.acquire();
@@ -549,6 +566,17 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
         expect((await a.execute("select 1 as one", [])).rows).toEqual([{ one: 1 }]);
       });
 
+      test("timeoutMs also bounds the wait for a free connection", async () => {
+        const a = adapter({ poolMax: 1 });
+        const held = await a.acquire();
+        const started = Date.now();
+        const error = await rejection(a.execute("select 1", [], { timeoutMs: 200 }));
+        expect(error).toMatchObject({ code: "timeout" });
+        expect(Date.now() - started).toBeLessThan(1_500);
+        await held.release();
+        expect((await a.execute("select 1 as one", [])).rows).toEqual([{ one: 1 }]);
+      });
+
       test("timeoutMs on a dedicated connection inside a transaction cancels the statement only", async () => {
         const a = adapter();
         const connection = await a.acquire();
@@ -564,6 +592,24 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
         } finally {
           await connection.release();
         }
+      });
+
+      test("an abort between stream reads keeps the connection", async () => {
+        const a = adapter({ poolMax: 1 });
+        const before = (await a.execute(profile.backendId, [])).rows[0]?.id;
+        const controller = new AbortController();
+        const error = await rejection(
+          (async () => {
+            for await (const _row of a.stream(profile.series(100), [], {
+              batchSize: 10,
+              signal: controller.signal,
+            })) {
+              controller.abort();
+            }
+          })(),
+        );
+        expect(error).toMatchObject({ code: "aborted" });
+        expect((await a.execute(profile.backendId, [])).rows[0]?.id).toEqual(before);
       });
 
       test("an abort during a stream stops it", async () => {
@@ -591,7 +637,11 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
         const a = adapter({ poolMax: 2 });
         const connection = await a.acquire();
         const id = (await connection.execute(profile.backendId, [])).rows[0]?.id;
+        // `terminate` returns once the server process has ended. Waiting a little more lets
+        // the driver see the closed socket while the connection is checked out and idle:
+        // the case that must neither crash the process nor hand the connection back.
         await profile.terminate(db, id);
+        await sleepMs(100);
         const error = await rejection(connection.execute("select 1", []));
         expect(error).toBeInstanceOf(DatabaseError);
         expect(error).toMatchObject({ code: "connection" });

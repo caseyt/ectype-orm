@@ -39,6 +39,11 @@ parsers, so the connection options above (`connectionString`, `host`, ...,
 `statementTimeoutMs`, `applicationName`) cannot be combined with it: set them on the pool.
 `close()` waits for the adapter's own connections to come back and leaves the pool open.
 
+The adapter adds no `error` listener to a pool you bring. `pg` emits `error` on the pool
+when an idle connection fails (the server restarts, or ends the session), and an `error`
+event without a listener ends the Node.js process, so add one yourself:
+`pool.on("error", (error) => logger.warn(error))`. A pool the adapter creates has one.
+
 ### Health
 
 <<< @/examples/adapters.ts#health
@@ -141,15 +146,24 @@ left out of the error's own message; it is still on `cause`.
 ## Cancellation and timeouts
 
 `timeoutMs` and `signal` (see [Parameters and options](/guide/repo#parameters-and-options))
-cancel a statement **on the server**: the adapter opens a short-lived second connection
-and asks Postgres to cancel the statement (`pg_cancel_backend`). The call rejects with a
-`DatabaseError` whose code is `"timeout"` or `"aborted"` once the statement has stopped,
-and the connection goes back to the pool ready for the next statement. An abort while
-waiting for a free connection stops the wait.
+cancel a statement **on the server**. The adapter sends Postgres's own cancel request, the
+same one `psql` sends on Ctrl-C: a short message on a new socket, which needs no login and
+no free connection slot, and which PgBouncer passes on to the right
+server process. The call rejects with a `DatabaseError` whose code is `"timeout"` or
+`"aborted"` once the statement has stopped, and the connection goes back to the pool
+ready for the next statement.
+
+`timeoutMs` is one budget for the whole call: the wait for a free connection counts, and
+a call that waits longer than `timeoutMs` rejects with `"timeout"` without running. An
+abort while waiting stops the wait the same way. (For a stream, `timeoutMs` bounds the
+wait and then each fetch of a batch.)
 
 A statement that had already finished when the cancel arrived is not undone; the call
-still rejects. Inside a transaction, a cancelled statement aborts the transaction, as
-any failed statement does.
+still rejects. Postgres does not say whether a cancel request stopped anything, and a
+request that cannot be delivered (the server unreachable within `connectionTimeoutMs`,
+10 seconds without one) lets the statement run to its end before the call rejects.
+Inside a transaction, a cancelled statement aborts the transaction, as any failed
+statement does.
 
 `statementTimeoutMs` is the same limit set once for every statement, enforced by
 Postgres itself.
@@ -164,7 +178,9 @@ event carries the SQL, the number of parameters, the time spent waiting for a co
 values are included only with `log: { params: true }`, and the value of a redacted field
 is always replaced by `**redacted**`.
 
-When nobody listens, the adapter does not measure anything.
+When nobody listens, the adapter does not measure anything. A listener that throws does
+not fail the statement, but its error is rethrown as an uncaught exception, which ends the
+process unless you handle `uncaughtException`: catch errors inside your listener.
 
 ## Pool behaviour
 
@@ -174,7 +190,10 @@ When nobody listens, the adapter does not measure anything.
   discarded, not reused. So is a connection that is returned while still inside a
   transaction.
 - An idle connection that the server closes is dropped from the pool without an error;
-  the next query opens a new one.
+  the next query opens a new one. A checked-out connection that the server closes fails
+  its next statement with the code `"connection"` and is discarded when it is released.
+- While a stream is open on a connection, another statement on that connection throws
+  `QueryError`: finish the stream, or leave its loop, first.
 - `repo.close()` waits for running queries and checked-out connections, and can be called
   more than once. Calls made after it reject with a `DatabaseError` (code `"connection"`).
 

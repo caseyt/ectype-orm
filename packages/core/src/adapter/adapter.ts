@@ -191,15 +191,22 @@ function checkSignal(signal: unknown): AbortSignal | undefined {
   throw new TypeError("The signal option must be an AbortSignal.");
 }
 
-/** The error of a statement stopped by its caller's signal or by its `timeoutMs`. */
+/**
+ * The error of a statement stopped by its caller's signal or by its `timeoutMs`, while it
+ * ran or (`waiting`) while it waited for a connection.
+ */
 function interruption(
   kind: "aborted" | "timeout",
   sql: string,
   timeoutMs: number | undefined,
   cause: unknown,
+  waiting = false,
 ): DatabaseError {
-  const message =
-    kind === "aborted"
+  const message = waiting
+    ? kind === "aborted"
+      ? "The statement was not run: its AbortSignal fired while it waited for a free connection."
+      : `The statement was not run: it waited longer than its timeoutMs (${timeoutMs} ms) for a free connection.`
+    : kind === "aborted"
       ? "The statement was cancelled because its AbortSignal fired."
       : `The statement was cancelled because it ran longer than its timeoutMs (${timeoutMs} ms).`;
   return new DatabaseError(message, { code: kind, sql, cause });
@@ -219,9 +226,13 @@ function isFatal(error: unknown): boolean {
 
 const now = (): number => performance.now();
 
+/** Swallows a rejection; one function for every caller, so that no closure is made per statement. */
+const ignoreError = (): undefined => undefined;
+
 /**
  * Runs `work` (one round trip on `connection`) so that `signal` and `timeoutMs` can stop
- * it. Stopping sends the server a cancel request; the call then waits for the statement to
+ * it (after `delayMs`, which is `timeoutMs` unless part of it was spent waiting).
+ * Stopping sends the server a cancel request; the call then waits for the statement to
  * end **and** for the cancel request to be delivered before it rejects, so that a late
  * cancel can never reach the next statement on the same connection. The rejection is a
  * `DatabaseError` with the code `"aborted"` or `"timeout"`, whose `cause` is the driver's
@@ -233,6 +244,7 @@ function interruptible<T>(
   signal: AbortSignal | undefined,
   timeoutMs: number | undefined,
   work: () => Promise<T>,
+  delayMs: number | undefined = timeoutMs,
 ): Promise<T> {
   if (signal === undefined && timeoutMs === undefined) return work();
   if (signal?.aborted === true) return Promise.reject(interruption("aborted", sql, timeoutMs, undefined));
@@ -243,11 +255,11 @@ function interruptible<T>(
       if (reason !== undefined) return;
       reason = kind;
       // A failed cancel request leaves the statement running to its end; the call still rejects.
-      cancelled = connection.cancel().catch(() => undefined);
+      cancelled = connection.cancel().catch(ignoreError);
     };
     const onAbort = (): void => interrupt("aborted");
     signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = timeoutMs === undefined ? undefined : setTimeout(interrupt, timeoutMs, "timeout");
+    const timer = delayMs === undefined ? undefined : setTimeout(interrupt, delayMs, "timeout");
     const settle = (failed: boolean, value: T | undefined, error: unknown): void => {
       if (timer !== undefined) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
@@ -288,6 +300,9 @@ async function* cursorRows(
   );
   try {
     for (;;) {
+      // An abort between reads stops the stream without touching the connection: no read
+      // is in flight, so the cursor is closed normally and the connection stays healthy.
+      if (signal?.aborted === true) throw interruption("aborted", sql, timeoutMs, undefined);
       let rows: readonly Record<string, unknown>[];
       try {
         rows = await interruptible(connection, sql, signal, timeoutMs, () => cursor.read(batchSize));
@@ -444,6 +459,8 @@ class SharedAdapter implements DatabaseAdapter {
     this.active++;
     let connection: DriverConnection | undefined;
     try {
+      // timeoutMs is one budget for the whole call: the wait for a connection, then the statement.
+      const deadline = timeoutMs === undefined ? 0 : now() + timeoutMs;
       const checkedOut = await this.checkout(driver, sql, signal, timeoutMs);
       connection = checkedOut;
       if (timed) sent = now();
@@ -452,7 +469,14 @@ class SharedAdapter implements DatabaseAdapter {
       const pending =
         signal === undefined && timeoutMs === undefined
           ? checkedOut.query(sql, params, name)
-          : interruptible(checkedOut, sql, signal, timeoutMs, () => checkedOut.query(sql, params, name));
+          : interruptible(
+              checkedOut,
+              sql,
+              signal,
+              timeoutMs,
+              () => checkedOut.query(sql, params, name),
+              timeoutMs === undefined ? undefined : Math.max(0, deadline - now()),
+            );
       const result = await pending;
       await this.checkin(driver, checkedOut, false);
       if (timed) this.report(sql, params, options, now() - sent, sent - start, result.rowCount, undefined);
@@ -629,9 +653,10 @@ class SharedAdapter implements DatabaseAdapter {
   }
 
   /**
-   * Checks a connection out. Reports `poolExhausted` when the caller has to wait. With a
-   * signal, an abort stops the wait; a connection that arrives afterwards goes straight
-   * back to the pool (and keeps the adapter open until it has).
+   * Checks a connection out. Reports `poolExhausted` when the caller has to wait. A signal
+   * or a `timeoutMs` bounds the wait: when it fires first, the call rejects (code
+   * `"aborted"` or `"timeout"`) and a connection that arrives afterwards goes straight back
+   * to the pool (keeping the adapter open until it has).
    */
   private checkout(
     driver: DriverWrapper,
@@ -642,29 +667,45 @@ class SharedAdapter implements DatabaseAdapter {
     if (this.telemetry.poolExhausted && driver.saturated()) {
       this.telemetry.emitPool("poolExhausted", driver.stats());
     }
-    if (signal === undefined) return driver.acquire();
-    if (signal.aborted) return Promise.reject(interruption("aborted", sql, timeoutMs, undefined));
+    if (signal === undefined && timeoutMs === undefined) return driver.acquire();
+    if (signal?.aborted === true) {
+      return Promise.reject(interruption("aborted", sql, timeoutMs, undefined, true));
+    }
     return new Promise<DriverConnection>((resolve, reject) => {
-      let abandoned = false;
-      const onAbort = (): void => {
-        abandoned = true;
-        this.active++;
-        reject(interruption("aborted", sql, timeoutMs, undefined));
+      let settled = false;
+      const stop = (): void => {
+        signal?.removeEventListener("abort", onAbort);
+        if (timer !== undefined) clearTimeout(timer);
       };
-      signal.addEventListener("abort", onAbort, { once: true });
+      // Runs at most once: settling stops the timer and the abort listener, and so does this.
+      const giveUp = (kind: "aborted" | "timeout"): void => {
+        settled = true;
+        stop();
+        // The abandoned checkout counts as running work until its connection is back.
+        this.active++;
+        reject(interruption(kind, sql, timeoutMs, undefined, true));
+      };
+      const onAbort = (): void => giveUp("aborted");
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const timer = timeoutMs === undefined ? undefined : setTimeout(giveUp, timeoutMs, "timeout");
       driver.acquire().then(
         (connection) => {
-          signal.removeEventListener("abort", onAbort);
-          if (!abandoned) {
+          if (!settled) {
+            settled = true;
+            stop();
             resolve(connection);
             return;
           }
           void this.checkin(driver, connection, false).then(() => this.finished());
         },
         (error: unknown) => {
-          signal.removeEventListener("abort", onAbort);
-          if (!abandoned) reject(error);
-          else this.finished();
+          if (!settled) {
+            settled = true;
+            stop();
+            reject(error);
+          } else {
+            this.finished();
+          }
         },
       );
     });
@@ -699,7 +740,7 @@ class SharedConnection implements Connection {
 
   execute(sql: string, params: readonly unknown[], options?: ExecuteOptions): Promise<RawResult> {
     const promise = this.run(sql, params, options);
-    this.last = promise.catch(() => undefined);
+    this.last = promise.catch(ignoreError);
     return promise;
   }
 
@@ -766,6 +807,13 @@ class SharedConnection implements Connection {
       throw new DatabaseError(
         `This connection was ${this.state === "released" ? "released" : "destroyed"}; acquire a new one.`,
         { code: "connection", sql },
+      );
+    }
+    // A statement sent now would queue behind the open cursor and wait for the stream to
+    // end, which may never happen (the loop that reads it may be the one waiting).
+    if (this.openStreams > 0) {
+      throw new QueryError(
+        "A stream is still open on this connection. Finish it, or leave its for-await loop (break or return), before running another statement or stream on the same connection.",
       );
     }
   }

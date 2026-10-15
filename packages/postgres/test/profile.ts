@@ -49,7 +49,8 @@ export const POSTGRES_PROFILE: AdapterConformanceProfile = {
     `select n, 1 / (${failAt} - n) as boom from generate_series(1, ${count}) as n`,
   backendId: "select pg_backend_pid() as id",
   terminate: async (db, id) => {
-    await db.query("select pg_terminate_backend($1)", [id]);
+    // With a timeout, pg_terminate_backend waits until the process has ended (Postgres 14+).
+    await db.query("select pg_terminate_backend($1, 5000)", [id]);
   },
   isolationLevel: "select current_setting('transaction_isolation') as level",
   schema: `
