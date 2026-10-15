@@ -111,7 +111,13 @@ describe("ValidatorFn", () => {
     const d: ValidatorFn<Event> = (v) => (v.nope ? [] : []);
     // @ts-expect-error a number is not a list of issues, sync or async
     const e: ValidatorFn<Event> = async () => 42;
-    void [a, b, c, d, e];
+    // @ts-expect-error null is not "nothing": only undefined is
+    const f: ValidatorFn<Event> = () => null;
+    // @ts-expect-error a single issue must be wrapped in an array
+    const g: ValidatorFn<Event> = () => ({ path: "title", message: "is invalid" });
+    // @ts-expect-error the same holds for what a promise resolves to
+    const h: ValidatorFn<Event> = async () => null;
+    void [a, b, c, d, e, f, g, h];
   });
 
   test("the values are read-only", () => {
