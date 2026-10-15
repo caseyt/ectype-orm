@@ -1195,7 +1195,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * );
    * ```
    *
-   * @throws TypeError when `validator` is neither a Standard Schema nor a function.
+   * @throws TypeError when `validator` is neither a Standard Schema nor a function, or a
+   *   validator function returns something other than an array of issues or nothing
+   *   (`undefined`), such as `null`, a single issue without its array or a string.
    * @throws QueryError when the validator answers with a promise (use `validateAsync`), or an option is wrong.
    */
   validate(validator: Validator<FieldValues<S>>, options?: ValidateOptions<S>): this {
@@ -1213,7 +1215,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * );
    * ```
    *
-   * @throws TypeError (as a rejected promise) when `validator` is neither a Standard Schema nor a function.
+   * @throws TypeError (as a rejected promise) when `validator` is neither a Standard Schema nor a function,
+   *   or a validator function's result resolves to something other than an array of issues or
+   *   nothing (`undefined`), such as `null`, a single issue without its array or a string.
    */
   validateAsync(validator: Validator<FieldValues<S>>, options?: ValidateOptions<S>): Promise<this> {
     return validateChangesetAsync(this, validator, options as ValidateOptions<ChangesetSource> | undefined);
@@ -1229,7 +1233,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * cast(User, params, ["email"]).validateField("email", z.string().email());
    * ```
    *
-   * @throws TypeError when `validator` is neither a Standard Schema nor a function.
+   * @throws TypeError when `validator` is neither a Standard Schema nor a function, or a
+   *   validator function returns something other than an array of issues or nothing
+   *   (`undefined`), such as `null`, a single issue without its array or a string.
    * @throws QueryError when `field` is not a field, or the validator answers with a promise.
    */
   validateField<K extends FieldName<S>>(
@@ -1249,7 +1255,9 @@ export class Changeset<S extends ChangesetSource = AnySchema, New extends boolea
    * );
    * ```
    *
-   * @throws TypeError (as a rejected promise) when `validator` is neither a Standard Schema nor a function.
+   * @throws TypeError (as a rejected promise) when `validator` is neither a Standard Schema nor a function,
+   *   or a validator function's result resolves to something other than an array of issues or
+   *   nothing (`undefined`), such as `null`, a single issue without its array or a string.
    */
   validateFieldAsync<K extends FieldName<S>>(
     field: K,

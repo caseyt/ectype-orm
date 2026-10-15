@@ -159,3 +159,72 @@ describe("validateFieldAsync", () => {
     await expect(cs.validateFieldAsync("email", 7 as never)).rejects.toThrow(TypeError);
   });
 });
+
+/** Results a field validator function may not return, with what the message says about each. */
+const NOT_A_LIST: readonly (readonly [string, unknown, string])[] = [
+  [
+    "a single issue",
+    { path: [], message: "is taken" },
+    "but it returned a single issue, not an array. Put it in an array: return [issue].",
+  ],
+  ["a string", "is taken", 'but it returned the string "is taken".'],
+  ["a number", 1, "but it returned the number 1."],
+  ["an object without a message", { path: [] }, "but it returned an object that is not an array."],
+  ["null", null, "but it returned null."],
+];
+
+describe("validateField: a function's result that is not an array", () => {
+  const expected = (fn: string, returned: string): string =>
+    `${fn}(): a validator function must return an array of issues, such as [{ path: [], message: "is invalid" }], or nothing, ${returned}`;
+  const changed = () => cast(User, { email: "a@b.c" }, ["email"]);
+
+  test.each(NOT_A_LIST)("validateField throws a TypeError for %s", (_name, result, returned) => {
+    expect(() => changed().validateField("email", () => result as never)).toThrow(TypeError);
+    expect(() => changed().validateField("email", () => result as never)).toThrow(
+      expected("validateField", returned),
+    );
+  });
+
+  test.each(NOT_A_LIST)(
+    "validateFieldAsync rejects with a TypeError for %s",
+    async (_name, result, returned) => {
+      await expect(changed().validateFieldAsync("email", () => result as never)).rejects.toThrow(TypeError);
+      await expect(changed().validateFieldAsync("email", () => result as never)).rejects.toThrow(
+        expected("validateFieldAsync", returned),
+      );
+    },
+  );
+
+  test.each(NOT_A_LIST)(
+    "validateFieldAsync rejects with a TypeError for a promise of %s",
+    async (_name, result, returned) => {
+      await expect(changed().validateFieldAsync("email", async () => result as never)).rejects.toThrow(
+        TypeError,
+      );
+      await expect(changed().validateFieldAsync("email", async () => result as never)).rejects.toThrow(
+        expected("validateFieldAsync", returned),
+      );
+    },
+  );
+
+  test("is not called, so cannot throw, when the field has no change", () => {
+    const cs = cast(User, {}, []).validateField("email", () => "is taken" as never);
+    expect(cs.valid).toBe(true);
+  });
+
+  test("arrays and undefined are accepted, sync and async", async () => {
+    for (const result of [[], undefined]) {
+      expect(changed().validateField("email", () => result as never).valid).toBe(true);
+      expect((await changed().validateFieldAsync("email", async () => result as never)).valid).toBe(true);
+    }
+    const issues = [{ path: [], message: "is taken" }];
+    expect(
+      changed()
+        .validateField("email", () => issues)
+        .errorMessages(),
+    ).toEqual({ email: ["is taken"] });
+    expect((await changed().validateFieldAsync("email", async () => issues)).errorMessages()).toEqual({
+      email: ["is taken"],
+    });
+  });
+});

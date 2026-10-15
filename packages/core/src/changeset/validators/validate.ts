@@ -344,9 +344,56 @@ function standardIssues(result: unknown, fn: string): readonly unknown[] | undef
   return issues;
 }
 
-/** The issues a validator function returned: anything that is not a list means none. */
-function functionIssues(result: unknown): readonly unknown[] | undefined {
-  return Array.isArray(result) && result.length > 0 ? result : undefined;
+/**
+ * The issues a validator function returned, or `undefined` for none. An array (empty or
+ * not) and nothing (`undefined`) are accepted.
+ *
+ * @throws TypeError for anything else: `null`, a single issue without its array, a
+ *   string, a number, any other object. Such a result is a mistake in the function, and
+ *   counting it as "no issues" would let an invalid changeset through.
+ */
+function functionIssues(result: unknown, fn: string, field: boolean): readonly unknown[] | undefined {
+  if (Array.isArray(result)) return result.length > 0 ? result : undefined;
+  if (result === undefined) return undefined;
+  throw new TypeError(
+    `${fn}(): a validator function must return an array of issues, such as ${
+      field ? FIELD_ISSUE_EXAMPLE : ISSUE_EXAMPLE
+    }, or nothing, but it returned ${describeResult(result)}.`,
+  );
+}
+
+const ISSUE_EXAMPLE = '[{ path: "email", message: "is invalid" }]';
+const FIELD_ISSUE_EXAMPLE = '[{ path: [], message: "is invalid" }]';
+const SHOWN_LENGTH = 60;
+
+/**
+ * `text` cut to {@link SHOWN_LENGTH} code units with a `…` mark, one unit shorter when the
+ * cut would split a surrogate pair (which would show as an escaped lone surrogate).
+ */
+function shorten(text: string): string {
+  if (text.length <= SHOWN_LENGTH) return text;
+  const last = text.charCodeAt(SHOWN_LENGTH - 1);
+  const end = last >= 0xd800 && last <= 0xdbff ? SHOWN_LENGTH - 1 : SHOWN_LENGTH;
+  return `${text.slice(0, end)}…`;
+}
+
+/** What a validator function returned instead of an array, for the error message. */
+function describeResult(result: unknown): string {
+  switch (typeof result) {
+    case "string":
+      return `the string ${JSON.stringify(shorten(result))}`;
+    case "number":
+    case "bigint":
+    case "boolean":
+      return `the ${typeof result} ${String(result)}`;
+    case "object":
+      if (result === null) return "null";
+      return typeof (result as { readonly message?: unknown }).message === "string"
+        ? "a single issue, not an array. Put it in an array: return [issue]"
+        : "an object that is not an array";
+    default:
+      return `a ${typeof result}`;
+  }
 }
 
 function isKey(value: unknown): value is PropertyKey {
@@ -565,7 +612,7 @@ function finish<C extends AnyChangeset>(
 ): C {
   const recorded = addValidation(changeset, "$schema", { validator, opts: options });
   const standard = run.dispatched.standard !== undefined;
-  const issues = standard ? standardIssues(result, fn) : functionIssues(result);
+  const issues = standard ? standardIssues(result, fn) : functionIssues(result, fn, false);
   if (issues === undefined || issues.length === 0) {
     return standard && run.options.apply
       ? applyOutput(recorded, run.fields, (result as { readonly value?: unknown }).value)
@@ -583,7 +630,9 @@ function finish<C extends AnyChangeset>(
  * const checked = validateChangeset(cs, UserInput, undefined);
  * ```
  *
- * @throws TypeError when `validator` is neither a Standard Schema nor a function.
+ * @throws TypeError when `validator` is neither a Standard Schema nor a function, or when
+ *   a validator function returns something other than an array of issues or nothing
+ *   (`undefined`), such as `null`, a single issue without its array or a string.
  * @throws QueryError when the validator answers with a promise, or an option is wrong.
  */
 export function validateChangeset<C extends AnyChangeset>(
@@ -607,6 +656,10 @@ export function validateChangeset<C extends AnyChangeset>(
  * ```ts
  * const checked = await validateChangesetAsync(cs, async (v) => [], undefined);
  * ```
+ *
+ * @throws TypeError (as a rejected promise) in the cases {@link validateChangeset} throws
+ *   it, including a function whose promise resolves to something other than an array of
+ *   issues or nothing.
  */
 export async function validateChangesetAsync<C extends AnyChangeset>(
   changeset: C,
@@ -642,7 +695,7 @@ function finishField<C extends AnyChangeset>(
   fn: string,
 ): C {
   const recorded = addValidation(changeset, field, { schema: validator });
-  const issues = standard ? standardIssues(result, fn) : functionIssues(result);
+  const issues = standard ? standardIssues(result, fn) : functionIssues(result, fn, true);
   if (issues === undefined || issues.length === 0) return recorded;
   const added = new Map<string, ChangesetError[]>();
   for (const raw of issues) {
@@ -661,7 +714,9 @@ function finishField<C extends AnyChangeset>(
  * const checked = validateFieldOf(cs, "email", z.string().email());
  * ```
  *
- * @throws TypeError when `validator` is neither a Standard Schema nor a function.
+ * @throws TypeError when `validator` is neither a Standard Schema nor a function, or when
+ *   a validator function returns something other than an array of issues or nothing
+ *   (`undefined`), such as `null`, a single issue without its array or a string.
  * @throws QueryError when `field` is not a field, or the validator answers with a promise.
  */
 export function validateFieldOf<C extends AnyChangeset>(changeset: C, field: string, validator: unknown): C {
@@ -684,6 +739,10 @@ export function validateFieldOf<C extends AnyChangeset>(changeset: C, field: str
  * ```ts
  * const checked = await validateFieldOfAsync(cs, "email", async (email) => []);
  * ```
+ *
+ * @throws TypeError (as a rejected promise) in the cases {@link validateFieldOf} throws
+ *   it, including a function whose promise resolves to something other than an array of
+ *   issues or nothing.
  */
 export async function validateFieldOfAsync<C extends AnyChangeset>(
   changeset: C,

@@ -53,7 +53,8 @@ export interface ValidateOptions<S = AnySchema> {
 /**
  * A function given to `validateField`: it receives the field's changed value (never
  * `null`) and returns issues whose paths are relative to that value (`[]` for the value
- * itself), or nothing.
+ * itself), or nothing. Any other result, such as a single issue without its array or a
+ * string, makes `validateField` throw a `TypeError`.
  *
  * @example
  * ```ts

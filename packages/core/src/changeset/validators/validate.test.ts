@@ -416,7 +416,7 @@ describe("validate: issue mapping", () => {
 
   test("no issues: the changeset is valid and its errors are shared", () => {
     const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
-    for (const result of [[], undefined, null, "not a list"]) {
+    for (const result of [[], undefined]) {
       const next = cs.validate(() => result as never);
       expect(next.valid).toBe(true);
       expect(next.errors).toBe(cs.errors);
@@ -447,6 +447,109 @@ describe("validate: issue mapping", () => {
     const cs = cast(User, {}, []);
     expect(() => cs.validate(standard(() => null as never))).toThrow(/returned null, not a result/);
     expect(() => cs.validate(standard(() => ({ issues: "bad" }) as never))).toThrow(/not a list/);
+  });
+});
+
+/**
+ * Results a validator function may not return, with the part of the error message that
+ * says what it returned. A single issue without its array is the usual slip.
+ */
+const NOT_A_LIST: readonly (readonly [string, unknown, string])[] = [
+  [
+    "a single issue",
+    { path: "email", message: "is taken" },
+    "but it returned a single issue, not an array. Put it in an array: return [issue].",
+  ],
+  ["a string", "is taken", 'but it returned the string "is taken".'],
+  ["a number", 0, "but it returned the number 0."],
+  ["an object without a message", { path: "email" }, "but it returned an object that is not an array."],
+  ["a boolean", false, "but it returned the boolean false."],
+  ["null", null, "but it returned null."],
+];
+
+describe("validate: a function's result that is not an array", () => {
+  const expected = (fn: string, returned: string): string =>
+    `${fn}(): a validator function must return an array of issues, such as [{ path: "email", message: "is invalid" }], or nothing, ${returned}`;
+
+  test.each(NOT_A_LIST)("validate throws a TypeError for %s", (_name, result, returned) => {
+    const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
+    expect(() => cs.validate(() => result as never)).toThrow(TypeError);
+    expect(() => cs.validate(() => result as never)).toThrow(expected("validate", returned));
+  });
+
+  test.each(NOT_A_LIST)("validateAsync rejects with a TypeError for %s", async (_name, result, returned) => {
+    const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
+    await expect(cs.validateAsync(() => result as never)).rejects.toThrow(TypeError);
+    await expect(cs.validateAsync(() => result as never)).rejects.toThrow(
+      expected("validateAsync", returned),
+    );
+  });
+
+  test.each(NOT_A_LIST)(
+    "validateAsync rejects with a TypeError for a promise of %s",
+    async (_name, result, returned) => {
+      const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
+      const pending = cs.validateAsync(async () => result as never);
+      await expect(pending).rejects.toThrow(TypeError);
+      await expect(cs.validateAsync(async () => result as never)).rejects.toThrow(
+        expected("validateAsync", returned),
+      );
+    },
+  );
+
+  test("a long string is shortened in the message", () => {
+    const cs = cast(User, {}, []);
+    const long = "x".repeat(100);
+    expect(() => cs.validate(() => long as never)).toThrow(`the string "${"x".repeat(60)}…".`);
+  });
+
+  test("a string of exactly 60 characters is shown whole", () => {
+    const cs = cast(User, {}, []);
+    const sixty = "y".repeat(60);
+    expect(() => cs.validate(() => sixty as never)).toThrow(`but it returned the string "${sixty}".`);
+  });
+
+  test("shortening never splits a character made of two code units", () => {
+    const cs = cast(User, {}, []);
+    const text = `${"x".repeat(59)}😀 and more`;
+    expect(() => cs.validate(() => text as never)).toThrow(`the string "${"x".repeat(59)}…".`);
+    const fits = `${"x".repeat(58)}😀 and more`;
+    expect(() => cs.validate(() => fits as never)).toThrow(`the string "${"x".repeat(58)}😀…".`);
+  });
+
+  test("an object whose message is not a string is not called a single issue", () => {
+    const cs = cast(User, {}, []);
+    expect(() => cs.validate(() => ({ path: "email", message: 5 }) as never)).toThrow(
+      "but it returned an object that is not an array.",
+    );
+  });
+
+  test("other kinds of value name their type", () => {
+    const cs = cast(User, {}, []);
+    expect(() => cs.validate(() => 5n as never)).toThrow("but it returned the bigint 5.");
+    expect(() => cs.validate(() => (() => []) as never)).toThrow("but it returned a function.");
+    expect(() => cs.validate(() => Symbol("s") as never)).toThrow("but it returned a symbol.");
+  });
+
+  test("a promise given to validate is still refused for being a promise", () => {
+    const cs = cast(User, {}, []);
+    expect(() => cs.validate(async () => "is taken" as never)).toThrow(QueryError);
+  });
+
+  test("arrays and undefined are accepted, sync and async", async () => {
+    const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
+    for (const result of [[], undefined]) {
+      expect(cs.validate(() => result as never).valid).toBe(true);
+      expect((await cs.validateAsync(async () => result as never)).valid).toBe(true);
+    }
+    const issue = [{ path: "email", message: "is taken" }];
+    expect(cs.validate(() => issue).errorMessages()).toEqual({ email: ["is taken"] });
+    expect((await cs.validateAsync(async () => issue)).errorMessages()).toEqual({ email: ["is taken"] });
+  });
+
+  test("a Standard Schema's result is not affected", () => {
+    const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
+    expect(cs.validate(standard((value) => ({ value }))).valid).toBe(true);
   });
 });
 
