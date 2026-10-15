@@ -146,10 +146,14 @@ left out of the error's own message; it is still on `cause`.
 ## Cancellation and timeouts
 
 `timeoutMs` and `signal` (see [Parameters and options](/guide/repo#parameters-and-options))
-cancel a statement **on the server**. The adapter sends Postgres's own cancel request, the
-same one `psql` sends on Ctrl-C: a short message on a new socket, which needs no login and
-no free connection slot, and which PgBouncer passes on to the right
-server process. The call rejects with a `DatabaseError` whose code is `"timeout"` or
+cancel a statement **on the server**. The adapter sends Postgres's own cancel request: a
+short message on a new socket, which needs no login and no free connection slot, and which
+PgBouncer passes on to the right server process. It goes to the address the connection is
+actually connected to, not to the host name resolved again, so DNS round-robin or a load
+balancer cannot send it to another server. When the connection uses TLS (`ssl`, or
+`sslmode` in the connection string), the cancel request does too, with the same TLS
+options and certificate checks; if TLS cannot be set up, the request is not sent at all,
+never in plain text. The call rejects with a `DatabaseError` whose code is `"timeout"` or
 `"aborted"` once the statement has stopped, and the connection goes back to the pool
 ready for the next statement.
 
@@ -159,9 +163,12 @@ abort while waiting stops the wait the same way. (For a stream, `timeoutMs` boun
 wait and then each fetch of a batch.)
 
 A statement that had already finished when the cancel arrived is not undone; the call
-still rejects. Postgres does not say whether a cancel request stopped anything, and a
-request that cannot be delivered (the server unreachable within `connectionTimeoutMs`,
-10 seconds without one) lets the statement run to its end before the call rejects.
+still rejects. Postgres does not say whether a cancel request stopped anything. A request
+that fails (the server unreachable within `connectionTimeoutMs`, 10 seconds without one,
+or TLS refused) lets the statement run to its end before the call rejects, and because the
+request might still reach the server late and cancel whatever runs next, that connection
+is never reused: a pooled one is closed, and a dedicated one (a transaction's) refuses
+further statements with the code `"connection"` and is closed when released.
 Inside a transaction, a cancelled statement aborts the transaction, as any failed
 statement does.
 
@@ -193,7 +200,9 @@ process unless you handle `uncaughtException`: catch errors inside your listener
   the next query opens a new one. A checked-out connection that the server closes fails
   its next statement with the code `"connection"` and is discarded when it is released.
 - While a stream is open on a connection, another statement on that connection throws
-  `QueryError`: finish the stream, or leave its loop, first.
+  `QueryError`: finish the stream, or leave its loop, first. Releasing the connection
+  while its stream is open ends the stream: its next fetch rejects with the code
+  `"connection"`.
 - `repo.close()` waits for running queries and checked-out connections, and can be called
   more than once. Calls made after it reject with a `DatabaseError` (code `"connection"`).
 

@@ -230,6 +230,16 @@ const now = (): number => performance.now();
 const ignoreError = (): undefined => undefined;
 
 /**
+ * Connections whose cancel request failed. The request may have reached the server
+ * anyway, late, so it could still cancel whatever runs next on that connection: such a
+ * connection is closed when it is returned, never reused.
+ */
+const cancelFailed = new WeakSet<DriverConnection>();
+
+/** For streams on a pooled connection, which the stream itself holds until it ends. */
+const alwaysOpen = (): boolean => true;
+
+/**
  * Runs `work` (one round trip on `connection`) so that `signal` and `timeoutMs` can stop
  * it (after `delayMs`, which is `timeoutMs` unless part of it was spent waiting).
  * Stopping sends the server a cancel request; the call then waits for the statement to
@@ -254,8 +264,11 @@ function interruptible<T>(
     const interrupt = (kind: "aborted" | "timeout"): void => {
       if (reason !== undefined) return;
       reason = kind;
-      // A failed cancel request leaves the statement running to its end; the call still rejects.
-      cancelled = connection.cancel().catch(ignoreError);
+      // A failed cancel request leaves the statement running to its end; the call still
+      // rejects, and the connection is not reused (`cancelFailed`).
+      cancelled = connection.cancel().catch(() => {
+        cancelFailed.add(connection);
+      });
     };
     const onAbort = (): void => interrupt("aborted");
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -294,6 +307,7 @@ async function* cursorRows(
   signal: AbortSignal | undefined,
   timeoutMs: number | undefined,
   tally: StreamTally,
+  open: () => boolean,
 ): AsyncGenerator<Record<string, unknown>, void, undefined> {
   const cursor = await interruptible(connection, sql, signal, timeoutMs, () =>
     connection.cursor(sql, params),
@@ -303,6 +317,14 @@ async function* cursorRows(
       // An abort between reads stops the stream without touching the connection: no read
       // is in flight, so the cursor is closed normally and the connection stays healthy.
       if (signal?.aborted === true) throw interruption("aborted", sql, timeoutMs, undefined);
+      // A dedicated connection released (or destroyed) mid-stream is gone: a read sent on it
+      // would never be answered.
+      if (!open()) {
+        throw new DatabaseError(
+          "The connection of this stream was released or destroyed while the stream was open; the stream cannot go on.",
+          { code: "connection", sql },
+        );
+      }
       let rows: readonly Record<string, unknown>[];
       try {
         rows = await interruptible(connection, sql, signal, timeoutMs, () => cursor.read(batchSize));
@@ -317,10 +339,13 @@ async function* cursorRows(
       for (const row of rows) yield row;
     }
   } finally {
-    try {
-      await cursor.close();
-    } catch {
-      tally.broken = true;
+    // Closing a cursor on a connection that has ended would wait forever for its answer.
+    if (open()) {
+      try {
+        await cursor.close();
+      } catch {
+        tally.broken = true;
+      }
     }
   }
 }
@@ -522,7 +547,7 @@ class SharedAdapter implements DatabaseAdapter {
     try {
       connection = await this.checkout(driver, sql, signal, timeoutMs);
       if (timed) sent = now();
-      yield* cursorRows(connection, sql, params, batchSize, signal, timeoutMs, tally);
+      yield* cursorRows(connection, sql, params, batchSize, signal, timeoutMs, tally, alwaysOpen);
     } catch (error) {
       failure = this.normalize(error, sql);
       throw failure;
@@ -601,11 +626,12 @@ class SharedAdapter implements DatabaseAdapter {
   }
 
   /**
-   * Returns a connection to the pool, or closes it when it failed fatally or is still
-   * inside a transaction (which must never be handed to the next caller).
+   * Returns a connection to the pool, or closes it when it failed fatally, a cancel
+   * request for it failed, or it is still inside a transaction (none of which may be
+   * handed to the next caller).
    */
   async checkin(driver: DriverWrapper, connection: DriverConnection, fatal: boolean): Promise<void> {
-    let destroy = fatal;
+    let destroy = fatal || cancelFailed.has(connection);
     if (!destroy) {
       try {
         destroy = connection.inTransaction();
@@ -731,6 +757,8 @@ class SharedConnection implements Connection {
   private last: Promise<unknown> = Promise.resolve();
   /** Streams that were started and have not finished. */
   private openStreams = 0;
+  /** Whether the connection is still checked out; read by its streams before each fetch. */
+  private readonly isOpen = (): boolean => this.state === "open";
 
   constructor(
     private readonly adapter: SharedAdapter,
@@ -809,6 +837,12 @@ class SharedConnection implements Connection {
         { code: "connection", sql },
       );
     }
+    if (cancelFailed.has(this.connection)) {
+      throw new DatabaseError(
+        "A cancel request for this connection failed, and it may still reach the server and cancel whatever runs next. The connection takes no more statements; release it (it is closed, not pooled) and acquire a new one.",
+        { code: "connection", sql },
+      );
+    }
     // A statement sent now would queue behind the open cursor and wait for the stream to
     // end, which may never happen (the loop that reads it may be the one waiting).
     if (this.openStreams > 0) {
@@ -861,7 +895,7 @@ class SharedConnection implements Connection {
     let failure: unknown;
     this.openStreams++;
     try {
-      yield* cursorRows(this.connection, sql, params, batchSize, signal, timeoutMs, tally);
+      yield* cursorRows(this.connection, sql, params, batchSize, signal, timeoutMs, tally, this.isOpen);
     } catch (error) {
       failure = this.adapter.normalize(error, sql);
       throw failure;

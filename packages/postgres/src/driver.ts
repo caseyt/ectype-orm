@@ -208,16 +208,34 @@ export class PgDriver implements DriverWrapper {
       readonly secretKey?: unknown;
       readonly host?: unknown;
       readonly port?: unknown;
+      readonly ssl?: unknown;
+      readonly sslNegotiation?: unknown;
+      readonly connection?: {
+        readonly stream?: { readonly remoteAddress?: unknown; readonly remotePort?: unknown };
+      };
     };
     const { processID, secretKey } = fields;
     if (typeof processID !== "number" || typeof secretKey !== "number") {
       throw new Error("The connection has no backend key to cancel its statement with.");
     }
+    const configuredHost = typeof fields.host === "string" && fields.host !== "" ? fields.host : "localhost";
+    const configuredPort = typeof fields.port === "number" ? fields.port : 5432;
+    // Aim at the server this connection is actually connected to, as libpq does: the host
+    // name may resolve elsewhere now (DNS round-robin, several poolers, a load balancer).
+    // A Unix socket has no remote address, and falls back to the configured path.
+    const stream = fields.connection?.stream;
+    const address = stream?.remoteAddress;
+    const remotePort = stream?.remotePort;
+    const connected = typeof address === "string" && address !== "" && typeof remotePort === "number";
+    const ssl = fields.ssl;
     const target: CancelTarget = {
-      host: typeof fields.host === "string" && fields.host !== "" ? fields.host : "localhost",
-      port: typeof fields.port === "number" ? fields.port : 5432,
+      host: connected ? address : configuredHost,
+      port: connected ? remotePort : configuredPort,
+      serverName: configuredHost,
       processId: processID,
       secretKey,
+      ssl: ssl === undefined || ssl === null || ssl === false ? false : (ssl as CancelTarget["ssl"]),
+      sslNegotiation: fields.sslNegotiation === "direct" ? "direct" : "postgres",
     };
     await this.runtime.sendCancel(target, this.cancelTimeoutMs());
   }

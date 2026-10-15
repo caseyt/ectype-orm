@@ -15,6 +15,9 @@ class FakeClient extends EventEmitter {
   secretKey: unknown = 777;
   host: unknown = "db";
   port: unknown = 5433;
+  ssl: unknown = false;
+  sslNegotiation: unknown = "postgres";
+  connection: unknown = { stream: { remoteAddress: "10.0.0.7", remotePort: 6432 } };
   status: string | null = "I";
   readonly queries: unknown[] = [];
   readonly releases: unknown[] = [];
@@ -255,15 +258,56 @@ describe("connections", () => {
 });
 
 describe("cancelling", () => {
-  test("sends the protocol's cancel request to the client's server, with its backend key", async () => {
+  test("sends the protocol's cancel request to the address the client is connected to, with its backend key", async () => {
     const { driver, runtime } = setup();
     driver.init();
     await (await driver.acquire()).cancel();
     expect(runtime.sendCancel).toHaveBeenCalledWith(
-      { host: "db", port: 5433, processId: 4242, secretKey: 777 },
+      {
+        host: "10.0.0.7",
+        port: 6432,
+        serverName: "db",
+        processId: 4242,
+        secretKey: 777,
+        ssl: false,
+        sslNegotiation: "postgres",
+      },
       10_000,
     );
   });
+
+  test("falls back to the configured host and port without a remote address (a Unix socket)", async () => {
+    const { driver, pool, runtime } = setup();
+    driver.init();
+    pool.client.host = "/var/run/postgresql";
+    pool.client.connection = { stream: { remoteAddress: undefined } };
+    await (await driver.acquire()).cancel();
+    expect(vi.mocked(runtime.sendCancel).mock.calls[0]?.[0]).toMatchObject({
+      host: "/var/run/postgresql",
+      port: 5433,
+      serverName: "/var/run/postgresql",
+    });
+  });
+
+  test.each([
+    [true, "postgres", true, "postgres"],
+    [{ ca: "pem" }, "direct", { ca: "pem" }, "direct"],
+    [undefined, "require", false, "postgres"],
+    [null, undefined, false, "postgres"],
+  ])(
+    "takes the client's TLS settings: ssl %o, negotiation %o",
+    async (ssl, negotiation, expectedSsl, expectedNegotiation) => {
+      const { driver, pool, runtime } = setup();
+      driver.init();
+      pool.client.ssl = ssl;
+      pool.client.sslNegotiation = negotiation;
+      await (await driver.acquire()).cancel();
+      expect(vi.mocked(runtime.sendCancel).mock.calls[0]?.[0]).toMatchObject({
+        ssl: expectedSsl,
+        sslNegotiation: expectedNegotiation,
+      });
+    },
+  );
 
   test("is bounded by the pool's connection timeout, also for a pool you bring", async () => {
     const owned = setup({ owned: true, config: { connectionTimeoutMillis: 1_500 } });
@@ -282,8 +326,13 @@ describe("cancelling", () => {
     driver.init();
     pool.client.host = "";
     pool.client.port = undefined;
+    pool.client.connection = undefined;
     await (await driver.acquire()).cancel();
-    expect(vi.mocked(runtime.sendCancel).mock.calls[0]?.[0]).toMatchObject({ host: "localhost", port: 5432 });
+    expect(vi.mocked(runtime.sendCancel).mock.calls[0]?.[0]).toMatchObject({
+      host: "localhost",
+      port: 5432,
+      serverName: "localhost",
+    });
   });
 
   test("reports a failed request", async () => {

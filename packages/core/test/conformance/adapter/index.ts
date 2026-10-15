@@ -497,6 +497,26 @@ export function runAdapterConformance(profile: AdapterConformanceProfile): void 
         }
       });
 
+      test("a stream whose connection is released midway stops with a connection error instead of hanging", async () => {
+        const a = adapter({ poolMax: 1 });
+        const connection = await a.acquire();
+        const iterator = connection
+          .stream(profile.series(100), [], { batchSize: 10 })
+          [Symbol.asyncIterator]();
+        const seen: unknown[] = [];
+        for (let i = 0; i < 10; i++) seen.push((await iterator.next()).value?.n);
+        await connection.release();
+        // The ten rows of the first batch were already fetched; the next fetch would go to a
+        // connection that has been closed.
+        const error = await rejection(iterator.next());
+        expect(error).toBeInstanceOf(DatabaseError);
+        expect(error).toMatchObject({ code: "connection" });
+        await expect(iterator.return?.()).resolves.toMatchObject({ done: true });
+        expect(seen).toHaveLength(10);
+        // The pool's one connection was closed (a stream was open) and a new one serves on.
+        expect((await a.execute("select 1 as one", [])).rows).toEqual([{ one: 1 }]);
+      });
+
       test("streams on a dedicated connection inside a transaction, then the connection goes on", async () => {
         const a = adapter();
         const connection = await a.acquire();

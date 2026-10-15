@@ -544,7 +544,7 @@ describe("cancellation", () => {
     expect((error as Error).cause).toBeUndefined();
   });
 
-  test("a cancel request that fails leaves the statement to finish, and the call still rejects", async () => {
+  test("a cancel request that fails leaves the statement to finish; the call rejects and the connection is closed", async () => {
     const { adapter, driver } = setup();
     const statement = deferred<RawResult>();
     driver.connectionSetup = (connection) => {
@@ -560,6 +560,23 @@ describe("cancellation", () => {
     await tick();
     statement.resolve(EMPTY);
     await expect(running).rejects.toMatchObject({ code: "aborted" });
+    // The request may still arrive late and cancel the next statement: never reuse it.
+    expect(driver.released).toEqual([{ id: 1, destroy: true }]);
+  });
+
+  test("a delivered cancel request leaves the connection reusable", async () => {
+    const { adapter, driver } = setup();
+    const statement = deferred<RawResult>();
+    driver.connectionSetup = (connection) => {
+      connection.respond = () => statement.promise;
+      connection.cancelResult = async () => statement.reject(new Error("canceled"));
+    };
+    const controller = new AbortController();
+    const running = adapter.execute("select 1", [], { signal: controller.signal });
+    await tick();
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: "aborted" });
+    expect(driver.released).toEqual([{ id: 1, destroy: false }]);
   });
 
   test("timeoutMs cancels a statement that runs longer", async () => {
@@ -1017,6 +1034,27 @@ describe("dedicated connections", () => {
     expect(driver.released).toEqual([{ id: 1, destroy: true }]);
   });
 
+  test("a dedicated connection whose cancel request failed takes no more statements, and is closed", async () => {
+    const { adapter, driver } = setup();
+    const statement = deferred<RawResult>();
+    driver.connectionSetup = (connection) => {
+      connection.respond = (sql) => (sql === "slow" ? statement.promise : Promise.resolve(EMPTY));
+      connection.cancelResult = async () => {
+        statement.resolve(EMPTY);
+        throw new Error("The cancel request got no answer within 10000 ms.");
+      };
+    };
+    const connection = await adapter.acquire();
+    await expect(connection.execute("slow", [], { timeoutMs: 1 })).rejects.toMatchObject({ code: "timeout" });
+    const error = await rejection(connection.rollback());
+    expect(error).toBeInstanceOf(DatabaseError);
+    expect(error).toMatchObject({ code: "connection", sql: "rollback" });
+    expect((error as Error).message).toContain("A cancel request for this connection failed");
+    await connection.release();
+    expect(driver.released).toEqual([{ id: 1, destroy: true }]);
+    expect(driver.connections[0]?.statements.map((s) => s.sql)).toEqual(["slow"]);
+  });
+
   test("abort and timeout work on a dedicated connection", async () => {
     const { adapter, driver } = setup();
     const statement = deferred<RawResult>();
@@ -1147,6 +1185,38 @@ describe("dedicated connections", () => {
     await connection.release();
     expect(driver.released).toEqual([{ id: 1, destroy: false }]);
     expect(driver.connections[0]?.statements.map((s) => s.sql)).toEqual(["select n", "select 1"]);
+  });
+
+  test("a stream whose connection was released stops with a connection error, and its loop ends", async () => {
+    const { adapter, driver } = setup();
+    driver.connectionSetup = (connection) => {
+      connection.cursorRows = [{ n: 1 }, { n: 2 }, { n: 3 }];
+    };
+    const connection = await adapter.acquire();
+    const iterator = connection.stream("select n", [], { batchSize: 1 })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ n: 1 });
+    await connection.release();
+    const error = await rejection(iterator.next());
+    expect(error).toBeInstanceOf(DatabaseError);
+    expect(error).toMatchObject({ code: "connection", sql: "select n" });
+    // The cursor of a connection that has ended is not closed: that would wait forever.
+    const cursor = driver.connections[0]?.cursors[0];
+    expect(cursor?.reads).toEqual([1]);
+    expect(cursor?.closed).toBe(0);
+    await expect(iterator.return?.()).resolves.toMatchObject({ done: true });
+  });
+
+  test("leaving the loop of a stream whose connection was released settles at once", async () => {
+    const { adapter, driver } = setup();
+    driver.connectionSetup = (connection) => {
+      connection.cursorRows = [{ n: 1 }, { n: 2 }];
+    };
+    const connection = await adapter.acquire();
+    const iterator = connection.stream("select n", [], { batchSize: 1 })[Symbol.asyncIterator]();
+    await iterator.next();
+    await connection.destroy();
+    await expect(iterator.return?.()).resolves.toMatchObject({ done: true });
+    expect(driver.connections[0]?.cursors[0]?.closed).toBe(0);
   });
 
   test("a stream left open when the connection is released closes the connection", async () => {
