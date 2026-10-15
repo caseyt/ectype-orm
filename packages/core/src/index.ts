@@ -12,6 +12,14 @@
  */
 export const VERSION: string = "0.0.0";
 
+// Step 11: the shared adapter. `createAdapter` is how the dialect packages build their
+// adapters; the driver wrapper it takes stays unnamed here (it is not public API). The
+// contract types a developer names when running SQL or listening to events are public
+// with it.
+export type { AdapterDefinition, DatabaseAdapter, PoolStats } from "./adapter/adapter.js";
+export { createAdapter } from "./adapter/adapter.js";
+export type { DriverCodec, DriverCodecs } from "./adapter/codecs.js";
+export type { QueryListenerOptions } from "./adapter/telemetry.js";
 // Step 05: changesets. The contract types a developer names when reading a changeset
 // (its errors, its constraints, its action) are public with it.
 export type {
@@ -48,6 +56,21 @@ export { applyAction, Changeset, cast, change, traverseErrors } from "./changese
 // writing a validator are public with them.
 export type { FieldValidator, FieldValidatorFn, ValidateOptions } from "./changeset/validators/index.js";
 export { BASE } from "./changeset/validators/index.js";
+export type {
+  Adapter,
+  AdapterEvents,
+  BeginOptions,
+  Capabilities,
+  Connection,
+  Dialect,
+  ExecuteOptions,
+  Executor,
+  IsolationLevel,
+  PoolEvent,
+  QueryEvent,
+  RawResult,
+  StreamOptions,
+} from "./contracts/adapter.js";
 export type {
   Action,
   ChangesetError,

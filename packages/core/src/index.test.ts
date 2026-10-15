@@ -38,6 +38,7 @@ test("the public entry point exports exactly these values", () => {
     "coalesce",
     "count",
     "countDistinct",
+    "createAdapter",
     "defineType",
     "exists",
     "failure",
