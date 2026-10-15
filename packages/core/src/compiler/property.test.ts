@@ -68,82 +68,95 @@ function everyValuePosition(v: readonly string[]): { ast: QueryAst; named: Recor
 
 const marked = (s: string, i: number) => `⟦${i}:${s}⟧`;
 
+// Thousands of cold compiles take seconds, more under coverage on CI: these tests get
+// their own timeouts instead of fewer runs.
+const LONG = 120_000;
+const SHORT = 60_000;
+
 describe("injection: a value never reaches the SQL text", () => {
-  test("arbitrary strings in every value position are bound, never written (10,000 runs)", () => {
-    fc.assert(
-      fc.property(fc.array(fc.string({ unit: "binary" }), { minLength: 18, maxLength: 18 }), (strings) => {
-        const values = strings.map(marked);
-        const { ast, named } = everyValuePosition(values);
-        const plan = createCompiler(postgresDialect).compile(ast, "all", undefined);
-        expect(plan.sql).not.toContain("⟦");
-        const bound = flat(bindParams(plan.slots, ast.params, named));
-        for (const v of values) expect(bound).toContain(v);
-      }),
-      { numRuns: 10_000 },
-    );
-  });
+  test(
+    "arbitrary strings in every value position are bound, never written (10,000 runs)",
+    () => {
+      fc.assert(
+        fc.property(fc.array(fc.string({ unit: "binary" }), { minLength: 18, maxLength: 18 }), (strings) => {
+          const values = strings.map(marked);
+          const { ast, named } = everyValuePosition(values);
+          const plan = createCompiler(postgresDialect).compile(ast, "all", undefined);
+          expect(plan.sql).not.toContain("⟦");
+          const bound = flat(bindParams(plan.slots, ast.params, named));
+          for (const v of values) expect(bound).toContain(v);
+        }),
+        { numRuns: 10_000 },
+      );
+    },
+    LONG,
+  );
 
-  test("values in limit, offset, VALUES cells, fragment sources and row-level writes are bound", () => {
-    const users = meta(User);
-    const email = users.fieldsByName.get("email") as FieldMeta;
-    const name = users.fieldsByName.get("name") as FieldMeta;
-    fc.assert(
-      fc.property(fc.array(fc.string({ unit: "binary" }), { minLength: 8, maxLength: 8 }), (strings) => {
-        const v = strings.map(marked);
-        const ast = rebuild(
-          bareQuery({ kind: "values", columns: ["a"], rows: [[value(v[0])], [value(v[1])]], alias: "x" }),
-          {
-            joins: [
-              {
-                kind: "join",
-                type: "cross",
-                source: {
-                  kind: "fragmentSource",
-                  fragment: frag`unnest(${value([v[2]])})`,
-                  columns: ["b"],
-                  alias: "y",
-                },
-                on: undefined,
-              },
-            ],
-            select: selectOne(col("x", "a")),
-            limit: value(v[3]),
-            offset: value(v[4]),
-          },
-        );
-        const compiler = createCompiler(postgresDialect);
-        const plan = compiler.compile(ast, "all", undefined);
-        expect(plan.sql).not.toContain("⟦");
-        const bound = flat(bindParams(plan.slots, ast.params));
-        for (const value of v.slice(0, 5)) expect(bound).toContain(value);
-
-        const insert = compiler.compileInsert(
-          users,
-          [email, name],
-          {
-            source: {
-              kind: "cells",
-              rows: [
-                [
-                  { kind: "value" },
-                  {
-                    kind: "expr",
-                    expr: fnNode("lower", [{ kind: "param", value: v[5], type: undefined, redact: false }]),
+  test(
+    "values in limit, offset, VALUES cells, fragment sources and row-level writes are bound",
+    () => {
+      const users = meta(User);
+      const email = users.fieldsByName.get("email") as FieldMeta;
+      const name = users.fieldsByName.get("name") as FieldMeta;
+      fc.assert(
+        fc.property(fc.array(fc.string({ unit: "binary" }), { minLength: 8, maxLength: 8 }), (strings) => {
+          const v = strings.map(marked);
+          const ast = rebuild(
+            bareQuery({ kind: "values", columns: ["a"], rows: [[value(v[0])], [value(v[1])]], alias: "x" }),
+            {
+              joins: [
+                {
+                  kind: "join",
+                  type: "cross",
+                  source: {
+                    kind: "fragmentSource",
+                    fragment: frag`unnest(${value([v[2]])})`,
+                    columns: ["b"],
+                    alias: "y",
                   },
-                ],
+                  on: undefined,
+                },
               ],
+              select: selectOne(col("x", "a")),
+              limit: value(v[3]),
+              offset: value(v[4]),
             },
-            returning: [],
-            onConflict: undefined,
-          },
-          undefined,
-        );
-        expect(insert.sql).not.toContain("⟦");
-        expect(bindParams(insert.slots, [v[6], v[5]])).toEqual([v[6], v[5]]);
-      }),
-      { numRuns: 1_000 },
-    );
-  });
+          );
+          const compiler = createCompiler(postgresDialect);
+          const plan = compiler.compile(ast, "all", undefined);
+          expect(plan.sql).not.toContain("⟦");
+          const bound = flat(bindParams(plan.slots, ast.params));
+          for (const value of v.slice(0, 5)) expect(bound).toContain(value);
+
+          const insert = compiler.compileInsert(
+            users,
+            [email, name],
+            {
+              source: {
+                kind: "cells",
+                rows: [
+                  [
+                    { kind: "value" },
+                    {
+                      kind: "expr",
+                      expr: fnNode("lower", [{ kind: "param", value: v[5], type: undefined, redact: false }]),
+                    },
+                  ],
+                ],
+              },
+              returning: [],
+              onConflict: undefined,
+            },
+            undefined,
+          );
+          expect(insert.sql).not.toContain("⟦");
+          expect(bindParams(insert.slots, [v[6], v[5]])).toEqual([v[6], v[5]]);
+        }),
+        { numRuns: 1_000 },
+      );
+    },
+    SHORT,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -156,158 +169,176 @@ function unquoted(sql: string): string {
 }
 
 describe("identifiers: a name from the AST is always quoted", () => {
-  test("arbitrary names in every identifier position appear only inside quotes", () => {
-    fc.assert(
-      fc.property(fc.array(fc.string({ unit: "binary" }), { minLength: 12, maxLength: 12 }), (strings) => {
-        const n = strings.map((s, i) => `«${i}:${s}»`);
-        const name = (i: number) => n[i] as string;
-        const inner = rebuild(bareQuery(tableSource(name(0), name(1), undefined, name(2))), {
-          select: selectObject({ [name(3)]: col(name(1), name(4)) }),
+  test(
+    "arbitrary names in every identifier position appear only inside quotes",
+    () => {
+      fc.assert(
+        fc.property(fc.array(fc.string({ unit: "binary" }), { minLength: 12, maxLength: 12 }), (strings) => {
+          const n = strings.map((s, i) => `«${i}:${s}»`);
+          const name = (i: number) => n[i] as string;
+          const inner = rebuild(bareQuery(tableSource(name(0), name(1), undefined, name(2))), {
+            select: selectObject({ [name(3)]: col(name(1), name(4)) }),
+          });
+          const ast = rebuild(
+            bareQuery({ kind: "cteSource", name: name(5), meta: undefined, alias: name(6) }),
+            {
+              ctes: [
+                {
+                  kind: "cte",
+                  name: name(5),
+                  query: inner,
+                  operation: "all",
+                  recursive: false,
+                  materialized: undefined,
+                },
+              ],
+              joins: [
+                {
+                  kind: "join",
+                  type: "inner",
+                  source: { kind: "values", columns: [name(7)], rows: [[literalNode(1)]], alias: name(8) },
+                  on: binaryNode("eq", col(name(6), name(3)), col(name(8), name(7))),
+                },
+              ],
+              select: selectObject({
+                a: selectedAsNode(name(9), col(name(6), name(3))),
+                b: aggregateNode(
+                  "count",
+                  [STAR],
+                  false,
+                  undefined,
+                  windowNode([col(name(8), name(7))], [], undefined),
+                ),
+              }),
+              orderBys: [orderNode(selectedAsNode(name(9), undefined), "asc", undefined)],
+            },
+          );
+          const plan = createCompiler(postgresDialect).compile(ast, "all", name(10));
+          expect(unquoted(plan.sql)).not.toMatch(/[«»]/);
+          for (const id of n.slice(0, 10)) expect(plan.sql).toContain(`"${id.replaceAll('"', '""')}"`);
+        }),
+        { numRuns: 2_000 },
+      );
+    },
+    SHORT,
+  );
+
+  test(
+    "names in a row-level write and a bulk update are quoted",
+    () => {
+      fc.assert(
+        fc.property(fc.string({ unit: "binary" }), fc.string({ unit: "binary" }), (a, b) => {
+          const column = `«${a}»`;
+          const schema = `«${b}»`;
+          const ast = rebuild(from(Post, "p").ast, {
+            updates: [{ kind: "update", field: "views", column, value: literalNode(0) }],
+          });
+          const plan = createCompiler(postgresDialect).compile(ast, "updateAll", schema);
+          expect(unquoted(plan.sql)).not.toMatch(/[«»]/);
+          const tags = meta(Tag);
+          const write = createCompiler(postgresDialect).compileDelete(
+            tags,
+            [tags.fieldsByName.get("id") as FieldMeta],
+            [],
+            schema,
+          );
+          expect(unquoted(write.sql)).not.toMatch(/[«»]/);
+        }),
+        { numRuns: 500 },
+      );
+    },
+    SHORT,
+  );
+
+  test(
+    "names that are looked up in a table are refused when they are not in it",
+    () => {
+      const users = from(User, "u");
+      const where = (expr: ExprNode) =>
+        rebuild(users.ast, {
+          wheres: [{ kind: "bool", op: "and", expr }],
+          select: selectOne(col("u", "id")),
         });
-        const ast = rebuild(
-          bareQuery({ kind: "cteSource", name: name(5), meta: undefined, alias: name(6) }),
-          {
-            ctes: [
-              {
-                kind: "cte",
-                name: name(5),
-                query: inner,
-                operation: "all",
-                recursive: false,
-                materialized: undefined,
-              },
-            ],
+      const positions: readonly ((s: string) => QueryAst)[] = [
+        (s) => where(binaryNode(s as never, col("u", "id"), value(1))),
+        (s) => where(unaryNode(s as never, col("u", "id"))),
+        (s) => where(naryNode(s as never, [literalNode(true), literalNode(true)])),
+        (s) => where(fnNode(s, [])),
+        (s) =>
+          rebuild(users.ast, { select: selectOne(aggregateNode(s, [STAR], false, undefined, undefined)) }),
+        (s) => rebuild(users.ast, { lock: { kind: "lock", clause: s } }),
+        (s) =>
+          rebuild(users.ast, {
             joins: [
               {
                 kind: "join",
-                type: "inner",
-                source: { kind: "values", columns: [name(7)], rows: [[literalNode(1)]], alias: name(8) },
-                on: binaryNode("eq", col(name(6), name(3)), col(name(8), name(7))),
+                type: s as never,
+                source: tableSource("t", "t", undefined),
+                on: literalNode(true),
               },
             ],
-            select: selectObject({
-              a: selectedAsNode(name(9), col(name(6), name(3))),
-              b: aggregateNode(
-                "count",
-                [STAR],
-                false,
-                undefined,
-                windowNode([col(name(8), name(7))], [], undefined),
-              ),
-            }),
-            orderBys: [orderNode(selectedAsNode(name(9), undefined), "asc", undefined)],
+          }),
+        (s) => rebuild(users.ast, { orderBys: [orderNode(col("u", "id"), s as never, undefined)] }),
+        (s) => rebuild(users.ast, { orderBys: [orderNode(col("u", "id"), "asc", s as never)] }),
+        (s) =>
+          rebuild(users.ast, {
+            combinations: [{ kind: "combination", op: s as never, all: false, query: users.ast }],
+          }),
+        (s) => where({ kind: "ident", name: `${s} x` }),
+        (s) =>
+          rebuild(users.ast, {
+            select: selectOne(aggregateNode("count", [STAR], false, undefined, `${s} x`)),
+          }),
+      ];
+      const known = new Set([
+        ...Object.keys(postgresDialect.operators),
+        ...Object.keys(postgresDialect.functions),
+        ...Object.keys(postgresDialect.aggregates),
+        ...Object.keys(postgresDialect.locks),
+        "in",
+        "notIn",
+        "has",
+        "not",
+        "neg",
+        "isNull",
+        "isNotNull",
+        "and",
+        "or",
+        "inner",
+        "left",
+        "right",
+        "full",
+        "cross",
+        "innerLateral",
+        "leftLateral",
+        "asc",
+        "desc",
+        "first",
+        "last",
+        "union",
+        "intersect",
+        "except",
+      ]);
+      fc.assert(
+        fc.property(
+          fc.string({ unit: "binary" }).filter((s) => !known.has(s)),
+          fc.integer({ min: 0, max: positions.length - 1 }),
+          (s, i) => {
+            const build = positions[i] as (s: string) => QueryAst;
+            let ast: QueryAst;
+            try {
+              ast = build(s);
+            } catch {
+              return; // The AST helpers refused it already.
+            }
+            expect(() => createCompiler(postgresDialect).compile(ast, "all", undefined)).toThrow(QueryError);
           },
-        );
-        const plan = createCompiler(postgresDialect).compile(ast, "all", name(10));
-        expect(unquoted(plan.sql)).not.toMatch(/[«»]/);
-        for (const id of n.slice(0, 10)) expect(plan.sql).toContain(`"${id.replaceAll('"', '""')}"`);
-      }),
-      { numRuns: 2_000 },
-    );
-  });
-
-  test("names in a row-level write and a bulk update are quoted", () => {
-    fc.assert(
-      fc.property(fc.string({ unit: "binary" }), fc.string({ unit: "binary" }), (a, b) => {
-        const column = `«${a}»`;
-        const schema = `«${b}»`;
-        const ast = rebuild(from(Post, "p").ast, {
-          updates: [{ kind: "update", field: "views", column, value: literalNode(0) }],
-        });
-        const plan = createCompiler(postgresDialect).compile(ast, "updateAll", schema);
-        expect(unquoted(plan.sql)).not.toMatch(/[«»]/);
-        const tags = meta(Tag);
-        const write = createCompiler(postgresDialect).compileDelete(
-          tags,
-          [tags.fieldsByName.get("id") as FieldMeta],
-          [],
-          schema,
-        );
-        expect(unquoted(write.sql)).not.toMatch(/[«»]/);
-      }),
-      { numRuns: 500 },
-    );
-  });
-
-  test("names that are looked up in a table are refused when they are not in it", () => {
-    const users = from(User, "u");
-    const where = (expr: ExprNode) =>
-      rebuild(users.ast, { wheres: [{ kind: "bool", op: "and", expr }], select: selectOne(col("u", "id")) });
-    const positions: readonly ((s: string) => QueryAst)[] = [
-      (s) => where(binaryNode(s as never, col("u", "id"), value(1))),
-      (s) => where(unaryNode(s as never, col("u", "id"))),
-      (s) => where(naryNode(s as never, [literalNode(true), literalNode(true)])),
-      (s) => where(fnNode(s, [])),
-      (s) => rebuild(users.ast, { select: selectOne(aggregateNode(s, [STAR], false, undefined, undefined)) }),
-      (s) => rebuild(users.ast, { lock: { kind: "lock", clause: s } }),
-      (s) =>
-        rebuild(users.ast, {
-          joins: [
-            {
-              kind: "join",
-              type: s as never,
-              source: tableSource("t", "t", undefined),
-              on: literalNode(true),
-            },
-          ],
-        }),
-      (s) => rebuild(users.ast, { orderBys: [orderNode(col("u", "id"), s as never, undefined)] }),
-      (s) => rebuild(users.ast, { orderBys: [orderNode(col("u", "id"), "asc", s as never)] }),
-      (s) =>
-        rebuild(users.ast, {
-          combinations: [{ kind: "combination", op: s as never, all: false, query: users.ast }],
-        }),
-      (s) => where({ kind: "ident", name: `${s} x` }),
-      (s) =>
-        rebuild(users.ast, { select: selectOne(aggregateNode("count", [STAR], false, undefined, `${s} x`)) }),
-    ];
-    const known = new Set([
-      ...Object.keys(postgresDialect.operators),
-      ...Object.keys(postgresDialect.functions),
-      ...Object.keys(postgresDialect.aggregates),
-      ...Object.keys(postgresDialect.locks),
-      "in",
-      "notIn",
-      "has",
-      "not",
-      "neg",
-      "isNull",
-      "isNotNull",
-      "and",
-      "or",
-      "inner",
-      "left",
-      "right",
-      "full",
-      "cross",
-      "innerLateral",
-      "leftLateral",
-      "asc",
-      "desc",
-      "first",
-      "last",
-      "union",
-      "intersect",
-      "except",
-    ]);
-    fc.assert(
-      fc.property(
-        fc.string({ unit: "binary" }).filter((s) => !known.has(s)),
-        fc.integer({ min: 0, max: positions.length - 1 }),
-        (s, i) => {
-          const build = positions[i] as (s: string) => QueryAst;
-          let ast: QueryAst;
-          try {
-            ast = build(s);
-          } catch {
-            return; // The AST helpers refused it already.
-          }
-          expect(() => createCompiler(postgresDialect).compile(ast, "all", undefined)).toThrow(QueryError);
-        },
-      ),
-      { numRuns: 2_000 },
-    );
-  });
+        ),
+        { numRuns: 2_000 },
+      );
+    },
+    SHORT,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -402,22 +433,26 @@ const valuesArb: fc.Arbitrary<Values> = fc.record({
 });
 
 describe("parameter binding is independent of the AST the plan was compiled from", () => {
-  test("a plan compiled from values A, bound with values B, equals a cold compile of B", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 0, max: TEMPLATES.length - 1 }), valuesArb, valuesArb, (i, a, b) => {
-        const template = TEMPLATES[i] as (v: Values) => QueryAst;
-        const shared = createCompiler(postgresDialect);
-        const astA = template(a);
-        const astB = template(b);
-        const planA = shared.compile(astA, "all", undefined);
-        const planB = shared.compile(astB, "all", undefined);
-        expect(planB).toBe(planA);
-        const cold = createCompiler(postgresDialect).compile(astB, "all", undefined);
-        expect(planA.sql).toBe(cold.sql);
-        expect(bindParams(planA.slots, astB.params)).toEqual(bindParams(cold.slots, astB.params));
-        expect(shared.stats().collisions).toBe(0);
-      }),
-      { numRuns: 1_000 },
-    );
-  });
+  test(
+    "a plan compiled from values A, bound with values B, equals a cold compile of B",
+    () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 0, max: TEMPLATES.length - 1 }), valuesArb, valuesArb, (i, a, b) => {
+          const template = TEMPLATES[i] as (v: Values) => QueryAst;
+          const shared = createCompiler(postgresDialect);
+          const astA = template(a);
+          const astB = template(b);
+          const planA = shared.compile(astA, "all", undefined);
+          const planB = shared.compile(astB, "all", undefined);
+          expect(planB).toBe(planA);
+          const cold = createCompiler(postgresDialect).compile(astB, "all", undefined);
+          expect(planA.sql).toBe(cold.sql);
+          expect(bindParams(planA.slots, astB.params)).toEqual(bindParams(cold.slots, astB.params));
+          expect(shared.stats().collisions).toBe(0);
+        }),
+        { numRuns: 1_000 },
+      );
+    },
+    SHORT,
+  );
 });
