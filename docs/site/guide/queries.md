@@ -183,8 +183,11 @@ that receives a query it did not build:
 <<< @/examples/queries.ts#params
 
 The query's type collects the named parameters of every clause, and of the callbacks of
-its preloads, which run with the same values. One name has one type: using it with another
-type in a later clause or a preload callback is a compile error and a `QueryError`.
+its preloads, which run with the same values. One name has one type, nullability included
+(`t.integer()` and `t.integer().nullable()` are two types). Using it with another type in a
+later clause or a preload callback is a compile error where the query runs (its parameter
+type becomes `never`, so no value can be given), and a `QueryError` when the clause is
+added. Within one expression it is a compile error at once.
 
 ## Debugging
 

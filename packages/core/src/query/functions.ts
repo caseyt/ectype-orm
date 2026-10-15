@@ -10,6 +10,7 @@ import type { AggregateNode, ExprNode, NamedParamNode, OrderNode } from "../cont
 import type { FieldBuilder, FieldFlags } from "../contracts/schema.js";
 import type { AnyFieldType } from "../contracts/type.js";
 import { QueryError } from "../errors.js";
+import { fieldState } from "../schema/field.js";
 import {
   arrayType,
   bigintType,
@@ -67,6 +68,7 @@ import {
   type MergeParams,
   NONE,
   type NoParams,
+  NULLABLE_PARAMS,
   type Operand,
   OrderExpr,
   type ParamsOf,
@@ -868,6 +870,8 @@ export function param<const N extends string, T, F extends FieldFlags>(
   }
   const fieldType = typeArgument(type, "param");
   const node = namedParamNode(name, fieldType, false);
+  // Whether the value may be null is part of the parameter's type, like the field type.
+  if (fieldState(type)?.nullable === true) NULLABLE_PARAMS.add(node);
   return new Expr(
     node,
     fieldType,

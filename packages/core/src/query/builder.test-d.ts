@@ -17,6 +17,12 @@ import {
 import type { Col, Expr, NoParams } from "./expr.js";
 import { and, count, exists, fragment, param, sum } from "./functions.js";
 
+/** The shape the repo's read methods have: params required exactly when the query has some. */
+declare function runAll<Q extends QueryLike>(
+  query: Q,
+  ...params: keyof QueryParams<Q> extends never ? [] : [params: QueryParams<Q>]
+): void;
+
 /** A query's type information: its bindings, result, parameters and root. Comparing these compares the query types. */
 const info = <Q extends QueryLike>(query: Q): Q["~query"] => query["~query"];
 
@@ -273,10 +279,30 @@ describe("named parameters", () => {
     expectTypeOf<QueryParams<ReturnType<typeof from<typeof User, "u">>>>().toEqualTypeOf<NoParams>();
   });
 
-  test("one name with two types does not compile across clauses", () => {
+  test("one name with two types across clauses gives a query that cannot run", () => {
+    // Owner decision (2026-10-14): no check at the clause; the params type says `never`,
+    // so the query cannot be given its params (and a QueryError is thrown when the clause
+    // is added).
     const q = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
-    // @ts-expect-error n is an integer in the first clause and a string here
-    q.where(({ u }) => u.email.eq(param("n", t.string())));
+    const clashing = q.where(({ u }) => u.email.eq(param("n", t.string())));
+    expectTypeOf<QueryParams<typeof clashing>["n"]>().toBeNever();
+    // @ts-expect-error no value is a `never` parameter: the query cannot run
+    runAll(clashing, { n: 1 });
+    runAll(q, { n: 1 });
+  });
+
+  test("one name as nullable and as not nullable within one expression is a compile error", () => {
+    from(User, "u").where(({ u }) =>
+      // @ts-expect-error n is a number on the left and a number or null on the right
+      u.age.gte(param("n", t.integer())).and(u.age.lte(param("n", t.integer().nullable()))),
+    );
+  });
+
+  test("one name with two types within one expression is a compile error at the clause", () => {
+    from(User, "u").where(({ u }) =>
+      // @ts-expect-error n is an integer on the left and a string on the right
+      u.age.gte(param("n", t.integer())).and(u.email.eq(param("n", t.string()))),
+    );
   });
 
   test("a subquery's named parameters flow into the outer query", () => {
@@ -535,11 +561,11 @@ describe("review, round 1", () => {
     }
   });
 
-  test("a preload callback cannot use a name of the query's with another type", () => {
-    from(User, "u")
+  test("a preload callback using a name of the query's with another type gives never params", () => {
+    const q = from(User, "u")
       .where(({ u }) => u.age.gte(param("n", t.integer())))
-      // @ts-expect-error n is an integer in the query and a string in the preload
       .preload("posts", (p) => p.where(({ posts }) => posts.title.eq(param("n", t.string()))));
+    expectTypeOf<QueryParams<typeof q>["n"]>().toBeNever();
   });
 
   test("the object form takes a whole value for an array or JSON column, and a list for a scalar one", () => {
@@ -561,18 +587,20 @@ describe("review, round 1", () => {
     expectTypeOf<QueryResult<typeof left>>().toEqualTypeOf<User>();
   });
 
-  test("select, selectMerge, orderBy, groupBy and distinct refuse a name with another type", () => {
+  test("select, selectMerge, orderBy, groupBy and distinct with a clashing name give never params", () => {
     const q = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
-    // @ts-expect-error n is an integer
-    q.select(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
-    // @ts-expect-error n is an integer
-    q.select(({ u }) => ({ id: u.id })).selectMerge(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
-    // @ts-expect-error n is an integer
-    q.orderBy(({ u }) => u.email.concat(param("n", t.string())));
-    // @ts-expect-error n is an integer
-    q.groupBy(({ u }) => [u.email.concat(param("n", t.string()))]);
-    // @ts-expect-error n is an integer
-    q.distinct(({ u }) => [u.email.concat(param("n", t.string()))]);
+    const s1 = q.select(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
+    expectTypeOf<QueryParams<typeof s1>["n"]>().toBeNever();
+    const s2 = q
+      .select(({ u }) => ({ id: u.id }))
+      .selectMerge(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
+    expectTypeOf<QueryParams<typeof s2>["n"]>().toBeNever();
+    const o = q.orderBy(({ u }) => u.email.concat(param("n", t.string())));
+    expectTypeOf<QueryParams<typeof o>["n"]>().toBeNever();
+    const g = q.groupBy(({ u }) => [u.email.concat(param("n", t.string()))]);
+    expectTypeOf<QueryParams<typeof g>["n"]>().toBeNever();
+    const d = q.distinct(({ u }) => [u.email.concat(param("n", t.string()))]);
+    expectTypeOf<QueryParams<typeof d>["n"]>().toBeNever();
     const same = q.select(({ u }) => ({ x: u.age.lte(param("n", t.integer())) }));
     expectTypeOf<QueryParams<typeof same>>().toEqualTypeOf<{ n: number }>();
   });
@@ -593,6 +621,68 @@ describe("review, round 1", () => {
 });
 
 describe("review, round 2", () => {
+  const base = from(Post, "p")
+    .where(({ p }) => p.views.gte(param("minViews", t.integer())))
+    .orderBy(({ p }) => p.id);
+
+  test("the guide's paginate with named parameters, in a scope", () => {
+    const paginate = <Q extends QueryWith>(q: Q) =>
+      q.limit(param("size", t.integer())).offset(param("skip", t.integer()));
+    const q = paginate(base);
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ minViews: number; size: number; skip: number }>();
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<Post>();
+    const guide = <Q extends QueryWith>(q: Q, page: number, size = 20) =>
+      q.limit(size).offset((page - 1) * size);
+    expectTypeOf(info(guide(base, 2))).toEqualTypeOf(info(base));
+  });
+
+  test("several clauses that add named parameters, chained in one scope", () => {
+    const twoWheres = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q
+        .where(({ p }) => p.views.lte(param("maxViews", t.integer())))
+        .where(({ p }) => p.title.eq(param("title", t.string())));
+    const a = twoWheres(base);
+    expectTypeOf<QueryParams<typeof a>>().toEqualTypeOf<{
+      minViews: number;
+      maxViews: number;
+      title: string;
+    }>();
+    const whereThenJoin = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q
+        .where(({ p }) => p.views.lte(param("maxViews", t.integer())))
+        .joinAssoc("p", "author", "a", ({ a }) => a.age.gte(param("minAge", t.integer())))
+        .where(({ a }) => a.email.eq(param("email", t.string())));
+    const b = whereThenJoin(base);
+    expectTypeOf<QueryParams<typeof b>>().toEqualTypeOf<{
+      minViews: number;
+      maxViews: number;
+      minAge: number;
+      email: string;
+    }>();
+    expectTypeOf<QueryResult<typeof b>>().toEqualTypeOf<Post>();
+    const selecting = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q
+        .where(({ p }) => p.views.lte(param("maxViews", t.integer())))
+        .select(({ p }) => ({ id: p.id, long: p.views.gt(param("long", t.integer())) }))
+        .selectMerge(({ p }) => ({ t: p.title.concat(param("suffix", t.string())) }));
+    const c = selecting(base);
+    expectTypeOf<QueryParams<typeof c>>().toEqualTypeOf<{
+      minViews: number;
+      maxViews: number;
+      long: number;
+      suffix: string;
+    }>();
+  });
+
+  test("a clash is treated the same after hasNamedBinding", () => {
+    const concrete = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
+    if (hasNamedBinding(concrete, "u", User)) {
+      const o = concrete.orderBy(({ u }) => u.email.concat(param("n", t.string())));
+      expectTypeOf<QueryParams<typeof o>["n"]>().toBeNever();
+      const s = concrete.select(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
+      expectTypeOf<QueryParams<typeof s>["n"]>().toBeNever();
+    }
+  });
   test("preload does not compile in a scope, whose root is unknown", () => {
     const withPosts = <Q extends QueryWith<{ u: typeof User }>>(q: Q) =>
       // @ts-expect-error the root of a scope's query is not known

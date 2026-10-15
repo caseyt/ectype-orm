@@ -80,7 +80,6 @@ import {
 import {
   type AnyExpr,
   AS_SUBQUERY,
-  type Compatible,
   Expr,
   isExpr,
   join,
@@ -186,33 +185,30 @@ type ParamsOfSource<Src> = Src extends AnySchema
 type Condition = Expr<boolean | null, SomeParams>;
 
 /**
- * The query `Q` with the named parameters `X` added: `Q` itself when there are none. Read
- * from `"~query"` rather than by matching `Q` against the class, which stays cheap for the
- * compiler when `Q` is an intersection (as `hasNamedBinding` narrows to).
+ * The query `Q` with the named parameters `X` added: `Q` itself when there are none.
+ *
+ * It is a conditional type that infers `Q`'s parts from its `"~query"` (matching the small
+ * `"~query"` object, not the class, keeps it cheap for the compiler when `Q` is the
+ * intersection `hasNamedBinding` narrows to). Inside a reusable scope, where `Q` is a type
+ * parameter, the compiler reads such a type through `Q`'s constraint, so the next clause in
+ * the scope sees the bindings the scope declared; once the scope is called, the result is
+ * exact.
  */
 type AddParams<Q extends QueryLike, X> = [keyof X] extends [never]
   ? Q
-  : Query<BindingsOf<Q>, QueryResult<Q>, MergeParams<QueryParams<Q>, X>, RootOf<Q>>;
+  : Q extends {
+        readonly "~query": {
+          readonly bindings: infer B2;
+          readonly result: infer R2;
+          readonly params: (params: infer P2) => void;
+          readonly root: infer A2 extends string;
+        };
+      }
+    ? Query<B2, R2, MergeParams<P2, X>, A2>
+    : never;
 
 /** `P` with the named parameters `X` added. */
 type WithParams<P, X> = [keyof X] extends [never] ? P : MergeParams<P, X>;
-
-/** The keys two sets of named parameters share with different types. */
-type Clashes<A, B> = [A] extends [never]
-  ? never
-  : [B] extends [never]
-    ? never
-    : {
-        [K in keyof A & keyof B]: [A[K]] extends [B[K]] ? ([B[K]] extends [A[K]] ? never : K) : K;
-      }[keyof A & keyof B];
-
-/**
- * Refuses, at compile time, the named parameters `X` of a clause when one uses a name of
- * the query's (`P`) with another type: what `Compatible` does for one expression.
- */
-type CompatibleParams<P, X> = [Clashes<P, X>] extends [never]
-  ? unknown
-  : { readonly "~error": `the named parameter "${Clashes<P, X> & string}" is used with two types` };
 
 /** Refuses an alias that the query already has, at compile time. */
 type NewAlias<A extends string, B> = A extends keyof B
@@ -1377,7 +1373,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
-    on: (bindings: B & { readonly [K in A2]: BindingOfSource<Src> }) => X & Compatible<P, X>,
+    on: (bindings: B & { readonly [K in A2]: BindingOfSource<Src> }) => X,
   ): Next<
     Q0,
     BindingsOf<Q0> & { readonly [K in A2]: BindingOfSource<Src> },
@@ -1402,7 +1398,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
-    on: (bindings: B & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> }) => X & Compatible<P, X>,
+    on: (bindings: B & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> }) => X,
   ): Next<
     Q0,
     BindingsOf<Q0> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
@@ -1428,7 +1424,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
-    on: (bindings: NullableAll<B> & { readonly [K in A2]: BindingOfSource<Src> }) => X & Compatible<P, X>,
+    on: (bindings: NullableAll<B> & { readonly [K in A2]: BindingOfSource<Src> }) => X,
   ): Next<
     Q0,
     NullableAll<BindingsOf<Q0>> & { readonly [K in A2]: BindingOfSource<Src> },
@@ -1453,9 +1449,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
-    on: (
-      bindings: NullableAll<B> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
-    ) => X & Compatible<P, X>,
+    on: (bindings: NullableAll<B> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> }) => X,
   ): Next<
     Q0,
     NullableAll<BindingsOf<Q0>> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
@@ -1513,9 +1507,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     from: F,
     assoc: K,
     alias: A2 & NewAlias<A2, B>,
-    on?: (
-      bindings: B & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>> },
-    ) => X & Compatible<P, X>,
+    on?: (bindings: B & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>> }) => X,
   ): Next<
     Q0,
     BindingsOf<Q0> & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>> },
@@ -1550,7 +1542,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       bindings: B & {
         readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>, true>;
       },
-    ) => X & Compatible<P, X>,
+    ) => X,
   ): Next<
     Q0,
     BindingsOf<Q0> & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>, true> },
@@ -1584,7 +1576,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * a field the root binding has no column for or holds `undefined`.
    */
   where(conditions: WhereObject<RootSchema<B, A>>): this;
-  where<X extends Condition>(fn: (bindings: B) => X & Compatible<P, X>): AddParams<this, ParamsOf<X>>;
+  where<X extends Condition>(fn: (bindings: B) => X): AddParams<this, ParamsOf<X>>;
   where(input: unknown): unknown {
     return this.#bool(WHERES, "and", "where", input);
   }
@@ -1601,7 +1593,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError as {@link where}.
    */
   orWhere(conditions: WhereObject<RootSchema<B, A>>): this;
-  orWhere<X extends Condition>(fn: (bindings: B) => X & Compatible<P, X>): AddParams<this, ParamsOf<X>>;
+  orWhere<X extends Condition>(fn: (bindings: B) => X): AddParams<this, ParamsOf<X>>;
   orWhere(input: unknown): unknown {
     return this.#bool(WHERES, "or", "orWhere", input);
   }
@@ -1616,7 +1608,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the query has no `groupBy`, or the callback does not return a condition.
    */
-  having<X extends Condition>(fn: (bindings: B) => X & Compatible<P, X>): AddParams<this, ParamsOf<X>> {
+  having<X extends Condition>(fn: (bindings: B) => X): AddParams<this, ParamsOf<X>> {
     if (this.ast.groupBys.length === 0) {
       throw new QueryError(
         "having() filters groups, and this query has no groupBy() yet: add groupBy(…) before having(…), or use where() to filter rows.",
@@ -1642,7 +1634,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    */
   select<Q0 extends QueryLike, X>(
     this: Q0,
-    fn: (bindings: BindingsOf<Q0>) => X & CompatibleParams<QueryParams<Q0>, SelectParams<X>>,
+    fn: (bindings: BindingsOf<Q0>) => X,
   ): WithResult<Q0, SelectResult<Q0, X>, SelectParams<X>> {
     return (this as unknown as AnyInternal).#select(fn) as never;
   }
@@ -1670,7 +1662,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    */
   selectMerge<Q0 extends QueryLike, X extends object>(
     this: Q0,
-    fn: (bindings: BindingsOf<Q0>) => X & CompatibleParams<QueryParams<Q0>, SelectParams<X>>,
+    fn: (bindings: BindingsOf<Q0>) => X,
   ): WithResult<Q0, Merge<QueryResult<Q0>, Sel<X>>, SelectParams<X>> {
     return (this as unknown as AnyInternal).#selectMerge(fn) as never;
   }
@@ -1729,9 +1721,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the query already has a `distinct`, or the callback does not return expressions.
    */
   distinct(): this;
-  distinct<X extends ExprList>(
-    fn: (bindings: B) => X & CompatibleParams<P, ParamsOfList<X>>,
-  ): AddParams<this, ParamsOfList<X>>;
+  distinct<X extends ExprList>(fn: (bindings: B) => X): AddParams<this, ParamsOfList<X>>;
   distinct(fn?: unknown): unknown {
     if (this.ast.distinct !== undefined) {
       throw new QueryError("distinct() was called on a query that already has a distinct. A query has one.");
@@ -1783,9 +1773,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the callback does not return expressions.
    */
-  groupBy<X extends ExprList>(
-    fn: (bindings: B) => X & CompatibleParams<P, ParamsOfList<X>>,
-  ): AddParams<this, ParamsOfList<X>> {
+  groupBy<X extends ExprList>(fn: (bindings: B) => X): AddParams<this, ParamsOfList<X>> {
     const items = expressions(run("groupBy", fn, this.#scope.arg), "groupBy");
     const nodes = this.ast.groupBys.slice();
     let params: readonly unknown[] = NONE;
@@ -1814,7 +1802,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the callback does not return expressions or order items.
    */
   orderBy<X extends OrderItem | readonly OrderItem[]>(
-    fn: (bindings: B) => X & CompatibleParams<P, ParamsOfList<X>>,
+    fn: (bindings: B) => X,
   ): AddParams<this, ParamsOfList<X>> {
     const items = orderItems(run("orderBy", fn, this.#scope.arg), "orderBy");
     const nodes = this.ast.orderBys.slice();
@@ -1927,9 +1915,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when `n` is not a non-negative whole number or an expression.
    */
-  limit<N extends number | Expr<number | bigint, SomeParams>>(
-    n: N & Compatible<P, N>,
-  ): AddParams<this, ParamsOf<N>> {
+  limit<N extends number | Expr<number | bigint, SomeParams>>(n: N): AddParams<this, ParamsOf<N>> {
     const replacing = this.ast.limit !== undefined;
     const next = this.#bound(LIMIT, "limit", n);
     return (replacing ? this.#dropping(next as never, "limit() replacing the earlier limit") : next) as never;
@@ -1945,9 +1931,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when `n` is not a non-negative whole number or an expression.
    */
-  offset<N extends number | Expr<number | bigint, SomeParams>>(
-    n: N & Compatible<P, N>,
-  ): AddParams<this, ParamsOf<N>> {
+  offset<N extends number | Expr<number | bigint, SomeParams>>(n: N): AddParams<this, ParamsOf<N>> {
     const replacing = this.ast.offset !== undefined;
     const next = this.#bound(OFFSET, "offset", n);
     return (
@@ -1969,7 +1953,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError for an unknown mode or option, or both options at once.
    */
   lock(mode: LockMode, options?: LockOptions): this;
-  lock<X extends Expr<unknown, SomeParams>>(clause: X & Compatible<P, X>): AddParams<this, ParamsOf<X>>;
+  lock<X extends Expr<unknown, SomeParams>>(clause: X): AddParams<this, ParamsOf<X>>;
   lock(mode: unknown, options?: unknown): unknown {
     const replacing = this.ast.lock !== undefined;
     let next: Query<B, R, P, A>;
@@ -2133,9 +2117,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
   preload<Q0 extends QueryLike, K extends AssocKeys<RootSchemaOf<Q0>>, Q extends QueryLike>(
     this: Q0,
     assoc: K,
-    fn: (
-      query: PreloadQuery<RootSchemaOf<Q0>, K>,
-    ) => Q & PreloadCheck<RootSchemaOf<Q0>, K, Q> & CompatibleParams<P, QueryParams<Q>>,
+    fn: (query: PreloadQuery<RootSchemaOf<Q0>, K>) => Q & PreloadCheck<RootSchemaOf<Q0>, K, Q>,
   ): WithResult<Q0, QueryResult<Q0> & LoadedAs<RootSchemaOf<Q0>, K, QueryResult<Q>>, QueryParams<Q>>;
   preload(spec: unknown, fn?: unknown): unknown {
     const root = this.#scope.root;

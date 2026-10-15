@@ -1278,14 +1278,31 @@ export function joinNamed(
   if (b.length === 0) return a;
   for (const x of a) {
     for (const y of b) {
-      if (x.name === y.name && x.type !== y.type) {
+      if (x.name === y.name && (x.type !== y.type || NULLABLE_PARAMS.has(x) !== NULLABLE_PARAMS.has(y))) {
         throw new QueryError(
-          `The named parameter "${x.name}" is used with two types, ${x.type?.name ?? "untyped"} and ${y.type?.name ?? "untyped"}. A named parameter has one type: give the other use its own name.`,
+          `The named parameter "${x.name}" is used with two types, ${namedTypeName(x)} and ${namedTypeName(y)}. A named parameter has one type: give the other use its own name.`,
         );
       }
     }
   }
   return join(a, b);
+}
+
+/**
+ * The named-parameter nodes declared with a nullable field type (`param("n",
+ * t.integer().nullable())`). Kept beside the node, not on it: `NamedParamNode` is a
+ * contract shape. A node is added once, when `param` makes it.
+ *
+ * @example
+ * ```ts
+ * NULLABLE_PARAMS.has(param("n", t.integer().nullable()).named[0]); // true
+ * ```
+ */
+export const NULLABLE_PARAMS: WeakSet<NamedParamNode> = new WeakSet();
+
+function namedTypeName(node: NamedParamNode): string {
+  const name = node.type?.name ?? "untyped";
+  return NULLABLE_PARAMS.has(node) ? `${name} | null` : name;
 }
 
 /**
@@ -1402,8 +1419,12 @@ function redactNode(node: ExprNode): ExprNode {
   switch (node.kind) {
     case "param":
       return node.redact ? node : paramNode(node.value, node.type, true);
-    case "namedParam":
-      return node.redact ? node : namedParamNode(node.name, node.type, true);
+    case "namedParam": {
+      if (node.redact) return node;
+      const marked = namedParamNode(node.name, node.type, true);
+      if (NULLABLE_PARAMS.has(node)) NULLABLE_PARAMS.add(marked);
+      return marked;
+    }
     case "cast": {
       const inner = redactNode(node.expr);
       return inner === node.expr ? node : castNode(inner, node.type);

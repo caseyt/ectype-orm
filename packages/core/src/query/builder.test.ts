@@ -1828,3 +1828,50 @@ describe("review, round 2", () => {
     );
   });
 });
+
+describe("review, round 2: nullable named parameters", () => {
+  const plain = () => param("n", t.integer());
+  const nullable = () => param("n", t.integer().nullable());
+
+  test("one name as nullable and as not nullable is refused within one expression, in both orders", () => {
+    expect(() =>
+      from(User, "u").where(({ u }) => u.age.gte(plain()).and(u.age.lte(nullable() as never))),
+    ).toThrow(/^where\(\): The named parameter "n" is used with two types, integer and integer \| null/);
+    expect(() =>
+      from(User, "u").where(({ u }) => u.age.gte(nullable() as never).and(u.age.lte(plain()))),
+    ).toThrow(/^where\(\): The named parameter "n" is used with two types, integer \| null and integer/);
+  });
+
+  test("one name as nullable and as not nullable is refused across clauses, in both orders", () => {
+    expect(() =>
+      from(User, "u")
+        .where(({ u }) => u.age.gte(plain()))
+        .orderBy(({ u }) => u.age.add(nullable() as never)),
+    ).toThrow(/^orderBy\(\): The named parameter "n" is used with two types, integer and integer \| null/);
+    expect(() =>
+      from(User, "u")
+        .limit(nullable() as never)
+        .where(({ u }) => u.age.gte(plain())),
+    ).toThrow(/^where\(\): The named parameter "n" is used with two types, integer \| null and integer/);
+  });
+
+  test("the same nullability on both sides is accepted, also through redaction", () => {
+    expect(
+      from(User, "u")
+        .where(({ u }) => u.age.gte(nullable() as never).and(u.age.lte(nullable() as never)))
+        .namedParams(),
+    ).toEqual(["n"]);
+    expect(
+      from(User, "u")
+        .where(({ u }) => u.age.gte(plain()))
+        .orderBy(({ u }) => u.age.add(plain()))
+        .namedParams(),
+    ).toEqual(["n"]);
+    // A parameter beside a redacted field is re-made redacted, and keeps its nullability.
+    expect(() =>
+      from(User, "u")
+        .where(({ u }) => u.passwordHash.eq(param("h", t.string().nullable()) as never))
+        .where(({ u }) => u.email.eq(param("h" as never, t.string()))),
+    ).toThrow(/^where\(\): The named parameter "h" is used with two types, string \| null and string/);
+  });
+});
