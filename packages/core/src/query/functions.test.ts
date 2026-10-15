@@ -461,7 +461,7 @@ describe("round 1 review", () => {
     expect(() =>
       count()
         .filter(n)
-        .over({ partitionBy: [param("n", t.string())] }),
+        .over({ partitionBy: [param("n", t.string())] } as never),
     ).toThrow(message);
     expect(() => caseWhen(n, param("n", t.string()) as never)).toThrow(message);
     expect(() => caseWhen(n, 1).else(param("n", t.string()) as never)).toThrow(message);

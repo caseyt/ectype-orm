@@ -90,11 +90,8 @@ export type SomeParams = never;
 
 type Simplify<X> = { [K in keyof X]: X[K] };
 
-type UnionToIntersection<U> = (U extends unknown ? (value: U) => void : never) extends (
-  value: infer I,
-) => void
-  ? I
-  : never;
+/** Whether `A` and `B` are each assignable to the other: one type for a named parameter. */
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 /**
  * Two sets of named parameters together.
@@ -149,7 +146,35 @@ export type ParamsOfAll<A extends readonly unknown[]> = [A[number]] extends [nev
   ? NoParams
   : HasSomeParams<A[number]> extends true
     ? SomeParams
-    : Simplify<UnionToIntersection<ParamsOf<A[number]>>>;
+    : AgreedParams<ParamsOf<A[number]>>;
+
+/** The keys of every member of the union `U`. */
+type KeysOfUnion<U> = U extends unknown ? keyof U : never;
+
+/** The union of the types the members of `U` that have key `K` give it. */
+type TypesAt<U, K> = U extends unknown ? (K extends keyof U ? U[K] : never) : never;
+
+/** `true` when a member of `U` gives key `K` a type other than `T`. */
+type Disagrees<U, K, T> = true extends (
+  U extends unknown
+    ? K extends keyof U
+      ? SameType<U[K], T> extends true
+        ? false
+        : true
+      : false
+    : never
+)
+  ? true
+  : false;
+
+/**
+ * A union of sets of named parameters (one per operand) as one set, with
+ * {@link MergeParams}'s rule: a name every operand that uses it gives the same type keeps
+ * it, any other is `never`.
+ */
+type AgreedParams<U> = Simplify<{
+  [K in KeysOfUnion<U>]: Disagrees<U, K, TypesAt<U, K>> extends true ? never : TypesAt<U, K>;
+}>;
 
 /**
  * The value type of an operand: `T` for an `Expr<T>`, the value's own type otherwise.
@@ -180,6 +205,20 @@ type ElementOf<T> = NonNullable<T> extends readonly (infer E)[] ? E : never;
  * ```
  */
 export type Operand<T> = NonNullable<T> | Expr<T | null, SomeParams>;
+
+/**
+ * Refuses, at compile time, a set of named parameters `X` that uses a name of `P` with
+ * another type: {@link Compatible} for parameters that do not come from one operand (the
+ * parts of `concat`, a window spec).
+ *
+ * @example
+ * ```ts
+ * declare function over<W>(spec: W & CompatibleParams<{ n: number }, ParamsOf<W>>): void;
+ * ```
+ */
+export type CompatibleParams<P, X> = [Clashes<P, X>] extends [never]
+  ? unknown
+  : { readonly "~error": `the named parameter "${Clashes<P, X> & string}" is used with two types` };
 
 /** The keys two sets of named parameters share with different types. */
 type Clashes<A, B> = [A] extends [never]
@@ -709,7 +748,7 @@ export class Expr<out T, in P = NoParams> {
    */
   concat<S extends string | null, const A extends readonly TextOperand[]>(
     this: Expr<S, SomeParams>,
-    ...parts: A
+    ...parts: A & CompatibleParams<P, ParamsOfAll<A>>
   ): Expr<string | NullOf<S> | NullOf<ValueOf<A[number]>>, MergeParams<P, ParamsOfAll<A>>> {
     if (parts.length === 0) throw new QueryError("concat() needs at least one part to append.");
     let result: AnyExpr = this;
@@ -1278,14 +1317,33 @@ export function joinNamed(
   if (b.length === 0) return a;
   for (const x of a) {
     for (const y of b) {
-      if (x.name === y.name && x.type !== y.type) {
+      if (x.name === y.name && (x.type !== y.type || NULLABLE_PARAMS.has(x) !== NULLABLE_PARAMS.has(y))) {
+        const left = namedTypeName(x);
+        const right = namedTypeName(y);
         throw new QueryError(
-          `The named parameter "${x.name}" is used with two types, ${x.type?.name ?? "untyped"} and ${y.type?.name ?? "untyped"}. A named parameter has one type: give the other use its own name.`,
+          `The named parameter "${x.name}" is used with two types, ${left} and ${left === right ? `another ${right} type (other values or options)` : right}. A named parameter has one type: give the other use its own name.`,
         );
       }
     }
   }
   return join(a, b);
+}
+
+/**
+ * The named-parameter nodes declared with a nullable field type (`param("n",
+ * t.integer().nullable())`). Kept beside the node, not on it: `NamedParamNode` is a
+ * contract shape. A node is added once, when `param` makes it.
+ *
+ * @example
+ * ```ts
+ * NULLABLE_PARAMS.has(param("n", t.integer().nullable()).named[0]); // true
+ * ```
+ */
+export const NULLABLE_PARAMS: WeakSet<NamedParamNode> = new WeakSet();
+
+function namedTypeName(node: NamedParamNode): string {
+  const name = node.type?.name ?? "untyped";
+  return NULLABLE_PARAMS.has(node) ? `${name} | null` : name;
 }
 
 /**
@@ -1402,8 +1460,12 @@ function redactNode(node: ExprNode): ExprNode {
   switch (node.kind) {
     case "param":
       return node.redact ? node : paramNode(node.value, node.type, true);
-    case "namedParam":
-      return node.redact ? node : namedParamNode(node.name, node.type, true);
+    case "namedParam": {
+      if (node.redact) return node;
+      const marked = namedParamNode(node.name, node.type, true);
+      if (NULLABLE_PARAMS.has(node)) NULLABLE_PARAMS.add(marked);
+      return marked;
+    }
     case "cast": {
       const inner = redactNode(node.expr);
       return inner === node.expr ? node : castNode(inner, node.type);

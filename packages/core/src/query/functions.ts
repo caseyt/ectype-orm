@@ -10,6 +10,7 @@ import type { AggregateNode, ExprNode, NamedParamNode, OrderNode } from "../cont
 import type { FieldBuilder, FieldFlags } from "../contracts/schema.js";
 import type { AnyFieldType } from "../contracts/type.js";
 import { QueryError } from "../errors.js";
+import { fieldState } from "../schema/field.js";
 import {
   arrayType,
   bigintType,
@@ -60,6 +61,7 @@ import {
   booleanLiteral,
   type Checked,
   type Compatible,
+  type CompatibleParams,
   Expr,
   isSubqueryOperand,
   join,
@@ -67,6 +69,7 @@ import {
   type MergeParams,
   NONE,
   type NoParams,
+  NULLABLE_PARAMS,
   type Operand,
   OrderExpr,
   type ParamsOf,
@@ -206,7 +209,9 @@ export class Aggregate<T, P = NoParams> extends Expr<T, P> {
    */
   over(): Aggregate<T, P>;
   over(name: string): Aggregate<T, P>;
-  over<W extends WindowSpec>(spec: W): Aggregate<T, MergeParams<P, WindowParams<W>>>;
+  over<W extends WindowSpec>(
+    spec: W & CompatibleParams<P, WindowParams<W>>,
+  ): Aggregate<T, MergeParams<P, WindowParams<W>>>;
   over(window?: string | WindowSpec): AnyExpr {
     const agg = aggregatePart(this);
     if (agg.over !== undefined) throw new QueryError("over() was already called on this aggregate.");
@@ -602,10 +607,7 @@ export function not<X extends Condition>(condition: X): Expr<boolean, ParamsOf<X
 export function coalesce<
   F extends Expr<unknown, SomeParams>,
   const R extends readonly [Operand<ValueOf<F>>, ...Operand<ValueOf<F>>[]],
->(
-  first: F,
-  ...rest: R
-): Expr<NonNullable<ValueOf<F>> | NullOf<ValueOf<Last<R>>>, MergeParams<ParamsOf<F>, ParamsOfAll<R>>> {
+>(first: F, ...rest: R): Expr<NonNullable<ValueOf<F>> | NullOf<ValueOf<Last<R>>>, ParamsOfAll<[F, ...R]>> {
   const head = expressionArgument(first, "coalesce");
   if (rest.length === 0) throw new QueryError("coalesce() needs at least two arguments.");
   const nodes: ExprNode[] = [head.node];
@@ -868,6 +870,8 @@ export function param<const N extends string, T, F extends FieldFlags>(
   }
   const fieldType = typeArgument(type, "param");
   const node = namedParamNode(name, fieldType, false);
+  // Whether the value may be null is part of the parameter's type, like the field type.
+  if (fieldState(type)?.nullable === true) NULLABLE_PARAMS.add(node);
   return new Expr(
     node,
     fieldType,

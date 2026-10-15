@@ -125,6 +125,21 @@ export {
   SchemaDefinitionError,
   StaleEntryError,
 } from "./errors.js";
+// Step 08: the query builder. `Query` is public as a type only: a query starts with `from`.
+export type { Binding } from "./query/bindings.js";
+export type {
+  ExcludableClause,
+  LockMode,
+  LockOptions,
+  Query,
+  Queryable,
+  QueryLike,
+  QueryParams,
+  QueryResult,
+  QueryWith,
+  WhereObject,
+} from "./query/builder.js";
+export { from, hasNamedBinding } from "./query/builder.js";
 // Step 07: query expressions. The classes are public as types only: expressions come from
 // columns, operators and these functions.
 export type { Col, Expr, NoParams, Operand, OrderExpr, SomeParams } from "./query/expr.js";
