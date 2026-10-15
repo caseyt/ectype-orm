@@ -416,7 +416,7 @@ describe("validate: issue mapping", () => {
 
   test("no issues: the changeset is valid and its errors are shared", () => {
     const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
-    for (const result of [[], undefined, null]) {
+    for (const result of [[], undefined]) {
       const next = cs.validate(() => result as never);
       expect(next.valid).toBe(true);
       expect(next.errors).toBe(cs.errors);
@@ -464,6 +464,7 @@ const NOT_A_LIST: readonly (readonly [string, unknown, string])[] = [
   ["a number", 0, "but it returned the number 0."],
   ["an object without a message", { path: "email" }, "but it returned an object that is not an array."],
   ["a boolean", false, "but it returned the boolean false."],
+  ["null", null, "but it returned null."],
 ];
 
 describe("validate: a function's result that is not an array", () => {
@@ -535,9 +536,9 @@ describe("validate: a function's result that is not an array", () => {
     expect(() => cs.validate(async () => "is taken" as never)).toThrow(QueryError);
   });
 
-  test("arrays, undefined and null are accepted, sync and async", async () => {
+  test("arrays and undefined are accepted, sync and async", async () => {
     const cs = cast(User, { email: "fine@ok.example" }, ["email"]);
-    for (const result of [[], undefined, null]) {
+    for (const result of [[], undefined]) {
       expect(cs.validate(() => result as never).valid).toBe(true);
       expect((await cs.validateAsync(async () => result as never)).valid).toBe(true);
     }

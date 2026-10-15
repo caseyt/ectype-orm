@@ -170,6 +170,7 @@ const NOT_A_LIST: readonly (readonly [string, unknown, string])[] = [
   ["a string", "is taken", 'but it returned the string "is taken".'],
   ["a number", 1, "but it returned the number 1."],
   ["an object without a message", { path: [] }, "but it returned an object that is not an array."],
+  ["null", null, "but it returned null."],
 ];
 
 describe("validateField: a function's result that is not an array", () => {
@@ -211,8 +212,8 @@ describe("validateField: a function's result that is not an array", () => {
     expect(cs.valid).toBe(true);
   });
 
-  test("arrays, undefined and null are accepted, sync and async", async () => {
-    for (const result of [[], undefined, null]) {
+  test("arrays and undefined are accepted, sync and async", async () => {
+    for (const result of [[], undefined]) {
       expect(changed().validateField("email", () => result as never).valid).toBe(true);
       expect((await changed().validateFieldAsync("email", async () => result as never)).valid).toBe(true);
     }

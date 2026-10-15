@@ -65,10 +65,9 @@ type ValidationIssue = { path: PropertyKey | readonly PropertyKey[]; message: st
 merged into the error's `meta`, so it can fill `{placeholders}` in the message.
 
 Return an array, even for one issue: `[{ path: "email", message: "is taken" }]`. An empty
-array and `undefined` (no `return`) mean no issues; so does `null` at run time, for
-untyped code, although the type does not include it. Anything else is a bug in
-the function, and `validate` throws a `TypeError` that says what it got: a single issue
-without its array, a string, a number, any other object. With `validateAsync`, the same
+array and `undefined` (no `return`) mean no issues. Anything else is a bug in the
+function, and `validate` throws a `TypeError` that says what it got: `null`, a single
+issue without its array, a string, a number, any other object. With `validateAsync`, the same
 holds for what the promise resolves to, and the promise rejects with the `TypeError`.
 This includes a function typed as returning `void`, which TypeScript lets return a
 value: `(v) => seen.push(v)` returns a number, so write `(v) => { seen.push(v); }`.
@@ -227,8 +226,9 @@ Type it with `ValidatorFn<T>` for the fields it needs:
 ::: tip Good to know
 - **Validation keeps every issue by default.** A rule that reports on a field the user
   did not change is still reported (`scope: "all"`); opt in to `scope: "changed"` per call.
-- **A validator function returns an array.** `return { path, message }` or
-  `return "is taken"` throws a `TypeError`; it is never read as "no issues".
+- **A validator function returns an array, or nothing.** `return { path, message }`,
+  `return "is taken"` or `return null` throws a `TypeError`; it is never read as "no
+  issues".
 - **`validate` is synchronous.** A validator that returns a promise, such as any Yup
   schema, needs `validateAsync`.
 - **Validators never change values** unless you pass `apply: true`, and then only when

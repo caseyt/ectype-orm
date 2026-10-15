@@ -51,20 +51,20 @@ Schema result of the wrong shape each throw a `TypeError`.
 ## Decision
 
 **Option 2**, decided by the owner on 2026-10-14: a validator function's result that is
-not a list of issues or nothing throws.
+not a list of issues or nothing throws, `null` included (decided explicitly, see below).
 
 A validator function given to `validate`, `validateAsync`, `validateField` or
 `validateFieldAsync` may return, or resolve to:
 
 - an **array** (an `Array.isArray` value) of issues, empty or not;
-- **nothing**: `undefined`, which is what a function without a `return` gives;
-- **`null`**, for now (see "Open question" below).
+- **nothing**: `undefined`, which is what a function without a `return` gives (the
+  `void` of the contract's type).
 
-Anything else throws a `TypeError` (from the async forms, the promise rejects with it).
-The message names the method, shows an example of a valid result and says what was
-returned: for an object with a string `message`, that it is a single issue and must be
-put in an array; for a string, the string (shortened past 60 characters); for a number,
-bigint or boolean, the value; otherwise its kind.
+Anything else, `null` included, throws a `TypeError` (from the async forms, the promise
+rejects with it). The message names the method, shows an example of a valid result and
+says what was returned: `null` by name; for an object with a string `message`, that it
+is a single issue and must be put in an array; for a string, the string (shortened past
+60 characters); for a number, bigint or boolean, the value; otherwise its kind.
 
 ```
 validate(): a validator function must return an array of issues, such as
@@ -72,15 +72,14 @@ validate(): a validator function must return an array of issues, such as
 not an array. Put it in an array: return [issue].
 ```
 
-### Open question: `null`
+### `null`
 
-The owner's decision does not say whether `null` counts as "nothing". It is accepted at
-run time, as it was before, as the coordinator's interim choice while the question is
-with the owner. The arguments: untyped code often returns `null` for "nothing", and
-`null` cannot be the forgotten-brackets mistake this decision is about. Against it: the
-contract's type does not include `null` (`() => null` is a type error), so the run time
-is more lenient than the type. The alternative is to make `null` throw like every other
-non-list value. This ADR will be amended with the owner's answer.
+`null` throws too. The owner decided this explicitly on 2026-10-14, after the first
+version of this ADR had kept it as "nothing" pending the question. The contract's type
+does not include `null` (`() => null` is a type error), so accepting it would have made
+the run time more lenient than the type, and a single rule ("an array, or nothing") is
+easier to state and to follow. Before this decision the run time read `null` as "no
+issues"; code that returns `null` for "nothing" must return nothing or `[]` instead.
 
 Standard Schemas are not affected: their result shape is defined by the Standard Schema
 specification and was already checked.

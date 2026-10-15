@@ -346,15 +346,15 @@ function standardIssues(result: unknown, fn: string): readonly unknown[] | undef
 
 /**
  * The issues a validator function returned, or `undefined` for none. An array (empty or
- * not) and nothing (`undefined`, or the `null` untyped code may return) are accepted.
+ * not) and nothing (`undefined`) are accepted.
  *
- * @throws TypeError for anything else: a single issue without its array, a string, a
- *   number, any other object. Such a result is a mistake in the function, and counting it
- *   as "no issues" would let an invalid changeset through.
+ * @throws TypeError for anything else: `null`, a single issue without its array, a
+ *   string, a number, any other object. Such a result is a mistake in the function, and
+ *   counting it as "no issues" would let an invalid changeset through.
  */
 function functionIssues(result: unknown, fn: string, field: boolean): readonly unknown[] | undefined {
   if (Array.isArray(result)) return result.length > 0 ? result : undefined;
-  if (result === undefined || result === null) return undefined;
+  if (result === undefined) return undefined;
   throw new TypeError(
     `${fn}(): a validator function must return an array of issues, such as ${
       field ? FIELD_ISSUE_EXAMPLE : ISSUE_EXAMPLE
@@ -387,6 +387,7 @@ function describeResult(result: unknown): string {
     case "boolean":
       return `the ${typeof result} ${String(result)}`;
     case "object":
+      if (result === null) return "null";
       return typeof (result as { readonly message?: unknown }).message === "string"
         ? "a single issue, not an array. Put it in an array: return [issue]"
         : "an object that is not an array";
@@ -631,7 +632,7 @@ function finish<C extends AnyChangeset>(
  *
  * @throws TypeError when `validator` is neither a Standard Schema nor a function, or when
  *   a validator function returns something other than an array of issues or nothing
- *   (`undefined` or `null`), such as a single issue without its array or a string.
+ *   (`undefined`), such as `null`, a single issue without its array or a string.
  * @throws QueryError when the validator answers with a promise, or an option is wrong.
  */
 export function validateChangeset<C extends AnyChangeset>(
@@ -715,7 +716,7 @@ function finishField<C extends AnyChangeset>(
  *
  * @throws TypeError when `validator` is neither a Standard Schema nor a function, or when
  *   a validator function returns something other than an array of issues or nothing
- *   (`undefined` or `null`), such as a single issue without its array or a string.
+ *   (`undefined`), such as `null`, a single issue without its array or a string.
  * @throws QueryError when `field` is not a field, or the validator answers with a promise.
  */
 export function validateFieldOf<C extends AnyChangeset>(changeset: C, field: string, validator: unknown): C {

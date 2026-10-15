@@ -153,8 +153,8 @@ export interface ValidatorContext<T> {
  * writing such a function is accepted: no `return` at all, a `: void` annotation, an
  * `async` function typed `Promise<void>`, and a body that returns issues on some paths
  * only (under `noImplicitReturns`, annotate such a function with {@link ValidatorResult}).
- * A function that returns something else, such as a single issue without its array, a
- * string or a malformed issue, is rejected by the type checker, and at run time makes the
+ * A function that returns something else, such as `null`, a single issue without its
+ * array, a string or a malformed issue, is rejected by the type checker, and at run time makes the
  * validation throw a `TypeError` (see {@link ValidatorResult}). The run-time check also
  * catches what the type checker cannot: untyped code, casts, and a function typed as
  * returning `void`, which TypeScript lets return any value.
@@ -180,13 +180,11 @@ export type ValidatorFn<T> = (
 
 /**
  * What a {@link ValidatorFn} returns: an array of issues (empty when there are none), or
- * nothing. Code that receives one accepts an array and `undefined`; at run time it also
- * accepts `null`, which untyped code may return for "nothing", although `null` is not
- * part of this type. Anything else, such as a single issue without
- * its array (`{ path, message }` instead of `[{ path, message }]`), a string or a number,
- * is a mistake in the validator and makes the validation throw a `TypeError`; it never
- * counts as "no issues". The same holds for what an asynchronous validator's promise
- * resolves to.
+ * nothing (`undefined`). Code that receives one accepts those two only. Anything else,
+ * such as `null`, a single issue without its array (`{ path, message }` instead of
+ * `[{ path, message }]`), a string or a number, is a mistake in the validator and makes
+ * the validation throw a `TypeError`; it never counts as "no issues". The same holds for
+ * what an asynchronous validator's promise resolves to.
  *
  * @example
  * ```ts
