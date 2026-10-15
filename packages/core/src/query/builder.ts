@@ -185,12 +185,34 @@ type ParamsOfSource<Src> = Src extends AnySchema
 /** A condition: what `where`, `having` and `on` callbacks return. */
 type Condition = Expr<boolean | null, SomeParams>;
 
-/** The value a query adds when a clause's named parameters are `X`: the same query when there are none. */
-type AddParams<Q, X> = [keyof X] extends [never]
+/**
+ * The query `Q` with the named parameters `X` added: `Q` itself when there are none. Read
+ * from `"~query"` rather than by matching `Q` against the class, which stays cheap for the
+ * compiler when `Q` is an intersection (as `hasNamedBinding` narrows to).
+ */
+type AddParams<Q extends QueryLike, X> = [keyof X] extends [never]
   ? Q
-  : Q extends Query<infer B, infer R, infer P, infer A>
-    ? Query<B, R, MergeParams<P, X>, A>
-    : never;
+  : Query<BindingsOf<Q>, QueryResult<Q>, MergeParams<QueryParams<Q>, X>, RootOf<Q>>;
+
+/** `P` with the named parameters `X` added. */
+type WithParams<P, X> = [keyof X] extends [never] ? P : MergeParams<P, X>;
+
+/** The keys two sets of named parameters share with different types. */
+type Clashes<A, B> = [A] extends [never]
+  ? never
+  : [B] extends [never]
+    ? never
+    : {
+        [K in keyof A & keyof B]: [A[K]] extends [B[K]] ? ([B[K]] extends [A[K]] ? never : K) : K;
+      }[keyof A & keyof B];
+
+/**
+ * Refuses, at compile time, the named parameters `X` of a clause when one uses a name of
+ * the query's (`P`) with another type: what `Compatible` does for one expression.
+ */
+type CompatibleParams<P, X> = [Clashes<P, X>] extends [never]
+  ? unknown
+  : { readonly "~error": `the named parameter "${Clashes<P, X> & string}" is used with two types` };
 
 /** Refuses an alias that the query already has, at compile time. */
 type NewAlias<A extends string, B> = A extends keyof B
@@ -216,12 +238,23 @@ type RootRow<B, A extends string> = string extends A
 /** Every binding of `B` made nullable (a right or full join). */
 type NullableAll<B> = { readonly [K in keyof B]: NullableBinding<B[K]> };
 
-/** A value of the object form of `where`: the field's value, a list of them, or `null` when the field is nullable. */
-type WhereValue<T> = NonNullable<T> | readonly NonNullable<T>[] | (null extends T ? null : never);
+/**
+ * A value of the object form of `where`: the field's value, `null` when the field is
+ * nullable, and for a scalar field a list of values (`IN`). A field whose value is an
+ * array or an object (an array column, JSON, an embed) is compared as a whole value, so an
+ * array there is that value, never a list.
+ */
+type WhereValue<T> =
+  NonNullable<T> extends Date | Uint8Array
+    ? NonNullable<T> | readonly NonNullable<T>[] | (null extends T ? null : never)
+    : NonNullable<T> extends object
+      ? NonNullable<T> | (null extends T ? null : never)
+      : NonNullable<T> | readonly NonNullable<T>[] | (null extends T ? null : never);
 
 /**
  * The object form of `where` for schema `S`: field name to value. A value means equals,
- * `null` means `IS NULL`, an array means `IN`.
+ * `null` means `IS NULL`, and an array means `IN` on a scalar field; an array or JSON field
+ * is compared with a whole value.
  *
  * @example
  * ```ts
@@ -309,12 +342,18 @@ export type ExcludableClause =
   | "lock"
   | "preload";
 
-/** The result type after `exclude(clause)`. */
-type ExcludedResult<C, B, R, A extends string> = C extends "select"
-  ? RootRow<B, A>
+/**
+ * The result type after `exclude(clause)`: without its select a query returns its root's
+ * rows (with the associations it preloads, which a select of the whole root kept), and
+ * without its preloads the bare root row.
+ */
+type ExcludedResult<C, R, Root> = C extends "select"
+  ? [R] extends [Root]
+    ? R
+    : Root
   : C extends "preload"
-    ? R extends RootRow<B, A>
-      ? RootRow<B, A>
+    ? [R] extends [Root]
+      ? Root
       : R
     : R;
 
@@ -405,16 +444,31 @@ type AnyInternal = Query<unknown, unknown, never, string>;
 /** The bindings of a query. */
 type BindingsOf<Q extends QueryLike> = Q["~query"]["bindings"];
 
+/** The alias of a query's root binding. */
+type RootOf<Q extends QueryLike> = Q["~query"]["root"];
+
 /** The schema of a query's root binding. */
-type RootSchemaOf<Q extends QueryLike> = RootSchema<BindingsOf<Q>, Q["~query"]["root"]>;
+type RootSchemaOf<Q extends QueryLike> = RootSchema<BindingsOf<Q>, RootOf<Q>>;
+
+/** The row of a query's root binding. */
+type RootRowOf<Q extends QueryLike> = RootRow<BindingsOf<Q>, RootOf<Q>>;
+
+/**
+ * The result of `select` returning `X` on `Q`: the shape's type, except that a select of
+ * the whole root binding keeps the root's rows as they are (with what they preload, and
+ * `null` after a right or full join).
+ */
+type SelectResult<Q extends QueryLike, X> = [X] extends [RootBinding<BindingsOf<Q>, RootOf<Q>>]
+  ? [RootBinding<BindingsOf<Q>, RootOf<Q>>] extends [X]
+    ? QueryResult<Q>
+    : Sel<X>
+  : Sel<X>;
+
+/** What a method of `Q` returns: the bindings `B2`, the result `R2`, and the named parameters `X` added. */
+type Next<Q extends QueryLike, B2, R2, X> = Query<B2, R2, WithParams<QueryParams<Q>, X>, RootOf<Q>>;
 
 /** `Q` with the result type `R2`, and the named parameters `X` added. Read from `"~query"`, without matching `Q` against the class. */
-type WithResult<Q extends QueryLike, R2, X = NoParams> = Query<
-  BindingsOf<Q>,
-  R2,
-  [keyof X] extends [never] ? QueryParams<Q> : MergeParams<QueryParams<Q>, X>,
-  Q["~query"]["root"]
->;
+type WithResult<Q extends QueryLike, R2, X = NoParams> = Next<Q, BindingsOf<Q>, R2, X>;
 
 /** The aliases of `B` whose binding is of schema `T`. */
 type AliasesOf<B, T> = {
@@ -842,12 +896,18 @@ function orderItems(value: unknown, clause: string): readonly OrderExpr<SomePara
 function conditionOf(column: AnyExpr, value: unknown, prefix: string): AnyExpr {
   try {
     if (value === null) return column.isNull();
-    if (Array.isArray(value)) return column.in(value as never);
+    // A list of values only for a scalar column: an array or JSON column holds arrays
+    // itself, so an array there is the value it is compared with.
+    if (Array.isArray(value) && !WHOLE_VALUE_KINDS.has(column.type?.db.kind ?? ""))
+      return column.in(value as never);
     return column.eq(value as never);
   } catch (error) {
     return rethrow(error, prefix);
   }
 }
+
+/** The column kinds whose values are compared whole by the object form of `where`, arrays included. */
+const WHOLE_VALUE_KINDS: ReadonlySet<string> = new Set(["array", "json", "jsonb"]);
 
 /** Rethrows `error`, with `prefix` before its message when it is a `QueryError`. */
 function rethrow(error: unknown, prefix: string): never {
@@ -965,6 +1025,8 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
   /** The named parameters of preload callbacks' queries, which run as statements of their own. */
   readonly #preloadNamed: readonly NamedParamNode[];
   readonly #scope: Scope;
+  /** {@link named}, computed on first use. */
+  #canonicalNamed: readonly NamedParamNode[] | undefined;
 
   /**
    * Internal: queries are made by {@link from} and by the methods of a query.
@@ -992,6 +1054,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     this.#named = named;
     this.#preloadNamed = preloadNamed;
     this.#scope = scope;
+    this.#canonicalNamed = named.length === 0 ? NONE : undefined;
   }
 
   /**
@@ -1004,9 +1067,13 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * ```
    */
   get named(): readonly NamedParamNode[] {
-    if (this.#named.length === 0) return NONE;
-    const named: NamedParamNode[] = [];
-    collectParams(this.ast, [], undefined, named);
+    let named = this.#canonicalNamed;
+    if (named === undefined) {
+      const collected: NamedParamNode[] = [];
+      collectParams(this.ast, [], undefined, collected);
+      named = collected;
+      this.#canonicalNamed = named;
+    }
     return named;
   }
 
@@ -1039,6 +1106,9 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     scope: Scope = this.#scope,
     preloadNamed: readonly NamedParamNode[] = this.#preloadNamed,
   ): Query<B, R, P, A> {
+    // The preloads' queries run with this query's params object: a name a clause adds must
+    // have the type it has there.
+    if (named !== this.#named && preloadNamed.length > 0) joinNamed(preloadNamed, named);
     const ast = this.ast;
     const counts = this.#counts;
     const listCounts = this.#lists;
@@ -1163,6 +1233,14 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     alias: unknown,
     on: unknown,
   ): Query<never, R, never, A> {
+    if (
+      (type === "right" || type === "full") &&
+      (this.ast.select !== undefined || this.ast.preloads.length > 0)
+    ) {
+      throw new QueryError(
+        `${clause}() makes the rows of the bindings before it optional, and this query already has ${this.ast.select !== undefined ? "a select" : "preloads"} that take them as they are. Add the ${clause}() before ${this.ast.select !== undefined ? "select()" : "preload()"}.`,
+      );
+    }
     const name = checkAlias(this.#scope, alias, clause);
     const parts = sourceParts(source, name, clause);
     const entry: Entry = {
@@ -1254,6 +1332,12 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
   }
 
   // --- joins ------------------------------------------------------------------
+  //
+  // The joins take the receiver as a `this` type parameter (`Q0`) and write their result
+  // from its `"~query"`, so that inside a reusable scope (`<Q extends QueryWith<…>>`) the
+  // result type and named parameters of the query passed in are kept. Their arguments are
+  // checked against the class's own `B`, which a scope's constraint resolves, where
+  // `Q0`'s bindings would stay unresolved until the scope is called.
 
   /**
    * `INNER JOIN source AS alias ON …`. The source is a schema class, or a source such as
@@ -1266,17 +1350,18 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the alias is taken, the source is not one, or `on` does not return a condition.
    */
-  join<const A2 extends string, Src extends Source, X extends Condition>(
+  join<Q0 extends QueryLike, const A2 extends string, Src extends Source, X extends Condition>(
+    this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
     on: (bindings: B & { readonly [K in A2]: BindingOfSource<Src> }) => X & Compatible<P, X>,
-  ): Query<
-    B & { readonly [K in A2]: BindingOfSource<Src> },
-    R,
-    MergeParams<P, MergeParams<ParamsOfSource<Src>, ParamsOf<X>>>,
-    A
+  ): Next<
+    Q0,
+    BindingsOf<Q0> & { readonly [K in A2]: BindingOfSource<Src> },
+    QueryResult<Q0>,
+    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
-    return this.#join("join", "inner", source, alias, on) as never;
+    return (this as unknown as AnyInternal).#join("join", "inner", source, alias, on) as never;
   }
 
   /**
@@ -1290,67 +1375,71 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError as {@link join}.
    */
-  leftJoin<const A2 extends string, Src extends Source, X extends Condition>(
+  leftJoin<Q0 extends QueryLike, const A2 extends string, Src extends Source, X extends Condition>(
+    this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
     on: (bindings: B & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> }) => X & Compatible<P, X>,
-  ): Query<
-    B & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
-    R,
-    MergeParams<P, MergeParams<ParamsOfSource<Src>, ParamsOf<X>>>,
-    A
+  ): Next<
+    Q0,
+    BindingsOf<Q0> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
+    QueryResult<Q0>,
+    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
-    return this.#join("leftJoin", "left", source, alias, on) as never;
+    return (this as unknown as AnyInternal).#join("leftJoin", "left", source, alias, on) as never;
   }
 
   /**
    * `RIGHT JOIN`: the existing bindings' rows may be missing, so their columns become
-   * nullable.
+   * nullable, and so do the rows of a query with no select (`Post | null`). It must come
+   * before the select.
    *
    * @example
    * ```ts
    * from(Post, "p").rightJoin(User, "u", ({ u, p }) => p.authorId.eq(u.id));
    * ```
    *
-   * @throws QueryError as {@link join}.
+   * @throws QueryError as {@link join}, and when the query already has a select.
    */
-  rightJoin<const A2 extends string, Src extends Source, X extends Condition>(
+  rightJoin<Q0 extends QueryLike, const A2 extends string, Src extends Source, X extends Condition>(
+    this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
     on: (bindings: NullableAll<B> & { readonly [K in A2]: BindingOfSource<Src> }) => X & Compatible<P, X>,
-  ): Query<
-    NullableAll<B> & { readonly [K in A2]: BindingOfSource<Src> },
-    R,
-    MergeParams<P, MergeParams<ParamsOfSource<Src>, ParamsOf<X>>>,
-    A
+  ): Next<
+    Q0,
+    NullableAll<BindingsOf<Q0>> & { readonly [K in A2]: BindingOfSource<Src> },
+    QueryResult<Q0> | null,
+    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
-    return this.#join("rightJoin", "right", source, alias, on) as never;
+    return (this as unknown as AnyInternal).#join("rightJoin", "right", source, alias, on) as never;
   }
 
   /**
    * `FULL JOIN`: rows of either side may be missing, so every binding's columns become
-   * nullable.
+   * nullable, and so do the rows of a query with no select. It must come before the select.
    *
    * @example
    * ```ts
    * from(User, "u").fullJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id));
    * ```
    *
-   * @throws QueryError as {@link join}.
+   * @throws QueryError as {@link join}, and when the query already has a select.
    */
-  fullJoin<const A2 extends string, Src extends Source, X extends Condition>(
+  fullJoin<Q0 extends QueryLike, const A2 extends string, Src extends Source, X extends Condition>(
+    this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
     on: (
       bindings: NullableAll<B> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
     ) => X & Compatible<P, X>,
-  ): Query<
-    NullableAll<B> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
-    R,
-    MergeParams<P, MergeParams<ParamsOfSource<Src>, ParamsOf<X>>>,
-    A
+  ): Next<
+    Q0,
+    NullableAll<BindingsOf<Q0>> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
+    QueryResult<Q0> | null,
+    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
-    return this.#join("fullJoin", "full", source, alias, on) as never;
+    return (this as unknown as AnyInternal).#join("fullJoin", "full", source, alias, on) as never;
   }
 
   /**
@@ -1363,11 +1452,17 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the alias is taken or the source is not one.
    */
-  crossJoin<const A2 extends string, Src extends Source>(
+  crossJoin<Q0 extends QueryLike, const A2 extends string, Src extends Source>(
+    this: Q0,
     source: Src,
     alias: A2 & NewAlias<A2, B>,
-  ): Query<B & { readonly [K in A2]: BindingOfSource<Src> }, R, MergeParams<P, ParamsOfSource<Src>>, A> {
-    return this.#join("crossJoin", "cross", source, alias, undefined) as never;
+  ): Next<
+    Q0,
+    BindingsOf<Q0> & { readonly [K in A2]: BindingOfSource<Src> },
+    QueryResult<Q0>,
+    ParamsOfSource<Src>
+  > {
+    return (this as unknown as AnyInternal).#join("crossJoin", "cross", source, alias, undefined) as never;
   }
 
   /**
@@ -1385,24 +1480,26 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the binding, the association or the alias is wrong.
    */
   joinAssoc<
+    Q0 extends QueryLike,
     F extends keyof B & string,
     K extends AssocKeys<SchemaOfBinding<B[F]>>,
     const A2 extends string,
     X extends Condition = Expr<boolean, NoParams>,
   >(
+    this: Q0,
     from: F,
     assoc: K,
     alias: A2 & NewAlias<A2, B>,
     on?: (
       bindings: B & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>> },
     ) => X & Compatible<P, X>,
-  ): Query<
-    B & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>> },
-    R,
-    MergeParams<P, ParamsOf<X>>,
-    A
+  ): Next<
+    Q0,
+    BindingsOf<Q0> & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>> },
+    QueryResult<Q0>,
+    ParamsOf<X>
   > {
-    return this.#joinAssoc("joinAssoc", "inner", from, assoc, alias, on) as never;
+    return (this as unknown as AnyInternal).#joinAssoc("joinAssoc", "inner", from, assoc, alias, on) as never;
   }
 
   /**
@@ -1416,24 +1513,35 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the binding, the association or the alias is wrong.
    */
   leftJoinAssoc<
+    Q0 extends QueryLike,
     F extends keyof B & string,
     K extends AssocKeys<SchemaOfBinding<B[F]>>,
     const A2 extends string,
     X extends Condition = Expr<boolean, NoParams>,
   >(
+    this: Q0,
     from: F,
     assoc: K,
     alias: A2 & NewAlias<A2, B>,
     on?: (
-      bindings: B & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>, true> },
+      bindings: B & {
+        readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>, true>;
+      },
     ) => X & Compatible<P, X>,
-  ): Query<
-    B & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>, true> },
-    R,
-    MergeParams<P, ParamsOf<X>>,
-    A
+  ): Next<
+    Q0,
+    BindingsOf<Q0> & { readonly [N in A2]: Binding<Target<SchemaOfBinding<B[F]>, K>, true> },
+    QueryResult<Q0>,
+    ParamsOf<X>
   > {
-    return this.#joinAssoc("leftJoinAssoc", "left", from, assoc, alias, on) as never;
+    return (this as unknown as AnyInternal).#joinAssoc(
+      "leftJoinAssoc",
+      "left",
+      from,
+      assoc,
+      alias,
+      on,
+    ) as never;
   }
 
   // --- filters ----------------------------------------------------------------
@@ -1511,8 +1619,8 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    */
   select<Q0 extends QueryLike, X>(
     this: Q0,
-    fn: (bindings: BindingsOf<Q0>) => X,
-  ): WithResult<Q0, Sel<X>, SelectParams<X>> {
+    fn: (bindings: BindingsOf<Q0>) => X & CompatibleParams<QueryParams<Q0>, SelectParams<X>>,
+  ): WithResult<Q0, SelectResult<Q0, X>, SelectParams<X>> {
     return (this as unknown as AnyInternal).#select(fn) as never;
   }
 
@@ -1539,7 +1647,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    */
   selectMerge<Q0 extends QueryLike, X extends object>(
     this: Q0,
-    fn: (bindings: BindingsOf<Q0>) => X,
+    fn: (bindings: BindingsOf<Q0>) => X & CompatibleParams<QueryParams<Q0>, SelectParams<X>>,
   ): WithResult<Q0, Merge<QueryResult<Q0>, Sel<X>>, SelectParams<X>> {
     return (this as unknown as AnyInternal).#selectMerge(fn) as never;
   }
@@ -1598,7 +1706,9 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the query already has a `distinct`, or the callback does not return expressions.
    */
   distinct(): this;
-  distinct<X extends ExprList>(fn: (bindings: B) => X): AddParams<this, ParamsOfList<X>>;
+  distinct<X extends ExprList>(
+    fn: (bindings: B) => X & CompatibleParams<P, ParamsOfList<X>>,
+  ): AddParams<this, ParamsOfList<X>>;
   distinct(fn?: unknown): unknown {
     if (this.ast.distinct !== undefined) {
       throw new QueryError("distinct() was called on a query that already has a distinct. A query has one.");
@@ -1650,7 +1760,9 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the callback does not return expressions.
    */
-  groupBy<X extends ExprList>(fn: (bindings: B) => X): AddParams<this, ParamsOfList<X>> {
+  groupBy<X extends ExprList>(
+    fn: (bindings: B) => X & CompatibleParams<P, ParamsOfList<X>>,
+  ): AddParams<this, ParamsOfList<X>> {
     const items = expressions(run("groupBy", fn, this.#scope.arg), "groupBy");
     const nodes = this.ast.groupBys.slice();
     let params: readonly unknown[] = NONE;
@@ -1679,7 +1791,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the callback does not return expressions or order items.
    */
   orderBy<X extends OrderItem | readonly OrderItem[]>(
-    fn: (bindings: B) => X,
+    fn: (bindings: B) => X & CompatibleParams<P, ParamsOfList<X>>,
   ): AddParams<this, ParamsOfList<X>> {
     const items = orderItems(run("orderBy", fn, this.#scope.arg), "orderBy");
     const nodes = this.ast.orderBys.slice();
@@ -1901,7 +2013,14 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError for another clause name, or when the clause holds a named
    * parameter that the query's type still requires.
    */
-  exclude<C extends ExcludableClause>(clause: C): Query<B, ExcludedResult<C, B, R, A>, P, A> {
+  exclude<Q0 extends QueryLike, C extends ExcludableClause>(
+    this: Q0,
+    clause: C,
+  ): WithResult<Q0, ExcludedResult<C, QueryResult<Q0>, RootRowOf<Q0>>> {
+    return (this as unknown as AnyInternal).#exclude(clause) as never;
+  }
+
+  #exclude(clause: unknown): unknown {
     let next: Query<B, R, P, A>;
     switch (clause as ExcludableClause) {
       case "where":
@@ -1914,6 +2033,11 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
         next = this.#next(DISTINCT, undefined, true, NONE, NONE, ABSENT_SHAPE, this.#named);
         break;
       case "groupBy":
+        if (this.ast.havings.length > 0) {
+          throw new QueryError(
+            'exclude("groupBy") would leave a having() without its groupBy(). Exclude "having" first: q.exclude("having").exclude("groupBy").',
+          );
+        }
         next = this.#next(GROUP_BYS, NONE, true, NONE, NONE, HASH_SEED, this.#named);
         break;
       case "having":
@@ -1986,7 +2110,9 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
   preload<Q0 extends QueryLike, K extends AssocKeys<RootSchemaOf<Q0>>, Q extends QueryLike>(
     this: Q0,
     assoc: K,
-    fn: (query: PreloadQuery<RootSchemaOf<Q0>, K>) => Q & PreloadCheck<RootSchemaOf<Q0>, K, Q>,
+    fn: (
+      query: PreloadQuery<RootSchemaOf<Q0>, K>,
+    ) => Q & PreloadCheck<RootSchemaOf<Q0>, K, Q> & CompatibleParams<P, QueryParams<Q>>,
   ): WithResult<Q0, QueryResult<Q0> & LoadedAs<RootSchemaOf<Q0>, K, QueryResult<Q>>, QueryParams<Q>>;
   preload(spec: unknown, fn?: unknown): unknown {
     const root = this.#scope.root;
@@ -1994,6 +2120,11 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     if (rootMeta === undefined || root.schema === undefined) {
       throw new QueryError(
         `preload() loads associations of a schema, and the root binding "${root.alias}" has none.`,
+      );
+    }
+    if (hasOptionalRoot(this.ast)) {
+      throw new QueryError(
+        `preload() attaches associations to the rows of the root binding "${root.alias}", which a right or full join makes optional. Preload in a query without that join.`,
       );
     }
     if (!selectsRoot(this.ast.select, root.alias)) {
@@ -2006,7 +2137,9 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     if (fn !== undefined) {
       const built = callbackPreload(rootMeta, spec, fn);
       nodes = [built.node];
+      // The preload's query runs with the same params object as this one: one name, one type.
       preloadNamed = joinNamed(joinNamed(preloadNamed, built.query.#named), built.query.#preloadNamed);
+      joinNamed(this.#named, preloadNamed);
     } else {
       nodes = parseSpec(this.#scope, rootMeta, spec, root.alias, "");
     }
@@ -2113,6 +2246,11 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
 
 function visibleAliases(scope: Scope): string[] {
   return scope.entries.filter((entry) => !entry.internal).map((entry) => entry.alias);
+}
+
+function hasOptionalRoot(ast: QueryAst): boolean {
+  for (const join of ast.joins) if (join.type === "right" || join.type === "full") return true;
+  return false;
 }
 
 function selectsRoot(select: SelectNode | undefined, rootAlias: string): boolean {
@@ -2482,6 +2620,14 @@ function parseSpec(
       }
       out.push(preloadNode(key, source, undefined, parseSpec(scope, targetMeta, value, source, `${here}{ `)));
     } else {
+      if (typeof value === "string" && !targetMeta.assocs().has(value)) {
+        const binding = findEntry(scope, value);
+        if (binding !== undefined && !binding.internal) {
+          throw new QueryError(
+            `preload({ ${here}"${value}" }): "${value}" is a binding of this query, but it was not joined through the association "${key}"${parent === undefined ? " from the rows this level is loaded from" : ` from "${parent}"`}, so it cannot fill it. Join it with joinAssoc("${parent ?? "…"}", "${key}", "${value}"), or name a nested association of ${targetMeta.name}.`,
+          );
+        }
+      }
       out.push(preloadNode(key, undefined, undefined, parseSpec(scope, targetMeta, value, undefined, here)));
     }
   }

@@ -169,9 +169,9 @@ function shapeOfValue(value: unknown, out: Collector, clause: string, path: stri
 
 /**
  * The select of `base` with the keys of `extra` added; a key that both have takes the new
- * value in the old position. Both must be object selects. The constants of `extra` are
- * renumbered after those of `base`, and the parameters are re-collected in canonical
- * order.
+ * value in the old position. Both must be object selects. The constants are those the
+ * merged shape refers to, numbered as a select of that shape numbers them (a replaced
+ * plain value is dropped), and the parameters are re-collected in canonical order.
  *
  * @example
  * ```ts
@@ -196,13 +196,12 @@ export function mergeSelects(base: SelectNode, extra: SelectNode): BuiltSelect {
       values[at] = shape;
     }
   }
-  const constants =
-    extra.constants.length === 0
-      ? base.constants
-      : base.constants.length === 0
-        ? extra.constants
-        : [...base.constants, ...extra.constants];
-  const node = selectNode({ kind: "object", keys, values }, constants);
+  // The constants both selects hold, then only those the merged shape still refers to,
+  // numbered in the order a select of that shape would number them.
+  const pool = extra.constants.length === 0 ? base.constants : [...base.constants, ...extra.constants];
+  const constants: unknown[] = [];
+  const shape = compact({ kind: "object", keys, values }, pool, constants);
+  const node = selectNode(shape, constants.length === 0 ? NONE : constants);
   const params: unknown[] = [];
   const lists: number[] = [];
   const named: NamedParamNode[] = [];
@@ -213,6 +212,21 @@ export function mergeSelects(base: SelectNode, extra: SelectNode): BuiltSelect {
     lists: lists.length === 0 ? NONE : lists,
     named: named.length === 0 ? NONE : named,
   };
+}
+
+/** `shape` with its constants taken from `pool` and appended to `out`, renumbered in walk order. */
+function compact(shape: SelectShape, pool: readonly unknown[], out: unknown[]): SelectShape {
+  switch (shape.kind) {
+    case "constant":
+      out.push(pool[shape.index]);
+      return { kind: "constant", index: out.length - 1 };
+    case "object":
+      return { kind: "object", keys: shape.keys, values: shape.values.map((v) => compact(v, pool, out)) };
+    case "tuple":
+      return { kind: "tuple", items: shape.items.map((v) => compact(v, pool, out)) };
+    default:
+      return shape;
+  }
 }
 
 function renumber(shape: SelectShape, offset: number): SelectShape {

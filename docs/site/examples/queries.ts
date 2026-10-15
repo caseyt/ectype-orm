@@ -40,6 +40,7 @@ class Post extends Schema("posts", {
   title: t.string(),
   published: t.boolean().default(false),
   views: t.integer().default(0),
+  tags: t.array(t.string()).nullable(),
   ...timestamps(),
 }) {}
 
@@ -105,6 +106,10 @@ export function objectForm() {
   from(User, "u").where({ role: "admin", name: null, id: [1, 2, 3] });
   // WHERE u.role = $1 AND u.name IS NULL AND u.id = ANY($2)
   // #endregion object-form
+  // #region object-form-arrays
+  from(Post, "p").where({ tags: ["sql", "ts"] }); // WHERE p.tags = $1: the whole array
+  from(Post, "p").where(({ p }) => p.tags.contains(["sql"])); // the array holds "sql"
+  // #endregion object-form-arrays
   // #region dynamic
   let q = from(User, "u");
   if (filters.role) q = q.where({ role: filters.role });

@@ -449,3 +449,145 @@ describe("expressions built from the query", () => {
     expectTypeOf(e).not.toBeAny();
   });
 });
+
+describe("review, round 1", () => {
+  // A base query with a result type and a named parameter, to see what a scope keeps.
+  const base = from(Post, "p")
+    .where(({ p }) => p.views.gte(param("minViews", t.integer())))
+    .orderBy(({ p }) => p.id);
+  type R = QueryResult<typeof base>;
+  type P = QueryParams<typeof base>;
+
+  test("every joining method and exclude keep the result type and named parameters in a scope", () => {
+    const join = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.join(User, "u", ({ p, u }) => u.id.eq(p.authorId));
+    const leftJoin = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.leftJoin(User, "u", ({ p, u }) => u.id.eq(p.authorId));
+    const crossJoin = <Q extends QueryWith>(q: Q) => q.crossJoin(Tag, "tg");
+    const joinAssoc = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) => q.joinAssoc("p", "author", "a");
+    const leftJoinAssoc = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.leftJoinAssoc("p", "comments", "c");
+    const exclude = <Q extends QueryWith>(q: Q) => q.exclude("orderBy");
+    const j1 = join(base);
+    expectTypeOf<QueryResult<typeof j1>>().toEqualTypeOf<R>();
+    expectTypeOf<QueryParams<typeof j1>>().toEqualTypeOf<P>();
+    const j2 = leftJoin(base);
+    expectTypeOf<QueryResult<typeof j2>>().toEqualTypeOf<R>();
+    expectTypeOf<QueryParams<typeof j2>>().toEqualTypeOf<P>();
+    const j3 = crossJoin(base);
+    expectTypeOf<QueryResult<typeof j3>>().toEqualTypeOf<R>();
+    expectTypeOf<QueryParams<typeof j3>>().toEqualTypeOf<P>();
+    const j4 = joinAssoc(base);
+    expectTypeOf<QueryResult<typeof j4>>().toEqualTypeOf<R>();
+    expectTypeOf<QueryParams<typeof j4>>().toEqualTypeOf<P>();
+    const j5 = leftJoinAssoc(base);
+    expectTypeOf<QueryResult<typeof j5>>().toEqualTypeOf<R>();
+    expectTypeOf<QueryParams<typeof j5>>().toEqualTypeOf<P>();
+    const j6 = exclude(base);
+    expectTypeOf<QueryResult<typeof j6>>().toEqualTypeOf<R>();
+    expectTypeOf<QueryParams<typeof j6>>().toEqualTypeOf<P>();
+    const rightJoin = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.rightJoin(User, "u", ({ p, u }) => u.id.eq(p.authorId));
+    const fullJoin = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.fullJoin(User, "u", ({ p, u }) => u.id.eq(p.authorId));
+    const j7 = rightJoin(base);
+    expectTypeOf<QueryResult<typeof j7>>().toEqualTypeOf<R | null>();
+    expectTypeOf<QueryParams<typeof j7>>().toEqualTypeOf<P>();
+    const j8 = fullJoin(base);
+    expectTypeOf<QueryResult<typeof j8>>().toEqualTypeOf<R | null>();
+    expectTypeOf<QueryParams<typeof j8>>().toEqualTypeOf<P>();
+    const joined = joinAssoc(base).select(({ p, a }) => ({ title: p.title, email: a.email }));
+    expectTypeOf<QueryResult<typeof joined>>().toEqualTypeOf<{ title: string; email: string }>();
+    expectTypeOf<QueryParams<typeof joined>>().toEqualTypeOf<P>();
+  });
+
+  test("a select in a scope types the scope's columns as nullable", () => {
+    const titles = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) => q.select(({ p }) => p.title);
+    const q = titles(from(Post, "p"));
+    // The scope sees `p` as possibly left-joined: a documented limit of scopes.
+    expectTypeOf<QueryResult<typeof q>>().toEqualTypeOf<string | null>();
+  });
+
+  test("the object form of where does not compile in a scope, whose root is unknown", () => {
+    const byTitle = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      // @ts-expect-error the root of a scope's query is not known
+      q.where({ title: "x" });
+    void byTitle;
+  });
+
+  test("a scope that adds a named parameter adds it to the query's", () => {
+    const withAuthor = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.joinAssoc("p", "author", "a", ({ a }) => a.age.gte(param("minAge", t.integer())));
+    const q = withAuthor(base);
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ minViews: number; minAge: number }>();
+  });
+
+  test("hasNamedBinding narrows a query that a named parameter is then added to", () => {
+    const some = base as QueryLike;
+    if (hasNamedBinding(some, "p", Post)) {
+      const q = some.where(({ p }) => p.views.gte(param("more", t.integer())));
+      expectTypeOf<QueryParams<typeof q>>().toHaveProperty("more");
+    }
+    const concrete = from(User, "u").where(({ u }) => u.age.gte(param("a", t.integer())));
+    if (hasNamedBinding(concrete, "u", User)) {
+      const q = concrete.where(({ u }) => u.age.gte(param("b", t.integer())));
+      expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ a: number; b: number }>();
+    }
+  });
+
+  test("a preload callback cannot use a name of the query's with another type", () => {
+    from(User, "u")
+      .where(({ u }) => u.age.gte(param("n", t.integer())))
+      // @ts-expect-error n is an integer in the query and a string in the preload
+      .preload("posts", (p) => p.where(({ posts }) => posts.title.eq(param("n", t.string()))));
+  });
+
+  test("the object form takes a whole value for an array or JSON column, and a list for a scalar one", () => {
+    from(Post, "p").where({ tagList: ["a", "b"] });
+    // @ts-expect-error a list of arrays is not a value of the column
+    from(Post, "p").where({ tagList: [["a"], ["b"]] });
+    // @ts-expect-error an array column compares whole arrays, not elements
+    from(Post, "p").where({ tagList: "a" });
+    from(Post, "p").where({ id: [1, 2] });
+    from(User, "u").where({ settings: null });
+  });
+
+  test("a right or full join with no select makes the root rows nullable", () => {
+    const right = from(Post, "p").rightJoin(User, "u", ({ u, p }) => p.authorId.eq(u.id));
+    expectTypeOf<QueryResult<typeof right>>().toEqualTypeOf<Post | null>();
+    const full = from(User, "u").fullJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id));
+    expectTypeOf<QueryResult<typeof full>>().toEqualTypeOf<User | null>();
+    const left = from(User, "u").leftJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id));
+    expectTypeOf<QueryResult<typeof left>>().toEqualTypeOf<User>();
+  });
+
+  test("select, selectMerge, orderBy, groupBy and distinct refuse a name with another type", () => {
+    const q = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
+    // @ts-expect-error n is an integer
+    q.select(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
+    // @ts-expect-error n is an integer
+    q.select(({ u }) => ({ id: u.id })).selectMerge(({ u }) => ({ x: u.email.eq(param("n", t.string())) }));
+    // @ts-expect-error n is an integer
+    q.orderBy(({ u }) => u.email.concat(param("n", t.string())));
+    // @ts-expect-error n is an integer
+    q.groupBy(({ u }) => [u.email.concat(param("n", t.string()))]);
+    // @ts-expect-error n is an integer
+    q.distinct(({ u }) => [u.email.concat(param("n", t.string()))]);
+    const same = q.select(({ u }) => ({ x: u.age.lte(param("n", t.integer())) }));
+    expectTypeOf<QueryParams<typeof same>>().toEqualTypeOf<{ n: number }>();
+  });
+
+  test("selecting the whole root, or excluding the select, keeps what is preloaded", () => {
+    const after = from(User, "u")
+      .preload("posts")
+      .select(({ u }) => u);
+    expectTypeOf<QueryResult<typeof after>["posts"]>().toEqualTypeOf<Post[]>();
+    const before = from(User, "u")
+      .select(({ u }) => u)
+      .preload("posts")
+      .exclude("select");
+    expectTypeOf<QueryResult<typeof before>["posts"]>().toEqualTypeOf<Post[]>();
+    const bare = from(User, "u").preload("posts").exclude("preload");
+    expectTypeOf<QueryResult<typeof bare>>().toEqualTypeOf<User>();
+  });
+});

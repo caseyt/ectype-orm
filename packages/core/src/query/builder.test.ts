@@ -768,13 +768,14 @@ describe("exclude and pipe", () => {
       ["where", [4, "x", 2, 3, 5, 6, 7, 8]],
       ["select", [1, "x", 2, 3, 5, 6, 7, 8]],
       ["distinct", [1, 4, 2, 3, 5, 6, 7, 8]],
-      ["groupBy", [1, 4, "x", 3, 5, 6, 7, 8]],
       ["having", [1, 4, "x", 2, 5, 6, 7, 8]],
       ["orderBy", [1, 4, "x", 2, 3, 6, 7, 8]],
       ["limit", [1, 4, "x", 2, 3, 5, 7, 8]],
       ["offset", [1, 4, "x", 2, 3, 5, 6, 8]],
       ["lock", [1, 4, "x", 2, 3, 5, 6, 7]],
     ] as const;
+    // A groupBy goes after its having (tested below).
+    expect(full.exclude("having").exclude("groupBy").ast.params).toEqual([1, 4, "x", 5, 6, 7, 8]);
     for (const [clause, params] of cases) {
       const q = full.exclude(clause);
       expect(q.ast.params, clause).toEqual(params);
@@ -1080,7 +1081,9 @@ describe("preload", () => {
     expect(nested.ast.preloads[0]).toMatchObject({ from: undefined, nested: [{ assoc: "author" }] });
     // A binding named like the string but joined another way is not taken.
     const other = from(User, "u").join(Post, "p", ({ u, p }) => p.authorId.eq(u.id));
-    expect(() => other.preload({ posts: "p" } as never)).toThrow(/Post has no association "p"/);
+    expect(() => other.preload({ posts: "p" } as never)).toThrow(
+      /preload\(\{ posts: "p" \}\): "p" is a binding of this query, but it was not joined through the association "posts" from "u", so it cannot fill it\. Join it with joinAssoc\("u", "posts", "p"\)/,
+    );
     expect(() => other.preload({ posts: { $from: "p" } } as never)).toThrow(
       /\$from names the binding to fill "posts" from, which must be joined through that association: joinAssoc\("u", "posts", "p"\)/,
     );
@@ -1088,8 +1091,17 @@ describe("preload", () => {
     // Below a separately loaded association, there is no join to take rows from.
     const below = from(User, "u").joinAssoc("u", "posts", "p").joinAssoc("p", "comments", "c");
     expect(() => below.preload({ posts: { comments: "c" } } as never)).toThrow(
-      /Comment has no association "c"/,
+      /"c" is a binding of this query, but it was not joined through the association "comments" from the rows this level is loaded from/,
     );
+    // A binding joined through an association of that name, but from another parent, is not taken.
+    const elsewhere = from(User, "u")
+      .joinAssoc("u", "posts", "p")
+      .joinAssoc("p", "author", "a")
+      .joinAssoc("a", "posts", "p2");
+    expect(() => elsewhere.preload({ posts: "p2" } as never)).toThrow(
+      /"p2" is a binding of this query, but it was not joined through the association "posts" from "u"/,
+    );
+    expect(elsewhere.preload({ posts: "p" }).ast.preloads[0]?.from).toBe("p");
   });
 
   test("a preload callback's named parameters are the query's", () => {
@@ -1603,5 +1615,148 @@ describe("less common paths", () => {
       "(eq pe.id $pe_join.person)",
     ]);
     expectConsistent(q);
+  });
+});
+
+describe("review, round 1", () => {
+  test("a preload callback cannot use a name of the query's with another type, in either order", () => {
+    const outer = from(User, "u").where(({ u }) => u.age.gte(param("n", t.integer())));
+    expect(() =>
+      outer.preload("posts", (x) => x.where(({ posts }) => posts.title.eq(param("n", t.string()))) as never),
+    ).toThrow(/named parameter "n" is used with two types, integer and string/);
+    const preloaded = from(User, "u").preload("posts", (x) =>
+      x.where(({ posts }) => posts.title.eq(param("n", t.string()))),
+    );
+    expect(() => preloaded.where(({ u }) => u.age.gte(param("n" as never, t.integer())))).toThrow(
+      /named parameter "n" is used with two types, string and integer/,
+    );
+    expect(() =>
+      preloaded.preload(
+        "profile",
+        (x) => x.where(({ profile }) => profile.userId.eq(param("n" as never, t.integer()))) as never,
+      ),
+    ).toThrow(/two types/);
+    // The same name with the same type is shared.
+    expect(
+      outer
+        .preload("posts", (x) => x.where(({ posts }) => posts.views.gte(param("n", t.integer()))))
+        .namedParams(),
+    ).toEqual(["n"]);
+  });
+
+  test("the object form compares an array or JSON column with a whole value, and a scalar column with a list", () => {
+    const tags = from(Post, "p").where({ tagList: ["a", "b"] });
+    expect(show(tags.ast.wheres[0]?.expr)).toBe('(eq p.tags $["a","b"]:array(string))');
+    expect(tags.ast.listLengths).toEqual([]);
+    expectConsistent(tags);
+    class Doc extends Schema("docs", {
+      id: t.integer().primaryKey(),
+      body: t.json<{ readonly k: number } | readonly number[]>(),
+      list: t.array(t.integer()),
+    }) {}
+    expect(show(from(Doc, "d").where({ body: [1, 2] }).ast.wheres[0]?.expr)).toBe("(eq d.body $[1,2]:json)");
+    expect(show(from(Doc, "d").where({ body: { k: 1 } }).ast.wheres[0]?.expr)).toBe(
+      `(eq d.body $${JSON.stringify({ k: 1 })}:json)`,
+    );
+    expect(show(from(Doc, "d").where({ list: [3] }).ast.wheres[0]?.expr)).toBe(
+      "(eq d.list $[3]:array(integer))",
+    );
+    expect(show(from(Doc, "d").where({ id: [3, 4] }).ast.wheres[0]?.expr)).toBe("(in d.id $[3,4]:integer)");
+  });
+
+  test("a right or full join must come before the select and the preloads, and a preload cannot follow one", () => {
+    const selected = from(Post, "p").select(({ p }) => p.id);
+    expect(() => selected.rightJoin(User, "u", ({ u, p }) => p.authorId.eq(u.id))).toThrow(
+      /rightJoin\(\) makes the rows of the bindings before it optional, and this query already has a select.*before select\(\)/,
+    );
+    expect(() =>
+      from(User, "u")
+        .preload("posts")
+        .fullJoin(Profile, "pr", ({ u, pr }) => pr.userId.eq(u.id)),
+    ).toThrow(/already has preloads.*before preload\(\)/);
+    expect(() =>
+      from(Post, "p")
+        .rightJoin(User, "u", ({ u, p }) => p.authorId.eq(u.id))
+        .preload("comments"),
+    ).toThrow(/a right or full join makes optional/);
+    expect(() =>
+      from(Post, "p")
+        .leftJoin(User, "u", ({ u, p }) => p.authorId.eq(u.id))
+        .preload("comments"),
+    ).not.toThrow();
+  });
+
+  test('exclude("groupBy") refuses to leave a having behind', () => {
+    const q = from(Post, "p")
+      .groupBy(({ p }) => p.authorId)
+      .having(({ p }) => count(p.id).gt(1));
+    expect(() => q.exclude("groupBy")).toThrow(
+      /exclude\("groupBy"\) would leave a having\(\) without its groupBy\(\)\. Exclude "having" first/,
+    );
+    expect(q.exclude("having").exclude("groupBy").ast.groupBys).toEqual([]);
+  });
+
+  test("a named parameter in a plain join's ON is recorded and checked", () => {
+    const q = from(User, "u").join(Post, "p", ({ u, p }) =>
+      p.authorId.eq(u.id).and(p.views.gte(param("minViews", t.integer()))),
+    );
+    expect(q.namedParams()).toEqual(["minViews"]);
+    expect(q.named.map((n) => n.name)).toEqual(["minViews"]);
+    expect(() => q.where(({ u }) => u.email.eq(param("minViews" as never, t.string())))).toThrow(/two types/);
+  });
+
+  test("a preload callback's select must take the key from the association's own binding", () => {
+    expect(() =>
+      from(User, "u").preload(
+        "posts",
+        (x) =>
+          x
+            .join(Post, "other", ({ posts, other }) => other.id.eq(posts.id))
+            .select(({ posts, other }) => ({ authorId: other.authorId, title: posts.title })) as never,
+      ),
+    ).toThrow(/preload "posts" selects without its key/);
+  });
+
+  test("named is computed once", () => {
+    const q = from(User, "u").where(({ u }) => u.age.gte(param("minAge", t.integer())));
+    expect(q.named).toBe(q.named);
+    expect(from(User, "u").named).toEqual([]);
+  });
+
+  test("selectMerge drops a replaced plain value from the constants", () => {
+    const merged = from(Post, "p")
+      .select(({ p }) => ({ id: p.id, kind: "old", other: "kept" }))
+      .selectMerge(({ p }) => ({ kind: p.title }));
+    expect(merged.ast.select?.constants).toEqual(["kept"]);
+    const direct = from(Post, "p").select(({ p }) => ({ id: p.id, kind: p.title, other: "kept" }));
+    expect(merged.ast.select).toEqual(direct.ast.select);
+    const none = from(Post, "p")
+      .select(({ p }) => ({ id: p.id }))
+      .selectMerge(({ p }) => ({ title: p.title }));
+    expect(none.ast.select?.constants).toEqual([]);
+  });
+
+  test("an untyped column of a source binding takes a list as IN", () => {
+    const binding = { n: fragment`n`.as<number>() };
+    registerBinding(binding, { alias: "g", meta: undefined });
+    const source = {
+      [AS_SOURCE](alias: string): SourceParts {
+        return {
+          node: {
+            kind: "fragmentSource",
+            fragment: { kind: "fragment", strings: ["g()"], args: [] },
+            columns: ["n"],
+            alias,
+          },
+          binding,
+          meta: undefined,
+          params: [],
+          lists: [],
+          named: [],
+        };
+      },
+    };
+    const q = (from(source as never, "g") as unknown as AnyQuery).where({ n: [1, 2] } as never);
+    expect(show(q.ast.wheres[0]?.expr)).toBe('(in fragment["n"] $[1,2])');
   });
 });

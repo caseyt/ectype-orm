@@ -80,6 +80,11 @@ error and a `QueryError`.
 
 - A value means equals, `null` means `IS NULL`, an array means `IN`.
 - The keys are the fields of the first binding; the values are typed by those fields.
+- An array or JSON field holds arrays itself, so there an array is the value, compared
+  whole, never a list. For anything else on such a column, use the callback form:
+
+<<< @/examples/queries.ts#object-form-arrays
+
 - `undefined` throws. A filter that silently disappears, and so matches every row, is a
   common bug. Add the clause conditionally instead:
 
@@ -90,10 +95,13 @@ error and a `QueryError`.
 <<< @/examples/queries.ts#joins
 
 A left join makes the joined binding's columns nullable in the types; right and full
-joins also make the existing bindings nullable. Selecting a whole left-joined binding
-gives `Row | null`:
+joins also make the existing bindings nullable, and the rows of a query with no select
+(`Post | null`). Selecting a whole left-joined binding gives `Row | null`:
 
 <<< @/examples/queries.ts#nullability
+
+A right or full join comes before the query's `select` and `preload`: both take the rows
+as they are, and a preload needs rows that exist.
 
 `joinAssoc` writes the `ON` condition from the association: its keys, its `where`, the
 join table of a many-to-many, and every step of a `through` chain.
@@ -155,6 +163,13 @@ The scope is a compile error on a query that has no binding `p` for `Post`. It r
 the same query type it was given, so the result type and the named parameters are kept.
 `QueryWith` with no argument is any query.
 
+Two limits inside a scope, since it does not know how the query it receives was built:
+
+- its bindings may come from a left join, so a `select` in the scope sees their columns as
+  nullable (`p.title` is `string | null`);
+- its root is unknown, so the object form of `where` does not compile there; use the
+  callback form.
+
 `hasNamedBinding(q, "p", Post)` is the runtime check, and narrows the query's type, for code
 that receives a query it did not build:
 
@@ -166,8 +181,9 @@ that receives a query it did not build:
 
 <<< @/examples/queries.ts#params
 
-The query's type collects the named parameters of every clause. One name has one type: using
-it with another type in a later clause is a compile error and a `QueryError`.
+The query's type collects the named parameters of every clause, and of the callbacks of
+its preloads, which run with the same values. One name has one type: using it with another
+type in a later clause or a preload callback is a compile error and a `QueryError`.
 
 ## Debugging
 
