@@ -15,7 +15,7 @@ import {
   type WhereObject,
 } from "./builder.js";
 import type { Col, Expr, NoParams } from "./expr.js";
-import { and, count, exists, fragment, param, sum } from "./functions.js";
+import { and, caseWhen, coalesce, count, exists, fragment, or, param, sum } from "./functions.js";
 
 /** The shape the repo's read methods have: params required exactly when the query has some. */
 declare function runAll<Q extends QueryLike>(
@@ -773,5 +773,68 @@ describe("review, round 3", () => {
       skip: number;
       title: string;
     }>();
+  });
+});
+
+describe("review, round 4", () => {
+  const nullable = () => param("n", t.integer().nullable());
+  const plain = () => param("n", t.integer());
+
+  test("two expressions of one clause using overlapping types give a never parameter", () => {
+    const s = from(User, "u").select(({ u }) => ({ a: u.age.eq(nullable()), b: u.age.gt(plain()) }));
+    expectTypeOf<QueryParams<typeof s>["n"]>().toBeNever();
+    const m = from(User, "u")
+      .select(({ u }) => ({ id: u.id }))
+      .selectMerge(({ u }) => ({ a: u.age.eq(nullable()), b: [u.age.gt(plain())] }));
+    expectTypeOf<QueryParams<typeof m>["n"]>().toBeNever();
+    const o = from(User, "u").orderBy(({ u }) => [u.age.add(nullable()), u.age.add(plain())]);
+    expectTypeOf<QueryParams<typeof o>["n"]>().toBeNever();
+    const g = from(User, "u").groupBy(({ u }) => [u.age.add(nullable()), u.age.add(plain())]);
+    expectTypeOf<QueryParams<typeof g>["n"]>().toBeNever();
+    const d = from(User, "u").distinct(({ u }) => [u.age.add(nullable()), u.age.add(plain())]);
+    expectTypeOf<QueryParams<typeof d>["n"]>().toBeNever();
+    const tuple = from(User, "u").select(({ u }) => [u.age.add(nullable()), u.age.add(plain())]);
+    expectTypeOf<QueryParams<typeof tuple>["n"]>().toBeNever();
+    // An array literal is typed element by element, with or without `as const`.
+    expectTypeOf<QueryResult<typeof tuple>>().toEqualTypeOf<[number | null, number | null]>();
+    const nested = from(User, "u").select(({ u }) => ({ x: [u.age.add(nullable()), u.age.add(plain())] }));
+    expectTypeOf<QueryParams<typeof nested>["n"]>().toBeNever();
+    const same = from(User, "u").select(({ u }) => ({ a: u.age.eq(plain()), b: u.age.gt(plain()) }));
+    expectTypeOf<QueryParams<typeof same>>().toEqualTypeOf<{ n: number }>();
+  });
+
+  test("the n-ary expression functions give a never parameter, or do not compile", () => {
+    const u = from(User, "u");
+    const a = u.where(({ u }) => and(u.age.gte(nullable()), u.age.lte(plain())));
+    expectTypeOf<QueryParams<typeof a>["n"]>().toBeNever();
+    const o = u.where(({ u }) => or(u.age.gte(nullable()), u.age.lte(plain())));
+    expectTypeOf<QueryParams<typeof o>["n"]>().toBeNever();
+    const c = u.select(({ u }) => coalesce(u.age.add(nullable()), u.age.add(plain())));
+    expectTypeOf<QueryParams<typeof c>["n"]>().toBeNever();
+    const f = u.where(({ u }) => fragment`${u.age} > ${nullable()} and ${u.age} < ${plain()}`.as<boolean>());
+    expectTypeOf<QueryParams<typeof f>["n"]>().toBeNever();
+    u.select(({ u }) =>
+      // @ts-expect-error n is a number or null in the condition and a number in the value
+      caseWhen(u.age.gte(nullable()), plain()),
+    );
+    u.select(({ u }) =>
+      // @ts-expect-error n is a number or null in the aggregate and a number in the filter
+      sum(u.age.add(nullable())).filter(u.age.gte(plain())),
+    );
+    u.select(({ u }) =>
+      // @ts-expect-error n is a number or null in the aggregate and a number in the window
+      sum(u.age.add(nullable())).over({ partitionBy: [u.age.add(plain())] }),
+    );
+    u.select(() =>
+      // @ts-expect-error s is a string or null on the left and a string in the parts
+      param("s", t.string().nullable()).concat(param("s", t.string())),
+    );
+  });
+
+  test("the strict fold keeps scopes chaining", () => {
+    const listed = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.orderBy(({ p }) => [p.views.add(param("a", t.integer())), p.id]).limit(param("size", t.integer()));
+    const q = listed(from(Post, "p"));
+    expectTypeOf<QueryParams<typeof q>>().toEqualTypeOf<{ a: number; size: number }>();
   });
 });

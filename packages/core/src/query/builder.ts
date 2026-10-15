@@ -294,8 +294,36 @@ export type WhereObject<S extends AnySchema> = {
 /** What `orderBy` callbacks may return. */
 type OrderItem = Expr<unknown, SomeParams> | OrderExpr<SomeParams>;
 
-/** What `groupBy` and `distinct` callbacks may return. */
-type ExprList = Expr<unknown, SomeParams> | readonly Expr<unknown, SomeParams>[];
+/**
+ * What `groupBy` and `distinct` callbacks may return. `readonly []` makes the compiler infer
+ * an array literal as a tuple, so each element keeps its own named parameters: as an array
+ * its element type would be reduced to one expression type, and a clash between two of them
+ * (`number` and `number | null` under one name) would be lost.
+ */
+type ExprList = Expr<unknown, SomeParams> | readonly Expr<unknown, SomeParams>[] | readonly [];
+
+/**
+ * What a `select` callback may return: anything. The tuple and the index signature are
+ * there only so that the compiler infers array literals in it as tuples (see
+ * {@link ExprList}); `Sel` types a tuple element by element. It is written out to a fixed
+ * depth, not recursively: a recursive constraint makes `Sel` of the constraint itself (an
+ * uninferred select) infinitely deep. Deeper arrays infer as arrays, as they would anyway.
+ */
+type SelectInput = SelectLevel<SelectLevel<SelectLevel<SelectLevel<unknown>>>>;
+
+/** One level of {@link SelectInput}: a tuple, an array or an object of `Inner`, or any other value. */
+type SelectLevel<Inner> =
+  | readonly []
+  | readonly Inner[]
+  | { readonly [key: string]: Inner }
+  | object
+  | string
+  | number
+  | bigint
+  | boolean
+  | symbol
+  | null
+  | undefined;
 
 /** The named parameters of every element of `X`, or of `X` itself when it is not an array. */
 type ParamsOfList<X> = X extends readonly unknown[] ? ParamsOfAll<X> : ParamsOf<X>;
@@ -1679,7 +1707,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    * @throws QueryError when the query already has a select or preloads, or the value holds
    * something that cannot be selected.
    */
-  select<Q0 extends QueryLike, X>(
+  select<Q0 extends QueryLike, X extends SelectInput>(
     this: Q0,
     fn: (bindings: BindingsOf<Q0>) => X,
   ): WithResult<Q0, SelectResult<Q0, X>, SelectParams<X>> {
@@ -1707,7 +1735,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the query's select is not an object, or the callback does not return one.
    */
-  selectMerge<Q0 extends QueryLike, X extends object>(
+  selectMerge<Q0 extends QueryLike, X extends SelectInput & object>(
     this: Q0,
     fn: (bindings: BindingsOf<Q0>) => X,
   ): WithResult<Q0, Merge<QueryResult<Q0>, Sel<X>>, SelectParams<X>> {
@@ -1848,7 +1876,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
    *
    * @throws QueryError when the callback does not return expressions or order items.
    */
-  orderBy<X extends OrderItem | readonly OrderItem[]>(
+  orderBy<X extends OrderItem | readonly OrderItem[] | readonly []>(
     fn: (bindings: B) => X,
   ): AddParams<this, ParamsOfList<X>> {
     const items = orderItems(run("orderBy", fn, this.#scope.arg), "orderBy");

@@ -61,6 +61,7 @@ import {
   booleanLiteral,
   type Checked,
   type Compatible,
+  type CompatibleParams,
   Expr,
   isSubqueryOperand,
   join,
@@ -208,7 +209,9 @@ export class Aggregate<T, P = NoParams> extends Expr<T, P> {
    */
   over(): Aggregate<T, P>;
   over(name: string): Aggregate<T, P>;
-  over<W extends WindowSpec>(spec: W): Aggregate<T, MergeParams<P, WindowParams<W>>>;
+  over<W extends WindowSpec>(
+    spec: W & CompatibleParams<P, WindowParams<W>>,
+  ): Aggregate<T, MergeParams<P, WindowParams<W>>>;
   over(window?: string | WindowSpec): AnyExpr {
     const agg = aggregatePart(this);
     if (agg.over !== undefined) throw new QueryError("over() was already called on this aggregate.");
@@ -604,10 +607,7 @@ export function not<X extends Condition>(condition: X): Expr<boolean, ParamsOf<X
 export function coalesce<
   F extends Expr<unknown, SomeParams>,
   const R extends readonly [Operand<ValueOf<F>>, ...Operand<ValueOf<F>>[]],
->(
-  first: F,
-  ...rest: R
-): Expr<NonNullable<ValueOf<F>> | NullOf<ValueOf<Last<R>>>, MergeParams<ParamsOf<F>, ParamsOfAll<R>>> {
+>(first: F, ...rest: R): Expr<NonNullable<ValueOf<F>> | NullOf<ValueOf<Last<R>>>, ParamsOfAll<[F, ...R]>> {
   const head = expressionArgument(first, "coalesce");
   if (rest.length === 0) throw new QueryError("coalesce() needs at least two arguments.");
   const nodes: ExprNode[] = [head.node];

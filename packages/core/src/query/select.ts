@@ -111,7 +111,13 @@ function shapeOfValue(value: unknown, out: Collector, clause: string, path: stri
   if (isExpr(value)) {
     for (const param of value.params) out.params.push(param);
     for (const length of value.lists) out.lists.push(length);
-    out.named = joinNamed(out.named, value.named);
+    try {
+      out.named = joinNamed(out.named, value.named);
+    } catch (error) {
+      // One name with two types among the select's own expressions: name the clause.
+      if (error instanceof QueryError) throw new QueryError(`${clause}(): ${error.message}`, error);
+      throw error;
+    }
     return { kind: "expr", expr: value.node, type: value.type };
   }
   if (typeof value === "object" && value !== null) {

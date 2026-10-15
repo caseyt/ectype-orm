@@ -1923,3 +1923,35 @@ describe("review, round 3", () => {
     ).toThrow(/^limit\(\): The named parameter "n" is used with two types/);
   });
 });
+
+describe("review, round 4", () => {
+  test("a clash among a select's own expressions names the clause", () => {
+    expect(() =>
+      from(User, "u").select(({ u }) => ({
+        a: u.age.eq(param("n", t.integer())),
+        b: u.email.eq(param("n" as never, t.string())),
+      })),
+    ).toThrow(/^select\(\): The named parameter "n" is used with two types, integer and string/);
+    expect(() =>
+      from(User, "u")
+        .select(({ u }) => ({ id: u.id }))
+        .selectMerge(({ u }) => ({
+          a: u.age.eq(param("n", t.integer().nullable()) as never),
+          b: [u.age.gt(param("n", t.integer()))],
+        })),
+    ).toThrow(
+      /^selectMerge\(\): The named parameter "n" is used with two types, integer \| null and integer/,
+    );
+  });
+
+  test("an error that is not a QueryError from a select's expressions passes through", () => {
+    const named = param("n", t.integer());
+    const broken = Object.create(named) as typeof named;
+    Object.defineProperty(broken, "named", {
+      get() {
+        throw new TypeError("boom");
+      },
+    });
+    expect(() => from(User, "u").select(() => ({ a: broken }))).toThrow(TypeError);
+  });
+});
