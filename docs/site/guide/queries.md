@@ -189,6 +189,10 @@ later clause or a preload callback is a compile error where the query runs (its 
 type becomes `never`, so no value can be given), and a `QueryError` when the clause is
 added. Within one expression it is a compile error at once.
 
+Two field types that are the same TypeScript type are told apart only when the clause is
+added: `t.integer()` and `t.bigint({ mode: "number" })` are both `number`, so using one name
+with both compiles, and throws `QueryError`.
+
 ## Debugging
 
 - `q.toString()` prints a compact rendering without values:

@@ -1875,3 +1875,51 @@ describe("review, round 2: nullable named parameters", () => {
     ).toThrow(/^where\(\): The named parameter "h" is used with two types, string \| null and string/);
   });
 });
+
+describe("review, round 3", () => {
+  test("two field types that are both numbers are told apart at run time", () => {
+    expect(() =>
+      from(User, "u")
+        .where(({ u }) => u.age.gte(param("k", t.integer())))
+        .where(({ u }) => u.id.gte(param("k", t.bigint({ mode: "number" })))),
+    ).toThrow(/^where\(\): The named parameter "k" is used with two types, integer and bigint\(number\)/);
+  });
+
+  test("two different enums under one name are named as two types", () => {
+    expect(() =>
+      from(User, "u")
+        .where(({ u }) => u.role.eq(param("r", t.enum(["admin", "member"]))))
+        .where(({ u }) => u.role.eq(param("r", t.enum(["admin"])) as never)),
+    ).toThrow(/used with two types, enum and another enum type \(other values or options\)/);
+  });
+
+  test("a replaced limit, offset or lock is checked against what remains, not against what it replaces", () => {
+    const n = (type: "integer" | "number") =>
+      param("n", type === "integer" ? t.integer() : t.bigint({ mode: "number" }));
+    const limited = from(User, "u")
+      .limit(n("integer"))
+      .limit(n("number") as never);
+    expect(limited.namedParams()).toEqual(["n"]);
+    expect(limited.named[0]?.type?.name).toBe("bigint(number)");
+    expect(
+      from(User, "u")
+        .offset(n("integer"))
+        .offset(n("number") as never)
+        .namedParams(),
+    ).toEqual(["n"]);
+    expect(
+      from(User, "u")
+        .lock(fragment`FOR UPDATE ${n("integer")}`)
+        .lock(fragment`FOR UPDATE ${n("number")}` as never)
+        .namedParams(),
+    ).toEqual(["n"]);
+    expect(from(User, "u").limit(10).limit(n("integer")).namedParams()).toEqual(["n"]);
+    // A name the rest of the query still uses is checked as before.
+    expect(() =>
+      from(User, "u")
+        .where(({ u }) => u.age.gte(n("integer")))
+        .limit(n("integer"))
+        .limit(n("number") as never),
+    ).toThrow(/^limit\(\): The named parameter "n" is used with two types/);
+  });
+});

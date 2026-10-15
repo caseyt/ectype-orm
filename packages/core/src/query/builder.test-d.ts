@@ -708,3 +708,70 @@ describe("review, round 2", () => {
     expectTypeOf<QueryResult<typeof left>>().toEqualTypeOf<User>();
   });
 });
+
+describe("review, round 3", () => {
+  test("a clash of overlapping types across clauses still gives a never parameter", () => {
+    const nullable = from(User, "u")
+      .where(({ u }) => u.age.gte(param("n", t.integer().nullable())))
+      .where(({ u }) => u.age.lte(param("n", t.integer())));
+    expectTypeOf<QueryParams<typeof nullable>["n"]>().toBeNever();
+    // @ts-expect-error the query cannot be given n
+    runAll(nullable, { n: 1 });
+    const enums = from(User, "u")
+      .where(({ u }) => u.role.eq(param("r", t.enum(["admin", "member"]))))
+      .where(({ u }) => u.role.eq(param("r", t.enum(["admin"]))));
+    expectTypeOf<QueryParams<typeof enums>["r"]>().toBeNever();
+    // Two field types that are both `number` in TypeScript cannot be told apart here; the
+    // run-time QueryError refuses them (unit test).
+    const numbers = from(User, "u")
+      .where(({ u }) => u.age.gte(param("k", t.integer())))
+      .where(({ u }) => u.id.gte(param("k", t.bigint({ mode: "number" }))));
+    expectTypeOf<QueryParams<typeof numbers>>().toEqualTypeOf<{ k: number }>();
+    const same = from(User, "u")
+      .where(({ u }) => u.age.gte(param("n", t.integer().nullable())))
+      .where(({ u }) => u.age.lte(param("n", t.integer().nullable())));
+    expectTypeOf<QueryParams<typeof same>>().toEqualTypeOf<{ n: number | null }>();
+  });
+
+  test("a clash in a scope chain gives a never parameter too", () => {
+    const twice = <Q extends QueryWith<{ u: typeof User }>>(q: Q) =>
+      q
+        .where(({ u }) => u.age.gte(param("n", t.integer().nullable())))
+        .where(({ u }) => u.age.lte(param("n", t.integer())));
+    const q = twice(from(User, "u"));
+    expectTypeOf<QueryParams<typeof q>["n"]>().toBeNever();
+  });
+
+  test("a query that needs a named parameter cannot be assigned to one that does not", () => {
+    let q = from(User, "u");
+    // @ts-expect-error the result needs minAge, and q's type needs nothing
+    q = q.where(({ u }) => u.age.gte(param("minAge", t.integer())));
+    const scoped = <Q extends QueryWith<{ u: typeof User }>>(x: Q) =>
+      x.where(({ u }) => u.age.gte(param("minAge", t.integer())));
+    // @ts-expect-error the same through a scope
+    q = scoped(q);
+    q = q.where(({ u }) => u.age.gte(18));
+    void q;
+  });
+
+  test("nested scopes keep the result type and named parameters", () => {
+    const withMin = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      q.where(({ p }) => p.views.gte(param("min", t.integer())));
+    const paginate = <Q extends QueryWith>(q: Q) =>
+      q.limit(param("size", t.integer())).offset(param("skip", t.integer()));
+    const both = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) => paginate(withMin(q));
+    const two = both(from(Post, "p"));
+    expectTypeOf<QueryResult<typeof two>>().toEqualTypeOf<Post>();
+    expectTypeOf<QueryParams<typeof two>>().toEqualTypeOf<{ min: number; size: number; skip: number }>();
+    const three = <Q extends QueryWith<{ p: typeof Post }>>(q: Q) =>
+      both(q).where(({ p }) => p.title.eq(param("title", t.string())));
+    const deep = three(from(Post, "p"));
+    expectTypeOf<QueryResult<typeof deep>>().toEqualTypeOf<Post>();
+    expectTypeOf<QueryParams<typeof deep>>().toEqualTypeOf<{
+      min: number;
+      size: number;
+      skip: number;
+      title: string;
+    }>();
+  });
+});

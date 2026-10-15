@@ -84,7 +84,6 @@ import {
   isExpr,
   join,
   joinNamed,
-  type MergeParams,
   NONE,
   type NoParams,
   OrderExpr,
@@ -192,23 +191,52 @@ type Condition = Expr<boolean | null, SomeParams>;
  * intersection `hasNamedBinding` narrows to). Inside a reusable scope, where `Q` is a type
  * parameter, the compiler reads such a type through `Q`'s constraint, so the next clause in
  * the scope sees the bindings the scope declared; once the scope is called, the result is
- * exact.
+ * exact. The inferred bindings are constrained to `object`, so the result is provably a
+ * `QueryWith`: a scope called inside another scope then infers its `Q` from it, instead of
+ * falling back to its own constraint. Unlike an intersection with `Q`, the result is not
+ * assignable to `Q`'s type, so a query cannot be assigned where its params are not required.
  */
 type AddParams<Q extends QueryLike, X> = [keyof X] extends [never]
   ? Q
   : Q extends {
         readonly "~query": {
-          readonly bindings: infer B2;
+          readonly bindings: infer B2 extends object;
           readonly result: infer R2;
           readonly params: (params: infer P2) => void;
           readonly root: infer A2 extends string;
         };
       }
-    ? Query<B2, R2, MergeParams<P2, X>, A2>
+    ? Query<B2, R2, JoinParams<P2, X>, A2>
     : never;
 
 /** `P` with the named parameters `X` added. */
-type WithParams<P, X> = [keyof X] extends [never] ? P : MergeParams<P, X>;
+type WithParams<P, X> = [keyof X] extends [never] ? P : JoinParams<P, X>;
+
+/** Whether `A` and `B` are each assignable to the other: one type for a named parameter. */
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/**
+ * The named parameters of a query with those of a clause added. A name both use keeps its
+ * type only when the two types are the same (each assignable to the other); otherwise it is
+ * `never`, so no value can be given and the query cannot run. A plain intersection would
+ * accept a narrower common type instead (`number` for `number` and `number | null`, `"a"`
+ * for two enums sharing `"a"`). Unknown parameters (`never`) stay unknown.
+ */
+type JoinParams<A, B> = [A] extends [never]
+  ? never
+  : [B] extends [never]
+    ? never
+    : {
+        [K in keyof A | keyof B]: K extends keyof A
+          ? K extends keyof B
+            ? SameType<A[K], B[K]> extends true
+              ? A[K]
+              : never
+            : A[K]
+          : K extends keyof B
+            ? B[K]
+            : never;
+      };
 
 /** Refuses an alias that the query already has, at compile time. */
 type NewAlias<A extends string, B> = A extends keyof B
@@ -1093,6 +1121,25 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
   // --- internals --------------------------------------------------------------
 
   /**
+   * The query's named parameters without those of `replaced`, the node a `limit`, `offset`
+   * or `lock` replaces: a new value is checked against what remains, not against the
+   * parameter it takes the place of.
+   */
+  #namedWithout(replaced: QueryNode | undefined): readonly NamedParamNode[] {
+    if (replaced === undefined) return this.#named;
+    const gone: NamedParamNode[] = [];
+    collectParams(replaced, [], undefined, gone);
+    if (gone.length === 0) return this.#named;
+    const out: NamedParamNode[] = [];
+    for (const node of this.#named) {
+      const at = gone.indexOf(node);
+      if (at === -1) out.push(node);
+      else gone.splice(at, 1);
+    }
+    return out;
+  }
+
+  /**
    * `named` with the named parameters `extra` of a clause added. One name with two types is
    * refused, against the query's names and against those of its preloads' queries (which
    * run with the same values), with the clause named in the message.
@@ -1378,7 +1425,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     Q0,
     BindingsOf<Q0> & { readonly [K in A2]: BindingOfSource<Src> },
     QueryResult<Q0>,
-    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
+    JoinParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
     return (this as unknown as AnyInternal).#join("join", "inner", source, alias, on) as never;
   }
@@ -1403,7 +1450,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     Q0,
     BindingsOf<Q0> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
     QueryResult<Q0>,
-    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
+    JoinParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
     return (this as unknown as AnyInternal).#join("leftJoin", "left", source, alias, on) as never;
   }
@@ -1429,7 +1476,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     Q0,
     NullableAll<BindingsOf<Q0>> & { readonly [K in A2]: BindingOfSource<Src> },
     QueryResult<Q0> | null,
-    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
+    JoinParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
     return (this as unknown as AnyInternal).#join("rightJoin", "right", source, alias, on) as never;
   }
@@ -1454,7 +1501,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
     Q0,
     NullableAll<BindingsOf<Q0>> & { readonly [K in A2]: NullableBinding<BindingOfSource<Src>> },
     QueryResult<Q0> | null,
-    MergeParams<ParamsOfSource<Src>, ParamsOf<X>>
+    JoinParams<ParamsOfSource<Src>, ParamsOf<X>>
   > {
     return (this as unknown as AnyInternal).#join("fullJoin", "full", source, alias, on) as never;
   }
@@ -1898,7 +1945,11 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
       expr.params,
       expr.lists,
       presentShape(expr.shape),
-      this.#withNamed(clause, this.#named, expr.named),
+      this.#withNamed(
+        clause,
+        this.#namedWithout(prop === LIMIT ? this.ast.limit : this.ast.offset),
+        expr.named,
+      ),
     );
     return next;
   }
@@ -1971,7 +2022,7 @@ export class Query<B, R, P = NoParams, A extends string = string> implements Sub
         mode.params,
         mode.lists,
         presentShape(lockShape(undefined, mode.shape)),
-        this.#withNamed("lock", this.#named, mode.named),
+        this.#withNamed("lock", this.#namedWithout(this.ast.lock), mode.named),
       );
     } else {
       const clause = lockClause(mode, options);

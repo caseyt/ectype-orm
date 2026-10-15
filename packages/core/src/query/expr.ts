@@ -1279,8 +1279,10 @@ export function joinNamed(
   for (const x of a) {
     for (const y of b) {
       if (x.name === y.name && (x.type !== y.type || NULLABLE_PARAMS.has(x) !== NULLABLE_PARAMS.has(y))) {
+        const left = namedTypeName(x);
+        const right = namedTypeName(y);
         throw new QueryError(
-          `The named parameter "${x.name}" is used with two types, ${namedTypeName(x)} and ${namedTypeName(y)}. A named parameter has one type: give the other use its own name.`,
+          `The named parameter "${x.name}" is used with two types, ${left} and ${left === right ? `another ${right} type (other values or options)` : right}. A named parameter has one type: give the other use its own name.`,
         );
       }
     }
