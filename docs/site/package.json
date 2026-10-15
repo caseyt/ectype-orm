@@ -11,14 +11,17 @@
     "preview": "vitepress preview"
   },
   "dependencies": {
+    "@egon-orm/postgres": "workspace:*",
     "@egon-orm/zod": "workspace:*",
     "arktype": "2.2.8",
     "egon-orm": "workspace:*",
+    "pg": "8.23.1",
     "valibot": "1.5.0",
     "yup": "1.7.1",
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@types/pg": "8.23.1",
     "vitepress": "1.6.4"
   }
 }

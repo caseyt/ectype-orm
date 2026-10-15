@@ -280,6 +280,20 @@ describe("ConstraintError", () => {
     });
   });
 
+  test("carries the failing statement when the adapter knows it, and none otherwise", () => {
+    const base = {
+      type: "unique",
+      constraint: "users_email_key",
+      table: "users",
+      column: undefined,
+      detail: undefined,
+    } as const;
+    const sql = 'insert into "users" ("email") values ($1)';
+    expect(new ConstraintError({ ...base, sql }).sql).toBe(sql);
+    expect(new ConstraintError({ ...base, sql }).message).not.toContain("insert");
+    expect(new ConstraintError(base).sql).toBeUndefined();
+  });
+
   test("keeps the database's detail line, which may quote row values, out of the message", () => {
     const error = new ConstraintError({
       type: "unique",
