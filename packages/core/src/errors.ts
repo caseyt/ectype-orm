@@ -278,6 +278,8 @@ export class ConstraintError extends EgonError {
   readonly column: string | undefined;
   /** The database's own detail line. It may quote row values, so it is not part of `message`. */
   readonly detail: string | undefined;
+  /** The statement that failed, when the adapter knows it. Parameter values are never attached. */
+  readonly sql: string | undefined;
 
   constructor(details: {
     readonly type: ConstraintViolationType;
@@ -287,6 +289,7 @@ export class ConstraintError extends EgonError {
     readonly detail: string | undefined;
     /** Replaces the default message (step 13 names the exact call to add). */
     readonly message?: string;
+    readonly sql?: string;
     readonly cause?: unknown;
   }) {
     const what =
@@ -306,6 +309,7 @@ export class ConstraintError extends EgonError {
     this.table = details.table;
     this.column = details.column;
     this.detail = details.detail;
+    this.sql = details.sql;
   }
 }
 
