@@ -249,8 +249,13 @@ All of these apply to every step. Step files add specifics.
 
 ## 7. Performance standards
 
-Performance is a feature with tests. Step 19 owns the harness; **every step that touches a
-hot path adds its own micro-benchmarks** under `benchmarks/micro/<area>.bench.ts`.
+Performance is a feature with tests. Step 19 owns the harness **and, since the owner's
+decision of 2026-10-14, the benchmarks themselves**: feature steps no longer write or run
+micro-benchmarks or tune against the budgets below. Benchmarks are written once everything
+works, in step 19, which then measures every budget. Where a step file asks for a
+benchmark, a budget check or benchmark numbers, that item is **deferred to step 19**: mark
+its Acceptance box "deferred to step 19 (owner decision, 2026-10-14)" and leave it unticked.
+The hot-path coding rules below still apply to every step.
 
 Budgets (Node 22, Apple M-series or CI reference runner; step 19 calibrates and records
 the reference numbers, then CI fails on a regression of more than 10%):
@@ -272,7 +277,8 @@ Rules that follow from the budgets:
 - No per-call closures or arrays where a precomputed table on schema metadata will do.
 - Identity `fromDb`/`toDb` functions are skipped by reference check, not called.
 - Anything derivable from a schema or a query shape is computed once and cached on it.
-- Do not optimise without a benchmark that shows the win; commit the benchmark.
+- Do not optimise speculatively: write clear code that follows these rules. Optimisations
+  that need measurement wait for step 19.
 
 ---
 
@@ -309,7 +315,7 @@ Rules that follow from the budgets:
    API" sections are your inputs) and `packages/core/src/contracts/`.
 2. Work on branch `step/NN-short-name`. Touch only your owned paths.
 3. Build in this order: types and signatures, type tests, unit tests, implementation,
-   integration tests, benchmarks, docs.
+   integration tests, docs. (Benchmarks are step 19's; §7.)
 4. If the spec is wrong, ambiguous, or blocked by another step: do not guess silently.
    Choose the option closest to Ecto's documented behaviour (unless §11 says otherwise), implement it, and record it
    under "Decisions" in your status note. If it changes a frozen contract or a decision in
@@ -319,8 +325,7 @@ Rules that follow from the budgets:
    (lint, typecheck, unit, type tests, build) passes, plus `pnpm test:integration` for
    steps that have integration tests.
 6. Write `docs/plan/status/NN.md`: what shipped, decisions made, deviations from the spec,
-   benchmark numbers, known gaps, requests to other steps. Report failures and skipped
-   items plainly; a status note that hides a gap is worse than the gap.
+   known gaps, requests to other steps. Report failures and skipped items plainly; a status note that hides a gap is worse than the gap.
 7. Open a pull request and take it through the review loop below. A step is finished when
    its PR is approved and merged, not when the code is written.
 
@@ -332,7 +337,7 @@ Remote: `https://github.com/caseyt/ectype-orm.git`, default branch `main`.
 
 1. Push `step/NN-short-name` and open a PR against `main` with `gh pr create`.
    Title: `Step NN: <name>`. Body: summary, the step's Acceptance list as checkboxes with
-   their real state, benchmark numbers, deviations and decisions, and how to verify locally.
+   their real state, deviations and decisions, and how to verify locally.
 2. Wait for CI. Do not request review on a red PR.
 3. Hand the PR to a **different agent** for review (a fresh agent with no memory of the
    implementation; never review your own PR).
@@ -354,7 +359,8 @@ and runs it. Reviews against, in order:
 3. **Types:** no `any`/`unknown` leaking from public generics; negative type tests exist.
 4. **Tests:** they fail when the behaviour is broken (spot-check by mutating the code),
    cover the listed use cases, and are not snapshot-only where behaviour matters.
-5. **Performance:** hot-path rules in §7 followed; benchmarks present; budgets met.
+5. **Performance:** hot-path coding rules in §7 followed. Benchmarks and budgets are not
+   reviewed before step 19 (§7).
 6. **Docs:** TSDoc and the guide page exist, examples compile.
 
 Posts findings with `gh pr review`: `--request-changes` with specific, located comments
@@ -370,7 +376,6 @@ Definition of done, common to all steps:
 - [ ] Acceptance list complete; no `TODO` without an issue reference; no `any` in public types.
 - [ ] No `@ts-ignore`; `@ts-expect-error` only in type tests.
 - [ ] Unit, type, and (where applicable) integration tests pass; coverage thresholds met.
-- [ ] Benchmarks added for hot paths, numbers recorded in the status note.
 - [ ] TSDoc on all exports; guide page delivered.
 - [ ] `index.ts` exports updated; nothing internal exported.
 - [ ] Status note written.
