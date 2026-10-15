@@ -52,6 +52,7 @@ import { IDENTITY } from "../contracts/type.js";
 import { QueryError } from "../errors.js";
 import { collectParams, IDENTIFIER } from "../query/ast.js";
 import { resolveCodec } from "../types/codec.js";
+import { markTextOnly, type TextOnlySlot } from "./bind.js";
 import {
   lookup,
   quoteIdentifier,
@@ -73,6 +74,7 @@ import {
 } from "./plan.js";
 import { type EmitApi, PRECEDENCE, registeredEmitter } from "./registry.js";
 import { sameShape } from "./same-shape.js";
+import { untypedValue } from "./untyped.js";
 
 // ---------------------------------------------------------------------------
 // Precedence
@@ -205,6 +207,8 @@ interface Ctx {
   readonly slots: ParamSlot[];
   /** The canonical position, in the statement's parameter array, of the next value. */
   index: number;
+  /** Slots of untyped values in a place that only text may fill (see `selectedValue`). */
+  readonly textOnly: TextOnlySlot[];
 }
 
 /** The query being written: its names and its database schema. */
@@ -223,7 +227,7 @@ interface Frame {
  * ```
  */
 export function newContext(dialect: SqlDialect, codecs: CodecSource): EmitContext {
-  return { dialect, codecs, slots: [], index: 0 };
+  return { dialect, codecs, slots: [], index: 0, textOnly: [] };
 }
 
 /**
@@ -420,7 +424,7 @@ function expr(ctx: Ctx, frame: Frame, node: ExprNode): string {
     case "cast":
       return `cast(${operand(ctx, frame, node.expr, PRECEDENCE.fragment)} as ${typeName(ctx, node.type)})`;
     case "case":
-      return caseExpr(ctx, frame, node, false);
+      return caseExpr(ctx, frame, node, undefined);
     case "jsonPath":
       return jsonPath(ctx, frame, node.expr, node.path, node.asText);
     case "subquery":
@@ -663,30 +667,63 @@ function startsWord(text: string): boolean {
  * `CASE … END`. In a select list (`selected`), a bare value among the results is cast to
  * its type, as a selected value is.
  */
-function caseExpr(ctx: Ctx, frame: Frame, node: ExprNode & { kind: "case" }, selected: boolean): string {
+function caseExpr(
+  ctx: Ctx,
+  frame: Frame,
+  node: ExprNode & { kind: "case" },
+  selected: string | undefined,
+): string {
   if (node.whens.length === 0) throw new QueryError("A CASE has no WHEN branch.");
+  const where = selected === undefined ? undefined : `a result of a CASE in ${selected}`;
   let text = "case";
   for (const branch of node.whens) {
-    text += ` when ${expr(ctx, frame, branch.when)} then ${selected ? selectedValue(ctx, frame, branch.result) : expr(ctx, frame, branch.result)}`;
+    text += ` when ${expr(ctx, frame, branch.when)} then ${where === undefined ? expr(ctx, frame, branch.result) : selectedValue(ctx, frame, branch.result, where)}`;
   }
   if (node.else !== undefined) {
-    text += ` else ${selected ? selectedValue(ctx, frame, node.else) : expr(ctx, frame, node.else)}`;
+    text += ` else ${where === undefined ? expr(ctx, frame, node.else) : selectedValue(ctx, frame, node.else, where)}`;
   }
   return `${text} end`;
 }
 
 /**
- * An expression in a select list. A bare parameter is cast to its type, since the database
- * cannot tell what type a placeholder there has (Postgres takes it for `text`); a
- * parameter without a type is cast to the dialect's text type.
+ * An expression in a place where nothing around it types it: a select list, a `RETURNING`
+ * list, a values cell. A bare parameter is cast to its type, since the database cannot
+ * tell what type a placeholder there has. A parameter without a type is allowed only for a
+ * string or `null` (cast to the dialect's text type, which is right for them); any other
+ * value is refused, here when the plan is made and again whenever the plan is bound with
+ * other values (owner decision of 2026-10-15).
  */
-function selectedValue(ctx: Ctx, frame: Frame, node: ExprNode): string {
+function selectedValue(ctx: Ctx, frame: Frame, node: ExprNode, where: string): string {
   if (node.kind === "param" || node.kind === "namedParam") {
-    const type = node.type === undefined ? ctx.dialect.types.text : typeName(ctx, node.type);
-    return `cast(${expr(ctx, frame, node)} as ${type})`;
+    if (node.type !== undefined) return `cast(${expr(ctx, frame, node)} as ${typeName(ctx, node.type)})`;
+    if (node.kind === "param" && node.value !== null && typeof node.value !== "string") {
+      throw untypedValue(where, node.value);
+    }
+    const text = expr(ctx, frame, node);
+    ctx.textOnly.push({ slot: ctx.slots.length - 1, where });
+    return `cast(${text} as ${ctx.dialect.types.text})`;
   }
-  if (node.kind === "case") return caseExpr(ctx, frame, node, true);
+  if (node.kind === "case") return caseExpr(ctx, frame, node, where);
+  // A coalesce of nothing but untyped values has no type either; with any other argument,
+  // that argument types the rest.
+  if (
+    node.kind === "fn" &&
+    node.name === "coalesce" &&
+    node.args.length > 0 &&
+    node.args.every(isUntypedValue)
+  ) {
+    const name = lookup(ctx.dialect.functions, node.name) as string;
+    let args = "";
+    for (let i = 0; i < node.args.length; i++) {
+      args += `${i > 0 ? ", " : ""}${selectedValue(ctx, frame, node.args[i] as ExprNode, `coalesce() in ${where}`)}`;
+    }
+    return `${name}(${args})`;
+  }
   return expr(ctx, frame, node);
+}
+
+function isUntypedValue(node: ExprNode): boolean {
+  return (node.kind === "param" || node.kind === "namedParam") && node.type === undefined;
 }
 
 function jsonPath(
@@ -966,7 +1003,7 @@ function selectList(ctx: Ctx, frame: Frame, items: readonly SelectItem[]): strin
     if (i > 0) text += ", ";
     text +=
       item.kind === "expr"
-        ? `${selectedValue(ctx, frame, item.expr)} as ${quote(ctx, item.alias)}`
+        ? `${selectedValue(ctx, frame, item.expr, "the select list")} as ${quote(ctx, item.alias)}`
         : `${quote(ctx, item.binding)}.${quote(ctx, item.column)} as ${quote(ctx, item.alias)}`;
   }
   return text;
@@ -1085,7 +1122,7 @@ function source(ctx: Ctx, frame: Frame, node: SourceNode): string {
         // A cell is typed by nothing around it, so its parameters are cast as in a select list.
         let cells = "";
         for (let c = 0; c < row.length; c++)
-          cells += `${c > 0 ? ", " : ""}${selectedValue(ctx, frame, row[c] as ExprNode)}`;
+          cells += `${c > 0 ? ", " : ""}${selectedValue(ctx, frame, row[c] as ExprNode, "a values list")}`;
         text += `${r > 0 ? ", " : ""}(${cells})`;
       }
       return `${text}) as ${alias} (${node.columns.map((column) => quote(ctx, column)).join(", ")})`;
@@ -1231,6 +1268,7 @@ export function finish(
       `The statement has ${ctx.slots.length} parameters, more than the ${ctx.dialect.capabilities.maxParams} ${ctx.dialect.name} accepts. Split it into smaller statements.`,
     );
   }
+  if (ctx.textOnly.length > 0) markTextOnly(ctx.slots, ctx.textOnly);
   return { sql, slots: ctx.slots, output, schema, decoder: undefined };
 }
 

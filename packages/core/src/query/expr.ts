@@ -90,6 +90,41 @@ export type SomeParams = never;
 
 type Simplify<X> = { [K in keyof X]: X[K] };
 
+/**
+ * Type only: marks an expression that binds a value with no type that is not text, such
+ * as `val(5)` or `caseWhen(c, 1)`. Nothing in SQL gives such a value a type in a select
+ * list, where the database would return it as text, so `select` does not accept one
+ * (owner decision of 2026-10-15): give the value a type, `val(5, t.integer())`.
+ * The property never exists at run time.
+ *
+ * @example
+ * ```ts
+ * type Five = Expr<5> & Untyped; // what val(5) is
+ * ```
+ */
+export interface Untyped {
+  readonly "~untyped": true;
+}
+
+/**
+ * `Untyped` when a value given to `val` or a `caseWhen` branch is bound with no type and
+ * is not text; nothing (`unknown`) otherwise. A string or `null` is fine untyped: the
+ * database reads it as text.
+ *
+ * @example
+ * ```ts
+ * type A = UntypedIf<5>; // Untyped
+ * type B = UntypedIf<"x">; // unknown
+ * ```
+ */
+export type UntypedIf<V> = [V] extends [{ readonly "~expr": unknown }]
+  ? [V] extends [Untyped]
+    ? Untyped
+    : unknown
+  : [V] extends [string | null]
+    ? unknown
+    : Untyped;
+
 /** Whether `A` and `B` are each assignable to the other: one type for a named parameter. */
 type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 

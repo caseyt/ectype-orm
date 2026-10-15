@@ -2,8 +2,9 @@
 // the emitted SQL is valid and that its parameters bind (results are not asserted here;
 // the snapshot tests pin the text). Each statement runs in a transaction that is rolled
 // back, so writes do not affect the next one.
-import { createTestDatabase, type TestDatabaseHandle } from "@egon-orm/test-support";
+import { createTestDatabase, type TestDatabaseHandle, User } from "@egon-orm/test-support";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { from, t, val } from "../index.js";
 import { bindParams } from "./bind.js";
 import { createCompiler } from "./compiler.js";
 import { postgresDialect } from "./dialect.js";
@@ -61,6 +62,15 @@ for (const [area, cases] of ALL_CASES) {
     }
   });
 }
+
+test("a selected value with a type comes back as that type; text without one comes back as text", async () => {
+  const q = from(User, "u")
+    .select(() => ({ n: val(5, t.integer()), b: val(true, t.boolean()), s: val("x"), none: val(null) }))
+    .limit(1);
+  const plan = compiler.compile(q.ast, "all", undefined);
+  const rows = await handle.db.query(plan.sql, bindParams(plan.slots, q.ast.params));
+  expect(rows).toEqual([{ c0: 5, c1: true, c2: "x", c3: null }]);
+});
 
 test("the plan cache shared by every statement above saw no collision", () => {
   expect(compiler.stats().collisions).toBe(0);

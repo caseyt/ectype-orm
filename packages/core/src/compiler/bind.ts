@@ -5,6 +5,7 @@
  */
 import type { CompiledQuery, ParamSlot, ToDb } from "../contracts/adapter.js";
 import { QueryError } from "../errors.js";
+import { untypedValue } from "./untyped.js";
 
 /**
  * The values supplied by name at execution: `repo.all(query, { minAge: 18 })`.
@@ -15,6 +16,35 @@ import { QueryError } from "../errors.js";
  * ```
  */
 export type NamedValues = Readonly<Record<string, unknown>>;
+
+/**
+ * A slot that may only be filled by a string or `null`: an untyped value in a place where
+ * nothing else gives it a type (it is cast to text), and `where` says which place.
+ *
+ * @example
+ * ```ts
+ * const slot: TextOnlySlot = { slot: 0, where: "the select list" };
+ * ```
+ */
+export interface TextOnlySlot {
+  readonly slot: number;
+  readonly where: string;
+}
+
+/** The text-only slots of a plan, by its slot list (most plans have none). */
+const textOnlySlots = new WeakMap<readonly ParamSlot[], readonly TextOnlySlot[]>();
+
+/**
+ * Records that some slots of a plan take only text (called when the plan is made).
+ *
+ * @example
+ * ```ts
+ * markTextOnly(plan.slots, [{ slot: 0, where: "the select list" }]);
+ * ```
+ */
+export function markTextOnly(slots: readonly ParamSlot[], textOnly: readonly TextOnlySlot[]): void {
+  textOnlySlots.set(slots, textOnly);
+}
 
 /** The distinct names of a plan's `named` slots, computed once per slot list. */
 const namesOfSlots = new WeakMap<readonly ParamSlot[], ReadonlySet<string>>();
@@ -93,7 +123,20 @@ export function bindParams(
     );
   }
   if (named !== undefined) checkExtra(slots, named);
+  const textOnly = textOnlySlots.get(slots);
+  if (textOnly !== undefined) checkText(textOnly, out);
   return out;
+}
+
+/**
+ * A plan is shared by queries that differ only in their values, so an untyped value that
+ * is not text can arrive with a later query of the same shape: refused here too.
+ */
+function checkText(textOnly: readonly TextOnlySlot[], values: readonly unknown[]): void {
+  for (const { slot, where } of textOnly) {
+    const value = values[slot];
+    if (value !== null && typeof value !== "string") throw untypedValue(where, value);
+  }
 }
 
 function checkExtra(slots: readonly ParamSlot[], named: NamedValues): void {

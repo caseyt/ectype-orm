@@ -79,6 +79,8 @@ import {
   subqueryOf,
   toOperand,
   typeArgument,
+  type Untyped,
+  type UntypedIf,
   type ValueOf,
 } from "./expr.js";
 
@@ -690,7 +692,8 @@ export class Case<T, P = NoParams> extends Expr<T | null, P> {
   when<C extends Condition, V extends Value>(
     condition: C & Compatible<P, C>,
     value: V & Compatible<MergeParams<P, ParamsOf<C>>, V>,
-  ): Case<T | CaseValue<V>, MergeParams<P, MergeParams<ParamsOf<C>, ParamsOf<V>>>> {
+  ): Case<T | CaseValue<V>, MergeParams<P, MergeParams<ParamsOf<C>, ParamsOf<V>>>> &
+    (this extends Untyped ? Untyped : [V] extends [Untyped] ? Untyped : unknown) {
     return branch(this, condition, value) as never;
   }
 
@@ -704,7 +707,10 @@ export class Case<T, P = NoParams> extends Expr<T | null, P> {
    *
    * @throws QueryError when `value` is `undefined`.
    */
-  else<V extends Value>(value: V & Compatible<P, V>): Expr<T | CaseValue<V>, MergeParams<P, ParamsOf<V>>> {
+  else<V extends Value>(
+    value: V & Compatible<P, V>,
+  ): Expr<T | CaseValue<V>, MergeParams<P, ParamsOf<V>>> &
+    (this extends Untyped ? Untyped : [V] extends [Untyped] ? Untyped : unknown) {
     const node = this.node as Extract<ExprNode, { kind: "case" }>;
     const otherwise = toOperand(value, this.type, this.redact, "else", false, true);
     return new Expr(
@@ -760,7 +766,7 @@ function branch(
 export function caseWhen<C extends Condition, V extends Value>(
   condition: C,
   value: V & Compatible<ParamsOf<C>, V>,
-): Case<CaseValue<V>, MergeParams<ParamsOf<C>, ParamsOf<V>>> {
+): Case<CaseValue<V>, MergeParams<ParamsOf<C>, ParamsOf<V>>> & UntypedIf<V> {
   return branch(undefined, condition, value) as never;
 }
 
@@ -808,7 +814,7 @@ export function exists<Q extends SubqueryOperand<unknown, SomeParams>>(query: Q)
  * @throws QueryError when `value` is `undefined`, or `type` is not a field type.
  */
 export function val<T, F extends FieldFlags>(value: NoInfer<T>, type: FieldBuilder<T, F>): Expr<T>;
-export function val<const T>(value: T): Expr<T>;
+export function val<const T>(value: T): Expr<T> & UntypedIf<T>;
 export function val(value: unknown, type?: unknown): AnyExpr {
   if (value === undefined) throw new QueryError("val() was given undefined. Pass a value, or null.");
   const fieldType = type === undefined ? undefined : typeArgument(type, "val");
